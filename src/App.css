@@ -1,0 +1,686 @@
+/* src/App.css */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+body {
+  background-color: #0d1117; /* Gris corporativo profundo */
+  color: #c9d1d9;
+  overflow: hidden;
+}
+
+/* --- Layout Principal --- */
+.app-wrapper {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* 1. Menú Lateral Minimalista */
+.sidebar {
+  width: 65px;
+  background-color: #010409;
+  border-right: 1px solid #30363d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 20px;
+  gap: 20px;
+  z-index: 10;
+}
+
+.sidebar-item {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #8b949e;
+  transition: all 0.2s ease;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-item:hover { background-color: #161b22; color: #c9d1d9; }
+.sidebar-item.active { background-color: #D84315; color: white; box-shadow: 0 0 10px rgba(216, 67, 21, 0.3); }
+
+/* 2. Área Central */
+.main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* 3. Topbar Elegante */
+.topbar {
+  height: 55px;
+  background-color: #0d1117;
+  border-bottom: 1px solid #30363d;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 24px;
+}
+
+.brand { font-weight: 700; font-size: 1.1rem; color: #f0f6fc; letter-spacing: -0.5px; }
+
+.search-container { flex: 1; display: flex; justify-content: center; }
+
+.search-input {
+  width: 450px;
+  background-color: #010409;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 8px 16px;
+  border-radius: 4px;
+  outline: none;
+  font-size: 0.85rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.search-input:focus { border-color: #D84315; box-shadow: 0 0 0 1px #D84315; }
+
+.topbar-right { display: flex; align-items: center; gap: 16px; font-size: 0.8rem; color: #8b949e; }
+.avatar { background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d; width: 30px; height: 30px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-weight: 600; }
+
+/* 4. Cabecera de Módulo */
+.module-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 32px; }
+.module-title { font-size: 1.4rem; font-weight: 600; color: #f0f6fc; letter-spacing: -0.5px; }
+.action-buttons { display: flex; gap: 12px; }
+
+.btn {
+  padding: 7px 14px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.85rem;
+  transition: all 0.2s ease;
+}
+
+.btn-primary { background-color: #D84315; color: white; }
+.btn-primary:hover { background-color: #bf3a12; }
+.btn-outline { background-color: transparent; border-color: #30363d; color: #c9d1d9; }
+.btn-outline:hover { background-color: #161b22; border-color: #8b949e; }
+
+/* 5. Filtros Laterales Minimalistas */
+.content-body { display: flex; flex: 1; padding: 0 32px 32px 32px; gap: 24px; overflow: hidden; }
+.filters-sidebar { width: 200px; display: flex; flex-direction: column; gap: 4px; }
+
+.filter-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #8b949e;
+  transition: 0.2s;
+  border-left: 2px solid transparent;
+}
+
+.filter-item:hover { background-color: #161b22; color: #c9d1d9; }
+.filter-item.active { background-color: #161b22; color: #f0f6fc; font-weight: 600; border-left-color: #D84315; }
+
+.filter-badge { background-color: #21262d; color: #8b949e; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 600; }
+.filter-item.active .filter-badge { background-color: #D84315; color: white; }
+
+/* 6. Tabla de Datos Premium */
+.table-container { flex: 1; background-color: #0d1117; border: 1px solid #30363d; border-radius: 6px; overflow: auto; }
+
+.data-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.8rem; white-space: nowrap; }
+
+.data-table th { padding: 12px 16px; color: #8b949e; background-color: #161b22; border-bottom: 1px solid #30363d; font-weight: 600; position: sticky; top: 0; text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.7rem; }
+
+.data-table td { padding: 12px 16px; border-bottom: 1px solid #21262d; color: #c9d1d9; }
+.data-table tr:hover { background-color: #161b22; cursor: pointer; }
+
+/* Indicadores Minimalistas */
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; }
+.dot-orange { background-color: #D84315; }
+.dot-green { background-color: #238636; }
+.dot-gray { background-color: #8b949e; }
+
+.status-text { font-weight: 500; color: #c9d1d9; }
+.font-mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #f0f6fc; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #D84315; }
+
+/* --- Formulario Minimalista Premium --- */
+.form-card {
+  background-color: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 32px;
+  box-shadow: 0 15px 35px rgba(0,0,0,0.6);
+  animation: fadeIn 0.3s ease-out forwards;
+  color: #c9d1d9;
+}
+
+.form-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #21262d;
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+}
+
+.form-header h2 {
+  font-size: 1.4rem;
+  color: #f0f6fc;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: color 0.2s;
+  padding: 4px;
+}
+
+.btn-close:hover { color: #f0f6fc; }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-label {
+  font-size: 0.85rem;
+  color: #8b949e;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.form-label.orange { color: #D84315; }
+
+.form-control {
+  background-color: #010409;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px 14px;
+  width: 100%;
+  outline: none;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.form-control:focus {
+  border-color: #D84315;
+  box-shadow: 0 0 0 1px #D84315;
+}
+
+/* Selector de Botones (Transfer/Logistica/Fletes) */
+.type-selector { display: flex; }
+
+.type-btn {
+  flex: 1;
+  padding: 10px;
+  background-color: #010409;
+  color: #8b949e;
+  border: 1px solid #30363d;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.type-btn:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.type-btn:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+
+.type-btn:hover:not(.active) { background-color: #161b22; color: #c9d1d9; }
+
+.type-btn.active {
+  background-color: #161b22;
+  color: #f0f6fc;
+  border-color: #D84315;
+  position: relative;
+  z-index: 1;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 24px;
+  border-top: 1px solid #21262d;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-15px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 768px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
+
+/* --- Ventana Modal y Estado Minimizado --- */
+
+/* Fondo oscuro que cubre toda la pantalla */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(3px); /* Efecto cristal */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  transition: all 0.3s ease;
+}
+
+/* Cuando se minimiza, el fondo desaparece y deja hacer clic atrás */
+.modal-overlay.minimized {
+  background-color: transparent;
+  backdrop-filter: none;
+  top: auto;
+  left: auto;
+  bottom: 24px;
+  right: 24px;
+  width: auto;
+  height: auto;
+  pointer-events: none; 
+}
+
+/* La tarjeta del formulario */
+.form-card {
+  background-color: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 32px;
+  width: 100%;
+  max-width: 900px;
+  box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8);
+  color: #c9d1d9;
+  pointer-events: auto; /* Reactiva los clics dentro de la tarjeta */
+  transition: all 0.3s ease;
+  animation: modalFadeIn 0.3s ease-out forwards;
+}
+
+/* Diseño de la tarjeta cuando está minimizada */
+.modal-overlay.minimized .form-card {
+  padding: 16px 24px;
+  max-width: 350px;
+  border-color: #D84315; /* Acento naranja para destacarlo */
+  box-shadow: 0 10px 25px rgba(0,0,0,0.9);
+}
+
+.form-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #21262d;
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+  transition: all 0.3s;
+}
+
+.modal-overlay.minimized .form-header {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.modal-overlay.minimized .form-header h2 {
+  font-size: 1rem;
+  color: #D84315;
+}
+
+/* Botones de control de la ventana (Minimizar, Cerrar) */
+.header-actions {
+  display: flex;
+  gap: 16px;
+}
+
+.btn-window {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: color 0.2s;
+  display: flex;
+  align-items: center;
+}
+
+.btn-window:hover { color: #f0f6fc; }
+.btn-window.close:hover { color: #ef4444; }
+.btn-window.restore:hover { color: #10b981; }
+
+@keyframes modalFadeIn {
+  from { opacity: 0; transform: translateY(20px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* (El resto de clases como .form-grid, .form-control y .type-btn se mantienen igual) */
+.form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-bottom: 24px; }
+.form-group { display: flex; flex-direction: column; gap: 8px; }
+.form-label { font-size: 0.85rem; color: #8b949e; font-weight: 600; }
+.form-label.orange { color: #D84315; }
+.form-control { background-color: #010409; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; width: 100%; outline: none; transition: all 0.2s; }
+.form-control:focus { border-color: #D84315; box-shadow: 0 0 0 1px #D84315; }
+.type-selector { display: flex; }
+.type-btn { flex: 1; padding: 10px; background-color: #010409; color: #8b949e; border: 1px solid #30363d; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: all 0.2s; }
+.type-btn:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.type-btn:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.type-btn:hover:not(.active) { background-color: #161b22; color: #c9d1d9; }
+.type-btn.active { background-color: #161b22; color: #f0f6fc; border-color: #D84315; position: relative; z-index: 1; }
+.form-actions { display: flex; justify-content: flex-end; gap: 12px; padding-top: 24px; border-top: 1px solid #21262d; }
+
+
+/* --- Sistema de Pestañas (Tabs) --- */
+.tabs-container {
+  display: flex;
+  border-bottom: 1px solid #30363d;
+  margin-bottom: 24px;
+  gap: 8px;
+}
+
+.tab-button {
+  background: transparent;
+  border: none;
+  color: #8b949e;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  letter-spacing: 0.3px;
+}
+
+.tab-button:hover {
+  color: #c9d1d9;
+}
+
+.tab-button.active {
+  color: #f0f6fc;
+  border-bottom-color: #D84315;
+}
+
+/* Contenedor con altura mínima para que la ventana no salte al cambiar de pestaña */
+.tab-content {
+  min-height: 380px; 
+}
+
+
+/* --- Icono de Notificaciones --- */
+.notification-wrapper {
+  position: relative;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background-color: #D84315; /* Fondo Naranja */
+  color: white;
+  border: 1px solid #BF360C;
+  transition: all 0.2s;
+}
+
+.notification-wrapper:hover { 
+  background-color: #BF360C; 
+}
+
+.notification-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background-color: #0d1117; /* Fondo oscuro para contrastar */
+  color: #c9d1d9;
+  font-size: 0.65rem;
+  font-weight: bold;
+  height: 18px;
+  width: 18px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 50%;
+  border: 1px solid #30363d;
+}
+
+/* --- Panel de Detalles Expandido y Responsivo --- */
+.detail-card {
+  width: 100%;
+  max-width: 850px; /* Más ancho */
+  max-height: 85vh; /* Más alto */
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-content {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 8px;
+  margin-top: 16px;
+}
+
+/* Usamos CSS Grid para que la info se vea en 2 o 3 columnas en PC, y 1 en Celular */
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  background-color: #161b22;
+  padding: 12px 16px;
+  border-radius: 6px;
+  border: 1px solid #21262d;
+}
+
+.detail-label {
+  font-size: 0.75rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.detail-value {
+  font-size: 1rem;
+  color: #f0f6fc;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+/* --- Botones de Acción Modificados --- */
+.btn-danger-solid {
+  background-color: #da3633;
+  color: white;
+  border: none;
+}
+.btn-danger-solid:hover { background-color: #b91c1c; }
+
+.btn-edit-solid {
+  background-color: #21262d;
+  color: #58a6ff;
+  border: 1px solid #30363d;
+}
+.btn-edit-solid:hover {
+  background-color: #30363d;
+  border-color: #58a6ff;
+}
+
+@media (max-width: 768px) {
+  .detail-card { max-height: 95vh; padding: 20px; }
+  .detail-grid { grid-template-columns: 1fr; gap: 12px; }
+  .form-actions.detail-actions { flex-direction: column; }
+  .form-actions.detail-actions > div { display: flex; width: 100%; gap: 10px; }
+  .form-actions.detail-actions button { width: 100%; justify-content: center; }
+}
+
+/* --- Botones de Acción en Tabla --- */
+.actions-cell {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-small {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.btn-edit {
+  background-color: transparent;
+  color: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.btn-edit:hover {
+  background-color: #3b82f6;
+  color: #fff;
+}
+
+.btn-danger {
+  background-color: transparent;
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+.btn-danger:hover {
+  background-color: #ef4444;
+  color: #fff;
+}
+
+
+/* --- Pantalla de Inicio de Sesión (Login) --- */
+.login-wrapper {
+  position: fixed; /* Esto fuerza a que ocupe el 100% de tu monitor */
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #0d1117;
+  z-index: 9999;
+}
+
+.login-card {
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 40px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8);
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.login-logo {
+  text-align: center;
+  margin-bottom: 32px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #f0f6fc;
+  letter-spacing: -0.5px;
+}
+/* --- Menú Desplegable de Perfil --- */
+.profile-dropdown {
+  position: absolute;
+  top: 60px;
+  right: 24px;
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  width: 260px;
+  padding: 16px;
+  box-shadow: 0 15px 35px rgba(0,0,0,0.8);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.profile-header-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #21262d;
+  padding-bottom: 16px;
+}
+
+.profile-avatar-large {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background-color: #21262d;
+  border: 1px solid #30363d;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #c9d1d9;
+}
+
+.profile-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-name { font-weight: 600; color: #f0f6fc; font-size: 0.95rem; }
+.profile-role { font-size: 0.75rem; color: #8b949e; }
+.profile-dept { font-size: 0.75rem; color: #D84315; font-weight: 600; margin-top: 2px; }
+
+.profile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-profile {
+  background: transparent;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-align: left;
+  transition: all 0.2s;
+}
+
+.btn-profile:hover { background-color: #21262d; color: #f0f6fc; }
+.btn-profile.logout { color: #ef4444; border-color: transparent; text-align: center; background-color: rgba(239, 68, 68, 0.1); }
+.btn-profile.logout:hover { background-color: #ef4444; color: white; }
+
+
