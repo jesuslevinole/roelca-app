@@ -3,9 +3,17 @@ import { useState } from 'react';
 import { FormularioOperacion } from './FormularioOperacion';
 
 const datosIniciales = [
-  { id: '1', ref: 'FL-100326-001', fecha: '03/09/2026', tipo: 'Fletes', status: '3. Documentado (Asignado)', convenio: 'Flete de Imp a Cuatitlan...', remolque: '672146 | PA23225', proveedor: 'ROAL' },
-  { id: '2', ref: 'TR-060326-041', fecha: '03/06/2026', tipo: 'Transfer', status: '3. Documentado (Asignado)', convenio: 'Exportación Caja Cargada...', remolque: '11379 | 71UG9B', proveedor: 'Roelca Dlls' },
-  { id: '3', ref: 'TR-060326-040', fecha: '03/06/2026', tipo: 'Transfer', status: '3. Documentado (Asignado)', convenio: 'Importación Caja Cargada...', remolque: '185 | A1906D', proveedor: 'Roelca Dlls' },
+  { 
+    id: '1', ref: 'FL-100326-001', fecha: '03/09/2026', tipo: 'Fletes', status: '3. Documentado (Asignado)', 
+    clientePaga: 'A. Castañeda & CO. Inc.', convenio: 'Flete de Imp a Cuatitlan...', remolque: '672146 | PA23225', 
+    origen: 'ROAL', destino: 'AFN', descripcionMercancia: 'Autopartes', cantidad: 2, pesoKg: '1500.00', operador: 'Jose Maria',
+    sueldoOperador: '400', combustibleGalones: '6'
+  },
+  { 
+    id: '2', ref: 'TR-060326-041', fecha: '03/06/2026', tipo: 'Transfer', status: '3. Documentado (Asignado)', 
+    clientePaga: 'Roelca Dlls', convenio: 'Exportación Caja Cargada...', remolque: '11379 | 71UG9B', 
+    origen: 'LRD Trade', destino: 'Cuatitlan', descripcionMercancia: 'Electrónicos', cantidad: 1, operador: 'Pedro Sanchez'
+  },
 ];
 
 const OperacionesDashboard = () => {
@@ -29,7 +37,7 @@ const OperacionesDashboard = () => {
 
   return (
     <>
-      {/* Modales */}
+      {/* Modal del Formulario */}
       {estadoFormulario !== 'cerrado' && (
         <FormularioOperacion 
           estado={estadoFormulario} initialData={operacionEditando}
@@ -38,8 +46,43 @@ const OperacionesDashboard = () => {
         />
       )}
 
-      {/* Aquí va tu código intacto del Modal de Detalles (el div .modal-overlay con la info) que armamos en la respuesta anterior... */}
-      {/* Lo he omitido por longitud de mensaje, pero pega aquí tu {operacionViendo && ( ... )} */}
+      {/* Modal de Detalles Verticales (Ahora sí lo estamos usando) */}
+      {operacionViendo && (
+        <div className="modal-overlay">
+          <div className="form-card detail-card" style={{ maxWidth: '900px', maxHeight: '90vh' }}>
+            <div className="form-header">
+              <h2>📄 Detalle de Operación <span style={{ color: '#D84315' }}>{operacionViendo.ref}</span></h2>
+              <button onClick={() => setOperacionViendo(null)} className="btn-window close">✕</button>
+            </div>
+            
+            <div className="detail-content" style={{ paddingRight: '12px' }}>
+              <h3 style={{ color: '#8b949e', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px', borderBottom: '1px solid #30363d', paddingBottom: '8px', marginBottom: '16px' }}>Información General</h3>
+              <div className="detail-grid" style={{ marginBottom: '24px' }}>
+                <div className="detail-item"><span className="detail-label">Fecha del Servicio</span><span className="detail-value">{mostrarDato(operacionViendo.fecha)}</span></div>
+                <div className="detail-item">
+                  <span className="detail-label">Tipo de Operación</span>
+                  <span className="detail-value">
+                    <span className={`dot ${operacionViendo.tipo === 'Fletes' ? 'dot-green' : 'dot-orange'}`}></span>
+                    {mostrarDato(operacionViendo.tipo)}
+                  </span>
+                </div>
+                <div className="detail-item"><span className="detail-label">Status Actual</span><span className="detail-value">{mostrarDato(operacionViendo.status)}</span></div>
+                <div className="detail-item"><span className="detail-label">Cliente (Paga)</span><span className="detail-value">{mostrarDato(operacionViendo.clientePaga)}</span></div>
+                <div className="detail-item"><span className="detail-label">Convenio</span><span className="detail-value">{mostrarDato(operacionViendo.convenio)}</span></div>
+                <div className="detail-item"><span className="detail-label"># de Remolque</span><span className="detail-value">{mostrarDato(operacionViendo.remolque)}</span></div>
+              </div>
+            </div>
+
+            <div className="form-actions detail-actions" style={{ marginTop: '24px', justifyContent: 'space-between', borderTop: '1px solid #21262d', paddingTop: '16px' }}>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button onClick={() => eliminarOperacion(operacionViendo.id)} className="btn btn-danger-solid">🗑️ Eliminar</button>
+                <button onClick={() => editarOperacion(operacionViendo)} className="btn btn-edit-solid">✏️ Editar</button>
+              </div>
+              <button onClick={() => setOperacionViendo(null)} className="btn btn-outline">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Header del Módulo */}
       <div className="module-header">
