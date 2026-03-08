@@ -1,6 +1,5 @@
 // src/features/empresas/components/FormularioEmpresa.tsx
-import { useState, useEffect } from 'react';
-import type { Empresa } from '../../../types/empresa';
+import React, { useState, useEffect } from 'react';
 
 interface FormProps {
   estado: 'abierto' | 'minimizado';
