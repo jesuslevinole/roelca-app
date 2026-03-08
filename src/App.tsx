@@ -7,9 +7,11 @@ import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
-  // Estado para controlar qué módulo estamos viendo
   const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas'>('operaciones');
   const [perfilAbierto, setPerfilAbierto] = useState(false);
+  
+  // NUEVO: Estado para controlar si el menú está abierto o cerrado
+  const [menuAbierto, setMenuAbierto] = useState(true);
 
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
@@ -18,24 +20,25 @@ function App() {
   return (
     <div className="app-wrapper">
       
-      {/* --- MENÚ LATERAL --- */}
-      <div className="sidebar">
+      {/* --- MENÚ LATERAL (Se le añade la clase 'collapsed' si está cerrado) --- */}
+      <div className={`sidebar ${!menuAbierto ? 'collapsed' : ''}`}>
         <div className="sidebar-brand">
           <span style={{ color: '#D84315', marginRight: '8px' }}>■</span> Roelca Inc.
         </div>
 
+        {/* Nombres actualizados según tu petición */}
         <div 
           className={`sidebar-item ${moduloActivo === 'operaciones' ? 'active' : ''}`} 
           onClick={() => setModuloActivo('operaciones')}
         >
-          Work Activity (Operaciones)
+          Operaciones
         </div>
         
         <div 
           className={`sidebar-item ${moduloActivo === 'empresas' ? 'active' : ''}`} 
           onClick={() => setModuloActivo('empresas')}
         >
-          Bases de Datos (Empresas)
+          Clientes
         </div>
 
         <div className="sidebar-footer">
@@ -50,12 +53,20 @@ function App() {
         
         {/* --- BARRA SUPERIOR (TOPBAR) --- */}
         <div className="topbar">
-          <div className="search-container">
-            <input 
-              type="text" 
-              className="search-input" 
-              placeholder={moduloActivo === 'operaciones' ? "Buscar Operación..." : "Buscar Empresas..."} 
-            />
+          
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {/* NUEVO: Botón de Hamburguesa para contraer/expandir el menú */}
+            <button className="menu-toggle-btn" onClick={() => setMenuAbierto(!menuAbierto)} title="Ocultar/Mostrar Menú">
+              ☰
+            </button>
+            
+            <div className="search-container">
+              <input 
+                type="text" 
+                className="search-input" 
+                placeholder={moduloActivo === 'operaciones' ? "Buscar Operación..." : "Buscar Clientes..."} 
+              />
+            </div>
           </div>
           
           <div className="topbar-right" style={{ position: 'relative' }}>

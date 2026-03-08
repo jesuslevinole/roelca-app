@@ -19,14 +19,23 @@ body {
   width: 100vw;
 }
 
-/* --- 1. Menú Lateral (Estilo Texto Completo) --- */
+/* --- 1. Menú Lateral (Estilo Texto Completo y Colapsable) --- */
 .sidebar {
-  width: 250px; /* Más ancho para que quepa el texto */
+  width: 280px; /* Menú más ancho */
   background-color: #0d1117;
   border-right: 1px solid #30363d;
   display: flex;
   flex-direction: column;
   z-index: 10;
+  transition: width 0.3s ease; /* Transición suave al abrir/cerrar */
+  overflow: hidden; /* Oculta el texto cuando se colapsa */
+  white-space: nowrap; /* Evita que el texto se rompa en dos líneas */
+}
+
+/* Clase que aplicaremos cuando el menú esté cerrado */
+.sidebar.collapsed {
+  width: 0;
+  border-right: none;
 }
 
 .sidebar-brand {
@@ -34,7 +43,7 @@ body {
   display: flex;
   align-items: center;
   padding: 0 24px;
-  font-size: 1.2rem;
+  font-size: 1.3rem;
   font-weight: 700;
   color: #f0f6fc;
   border-bottom: 1px solid #21262d;
@@ -63,11 +72,11 @@ body {
 .sidebar-item.active {
   background-color: #161b22;
   color: #f0f6fc;
-  border-left-color: #D84315; /* Indicador naranja corporativo */
+  border-left-color: #D84315; 
 }
 
 .sidebar-footer {
-  margin-top: auto; /* Empuja el botón al fondo */
+  margin-top: auto; 
   padding: 24px;
   border-top: 1px solid #21262d;
 }
@@ -84,7 +93,7 @@ body {
 
 .btn-logout-sidebar:hover { color: #f87171; text-decoration: underline; }
 
-/* --- 2. Barra Superior (Topbar) Ajustada --- */
+/* --- 2. Barra Superior (Topbar) y Botón Menú --- */
 .topbar {
   height: 60px;
   background-color: #0d1117;
@@ -93,6 +102,24 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 0 24px;
+}
+
+/* El nuevo botón de hamburguesa */
+.menu-toggle-btn {
+  background: none;
+  border: none;
+  color: #8b949e;
+  font-size: 1.4rem;
+  cursor: pointer;
+  margin-right: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+}
+
+.menu-toggle-btn:hover {
+  color: #f0f6fc;
 }
 
 .brand { font-weight: 700; font-size: 1.1rem; color: #f0f6fc; letter-spacing: -0.5px; }
