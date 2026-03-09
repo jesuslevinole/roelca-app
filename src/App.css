@@ -742,3 +742,31 @@ body {
 .btn-profile.logout:hover { background-color: #ef4444; color: white; }
 
 
+/* --- Expansión al 100% del Área Principal --- */
+.app-wrapper {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.main-area {
+  flex: 1; /* Esto obliga al área principal a rellenar el hueco del menú */
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  overflow-y: auto;
+}
+
+.module-header, .content-body {
+  width: 100%;
+  max-width: 100% !important; /* Rompe cualquier candado de ancho anterior */
+}
+
+.table-container {
+  width: 100%;
+}
+
+.data-table {
+  width: 100%; /* Obliga a la tabla a estirarse de punta a punta */
+}

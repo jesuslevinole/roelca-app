@@ -2,21 +2,28 @@
 import { useState } from 'react';
 import { FormularioEmpresa } from './FormularioEmpresa';
 
-// Datos de prueba basados en tu imagen
 const datosIniciales = [
   { id: '1', numCliente: 'EMP-852', nombre: 'MEXKET S. DE R.L. DE C.V', nombreCorto: '', tiposServicio: 'Cliente (Mercancía)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
   { id: '2', numCliente: 'EMP-851', nombre: 'CHATOMIL', nombreCorto: '', tiposServicio: 'Proveedor (Transporte)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
   { id: '3', numCliente: 'EMP-850', nombre: 'TTO NUEVO', nombreCorto: '', tiposServicio: 'Proveedor (Servicios)', rfcTaxId: 'XAXX010101000', fechaUltimoServicio: '', status: 'Activa' },
   { id: '4', numCliente: 'EMP-849', nombre: 'GALAS DE MEXICO', nombreCorto: '', tiposServicio: 'Cliente (Mercancía)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
   { id: '5', numCliente: 'EMP-848', nombre: 'TRAYTON MUEBLES MEXICO S. DE...', nombreCorto: '', tiposServicio: 'Cliente (Mercancía)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
-  { id: '6', numCliente: 'EMP-847', nombre: 'PATIO SINTRA NLD', nombreCorto: '', tiposServicio: 'Bódega', rfcTaxId: 'XAXX010101000', fechaUltimoServicio: '', status: 'Activa' },
+  { id: '6', numCliente: 'EMP-847', nombre: 'PATIO SINTRA NLD', nombreCorto: '', tiposServicio: 'Bodega', rfcTaxId: 'XAXX010101000', fechaUltimoServicio: '', status: 'Activa' },
+];
+
+const opcionesFiltro = [
+  'Todo', 'Proveedor (Servicios)', 'Empresa Inactiva', 'Cliente (Mercancía)', 
+  'Propietario (Remolques)', 'Bodega', 'Cliente (Paga)', 'Proveedor (Transporte)', 'Empresas Roelca'
 ];
 
 const EmpresasDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [empresaEditando, setEmpresaEditando] = useState<any | null>(null);
-  const [filtroActivo, setFiltroActivo] = useState('Todo');
   
+  // Estados para los filtros
+  const [filtroActivo, setFiltroActivo] = useState('Todo');
+  const [mostrarFiltros, setMostrarFiltros] = useState(false);
+
   const [empresas, setEmpresas] = useState(datosIniciales);
   const [empresaViendo, setEmpresaViendo] = useState<any | null>(null);
 
@@ -24,7 +31,7 @@ const EmpresasDashboard = () => {
   const editarEmpresa = (empresa: any) => { setEmpresaEditando(empresa); setEmpresaViendo(null); setEstadoFormulario('abierto'); };
   
   const eliminarEmpresa = (id: string) => {
-    if (window.confirm('⚠️ ¿Estás seguro de que deseas eliminar permanentemente esta empresa?')) {
+    if (window.confirm('¿Estás seguro de que deseas eliminar permanentemente esta empresa?')) {
       setEmpresas(empresas.filter(emp => emp.id !== id));
       setEmpresaViendo(null);
     }
@@ -34,7 +41,6 @@ const EmpresasDashboard = () => {
 
   return (
     <>
-      {/* Modal del Formulario */}
       {estadoFormulario !== 'cerrado' && (
         <FormularioEmpresa 
           estado={estadoFormulario} initialData={empresaEditando}
@@ -43,12 +49,11 @@ const EmpresasDashboard = () => {
         />
       )}
 
-      {/* Modal de Detalles Verticales */}
       {empresaViendo && (
         <div className="modal-overlay">
           <div className="form-card detail-card" style={{ maxWidth: '600px' }}>
             <div className="form-header">
-              <h2>🏢 Detalle de Empresa <span style={{ color: '#D84315' }}>{empresaViendo.numCliente}</span></h2>
+              <h2>Detalle de Empresa <span style={{ color: '#D84315' }}>{empresaViendo.numCliente}</span></h2>
               <button onClick={() => setEmpresaViendo(null)} className="btn-window close">✕</button>
             </div>
             
@@ -67,8 +72,8 @@ const EmpresasDashboard = () => {
 
             <div className="form-actions detail-actions" style={{ marginTop: '24px', justifyContent: 'space-between', borderTop: '1px solid #21262d', paddingTop: '16px' }}>
               <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={() => eliminarEmpresa(empresaViendo.id)} className="btn btn-danger-solid">🗑️ Eliminar</button>
-                <button onClick={() => editarEmpresa(empresaViendo)} className="btn btn-edit-solid">✏️ Editar</button>
+                <button onClick={() => eliminarEmpresa(empresaViendo.id)} className="btn btn-danger-solid">Eliminar</button>
+                <button onClick={() => editarEmpresa(empresaViendo)} className="btn btn-edit-solid">Editar</button>
               </div>
               <button onClick={() => setEmpresaViendo(null)} className="btn btn-outline">Cerrar</button>
             </div>
@@ -76,30 +81,33 @@ const EmpresasDashboard = () => {
         </div>
       )}
 
-      {/* --- Header del Módulo --- */}
-      <div className="module-header">
-        <h1 className="module-title" style={{ fontSize: '1.2rem', color: '#8b949e' }}>
-          Bases de Datos &gt; <span style={{ color: '#f0f6fc', fontWeight: 'bold' }}>Empresas (834)</span>
-        </h1>
-        <div className="action-buttons">
-          <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar</button>
+      {/* --- Header con Botón de Filtros Integrado --- */}
+      <div className="module-header" style={{ justifyContent: 'flex-end', paddingBottom: '16px' }}>
+        <div className="action-buttons" style={{ display: 'flex', gap: '12px', position: 'relative' }}>
+          
+          <button className="btn btn-outline" onClick={() => setMostrarFiltros(!mostrarFiltros)}>
+            Filtro: {filtroActivo} ▼
+          </button>
+          
+          {mostrarFiltros && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '8px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', zIndex: 50, minWidth: '220px', boxShadow: '0 10px 30px rgba(0,0,0,0.8)', padding: '8px 0' }}>
+              {opcionesFiltro.map((f) => (
+                <div 
+                  key={f} 
+                  style={{ padding: '10px 16px', cursor: 'pointer', fontSize: '0.9rem', color: filtroActivo === f ? '#f0f6fc' : '#8b949e', backgroundColor: filtroActivo === f ? '#21262d' : 'transparent' }}
+                  onClick={() => { setFiltroActivo(f); setMostrarFiltros(false); }}
+                >
+                  {f}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar Cliente</button>
         </div>
       </div>
 
-      {/* --- Cuerpo Principal (Filtros y Tabla) --- */}
-      <div className="content-body">
-        <div className="filters-sidebar">
-          <div className={`filter-item ${filtroActivo === 'Todo' ? 'active' : ''}`} onClick={() => setFiltroActivo('Todo')}><span>Todo</span></div>
-          <div className={`filter-item ${filtroActivo === 'ProveedorServicios' ? 'active' : ''}`} onClick={() => setFiltroActivo('ProveedorServicios')}><span>Proveedor (Servicios)</span> <span className="filter-badge">58</span></div>
-          <div className={`filter-item ${filtroActivo === 'Inactiva' ? 'active' : ''}`} onClick={() => setFiltroActivo('Inactiva')}><span>Empresa INACTIVA</span> <span className="filter-badge">6</span></div>
-          <div className={`filter-item ${filtroActivo === 'ClienteMercancia' ? 'active' : ''}`} onClick={() => setFiltroActivo('ClienteMercancia')}><span>Cliente (Mercancía)</span> <span className="filter-badge">177</span></div>
-          <div className={`filter-item ${filtroActivo === 'Propietario' ? 'active' : ''}`} onClick={() => setFiltroActivo('Propietario')}><span>Propietario (Remolques)</span> <span className="filter-badge">5</span></div>
-          <div className={`filter-item ${filtroActivo === 'Bodega' ? 'active' : ''}`} onClick={() => setFiltroActivo('Bodega')}><span>Bódega</span> <span className="filter-badge">508</span></div>
-          <div className={`filter-item ${filtroActivo === 'ClientePaga' ? 'active' : ''}`} onClick={() => setFiltroActivo('ClientePaga')}><span>Cliente (Paga)</span> <span className="filter-badge">54</span></div>
-          <div className={`filter-item ${filtroActivo === 'ProveedorTransporte' ? 'active' : ''}`} onClick={() => setFiltroActivo('ProveedorTransporte')}><span>Proveedor (Transporte)</span> <span className="filter-badge">47</span></div>
-          <div className={`filter-item ${filtroActivo === 'EmpresasRoelca' ? 'active' : ''}`} onClick={() => setFiltroActivo('EmpresasRoelca')}><span>Empresas Roelca</span> <span className="filter-badge">4</span></div>
-        </div>
-
+      <div className="content-body" style={{ display: 'block' }}>
         <div className="table-container">
           <table className="data-table">
             <thead>

@@ -9,8 +9,6 @@ function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas'>('operaciones');
   const [perfilAbierto, setPerfilAbierto] = useState(false);
-  
-  // NUEVO: Estado para controlar si el menú está abierto o cerrado
   const [menuAbierto, setMenuAbierto] = useState(true);
 
   if (!estaAutenticado) {
@@ -20,13 +18,12 @@ function App() {
   return (
     <div className="app-wrapper">
       
-      {/* --- MENÚ LATERAL (Se le añade la clase 'collapsed' si está cerrado) --- */}
+      {/* --- MENÚ LATERAL --- */}
       <div className={`sidebar ${!menuAbierto ? 'collapsed' : ''}`}>
         <div className="sidebar-brand">
           <span style={{ color: '#D84315', marginRight: '8px' }}>■</span> Roelca Inc.
         </div>
 
-        {/* Nombres actualizados según tu petición */}
         <div 
           className={`sidebar-item ${moduloActivo === 'operaciones' ? 'active' : ''}`} 
           onClick={() => setModuloActivo('operaciones')}
@@ -43,7 +40,7 @@ function App() {
 
         <div className="sidebar-footer">
           <button className="btn-logout-sidebar" onClick={() => setEstaAutenticado(false)}>
-            Log Out
+            Cerrar Sesión
           </button>
         </div>
       </div>
@@ -53,13 +50,10 @@ function App() {
         
         {/* --- BARRA SUPERIOR (TOPBAR) --- */}
         <div className="topbar">
-          
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            {/* NUEVO: Botón de Hamburguesa para contraer/expandir el menú */}
             <button className="menu-toggle-btn" onClick={() => setMenuAbierto(!menuAbierto)} title="Ocultar/Mostrar Menú">
               ☰
             </button>
-            
             <div className="search-container">
               <input 
                 type="text" 
@@ -70,9 +64,11 @@ function App() {
           </div>
           
           <div className="topbar-right" style={{ position: 'relative' }}>
-            <span style={{ fontSize: '0.8rem', color: '#8b949e', marginRight: '16px' }}>Sync complete</span>
+            {/* Icono de campana profesional (SVG en lugar de emoji) */}
             <div className="notification-wrapper" title="Notificaciones" style={{ marginRight: '16px' }}>
-              <span className="notification-icon">🔔</span>
+              <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24" style={{ color: '#8b949e' }}>
+                <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>
+              </svg>
               <span className="notification-badge">3</span>
             </div>
             
