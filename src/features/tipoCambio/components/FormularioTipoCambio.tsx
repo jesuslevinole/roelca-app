@@ -37,7 +37,8 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
 
     setCargandoApi(true);
     try {
-      // TRUCO: Pasamos el token directamente en la URL con "?token=" en lugar de los Headers
+      // TRUCO: Pasamos el token directamente en la URL con "?token=" en lugar de los 
+      // fdsfdsfdsf
       const url = `https://www.banxico.org.mx/SieAPIRest/service/v1/series/SF43718/datos/oportuno?token=${token}`;
       
       const response = await fetch(url);
@@ -170,6 +171,8 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
                   <option value="igual">Sin cambio</option>
                 </select>
               </div>
+
+              
 
               <div className="form-group">
                 <label className="form-label">Descripción Tendencia (Fórmula)</label>
