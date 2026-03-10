@@ -75,6 +75,40 @@ body {
   border-left-color: #D84315; 
 }
 
+/* --- Estilos para Submenús --- */
+.sidebar-submenu {
+  display: flex;
+  flex-direction: column;
+  background-color: #010409;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.sidebar-subitem {
+  padding: 0 24px 0 48px; /* Sangría a la izquierda */
+  height: 40px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #8b949e;
+  transition: all 0.2s;
+  border-left: 4px solid transparent;
+}
+
+.sidebar-subitem:hover { color: #c9d1d9; background-color: #161b22; }
+
+.sidebar-subitem.active {
+  color: #f0f6fc;
+  background-color: #161b22;
+  border-left-color: #D84315;
+}
+
+.sidebar-item-with-icon {
+  display: flex;
+  justify-content: space-between;
+}
+
 .sidebar-footer {
   margin-top: auto; 
   padding: 24px;
