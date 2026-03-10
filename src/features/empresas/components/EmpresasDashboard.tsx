@@ -1,15 +1,8 @@
 // src/features/empresas/components/EmpresasDashboard.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { db, eliminarRegistro } from '../../../config/firebase';
 import { FormularioEmpresa } from './FormularioEmpresa';
-
-const datosIniciales = [
-  { id: '1', numCliente: 'EMP-852', nombre: 'MEXKET S. DE R.L. DE C.V', nombreCorto: '', tiposServicio: 'Cliente (Mercancía)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
-  { id: '2', numCliente: 'EMP-851', nombre: 'CHATOMIL', nombreCorto: '', tiposServicio: 'Proveedor (Transporte)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
-  { id: '3', numCliente: 'EMP-850', nombre: 'TTO NUEVO', nombreCorto: '', tiposServicio: 'Proveedor (Servicios)', rfcTaxId: 'XAXX010101000', fechaUltimoServicio: '', status: 'Activa' },
-  { id: '4', numCliente: 'EMP-849', nombre: 'GALAS DE MEXICO', nombreCorto: '', tiposServicio: 'Cliente (Mercancía)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
-  { id: '5', numCliente: 'EMP-848', nombre: 'TRAYTON MUEBLES MEXICO S. DE...', nombreCorto: '', tiposServicio: 'Cliente (Mercancía)', rfcTaxId: '', fechaUltimoServicio: '', status: 'Activa' },
-  { id: '6', numCliente: 'EMP-847', nombre: 'PATIO SINTRA NLD', nombreCorto: '', tiposServicio: 'Bodega', rfcTaxId: 'XAXX010101000', fechaUltimoServicio: '', status: 'Activa' },
-];
 
 const opcionesFiltro = [
   'Todo', 'Proveedor (Servicios)', 'Empresa Inactiva', 'Cliente (Mercancía)', 
@@ -24,31 +17,69 @@ const EmpresasDashboard = () => {
   const [filtroActivo, setFiltroActivo] = useState('Todo');
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
 
-  const [empresas, setEmpresas] = useState(datosIniciales);
+  // --- FIREBASE: Estado inicial vacío ---
+  const [empresas, setEmpresas] = useState<any[]>([]);
   const [empresaViendo, setEmpresaViendo] = useState<any | null>(null);
+
+  // --- FIREBASE: Lectura en tiempo real ---
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'empresas'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
+      // Ordenamos las empresas por su número de cliente (EMP-001, EMP-002, etc.)
+      data.sort((a: any, b: any) => {
+        if (a.numCliente && b.numCliente) {
+          return a.numCliente.localeCompare(b.numCliente);
+        }
+        return 0;
+      });
+
+      setEmpresas(data);
+    });
+
+    return () => unsubscribe(); // Limpiamos la conexión al salir de la pantalla
+  }, []);
 
   const handleNuevo = () => { setEmpresaEditando(null); setEstadoFormulario('abierto'); };
   const editarEmpresa = (empresa: any) => { setEmpresaEditando(empresa); setEmpresaViendo(null); setEstadoFormulario('abierto'); };
   
-  const eliminarEmpresa = (id: string) => {
+  // --- FIREBASE: Eliminar registro ---
+  const eliminarEmpresa = async (id: string) => {
     if (window.confirm('¿Estás seguro de que deseas eliminar permanentemente esta empresa?')) {
-      setEmpresas(empresas.filter(emp => emp.id !== id));
-      setEmpresaViendo(null);
+      try {
+        await eliminarRegistro('empresas', id);
+        setEmpresaViendo(null); // Cierra el modal de detalle después de borrar
+      } catch (error) {
+        console.error("Error al eliminar:", error);
+        alert('Hubo un error al eliminar. Revisa tu conexión a internet.');
+      }
     }
   };
 
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
 
+  // --- LÓGICA DE FILTRADO ---
+  const empresasFiltradas = empresas.filter(emp => {
+    if (filtroActivo === 'Todo') return true;
+    if (filtroActivo === 'Empresa Inactiva') return emp.status === 'Inactiva';
+    return emp.tiposServicio === filtroActivo;
+  });
+
   return (
     <>
+      {/* FORMULARIO */}
       {estadoFormulario !== 'cerrado' && (
         <FormularioEmpresa 
-          estado={estadoFormulario} initialData={empresaEditando}
+          estado={estadoFormulario} 
+          initialData={empresaEditando}
+          registros={empresas} // Le pasamos la lista para que pueda calcular el EMP-00X
           onClose={() => { setEstadoFormulario('cerrado'); setEmpresaEditando(null); }}
-          onMinimize={() => setEstadoFormulario('minimizado')} onRestore={() => setEstadoFormulario('abierto')}
+          onMinimize={() => setEstadoFormulario('minimizado')} 
+          onRestore={() => setEstadoFormulario('abierto')}
         />
       )}
 
+      {/* MODAL DETALLES */}
       {empresaViendo && (
         <div className="modal-overlay">
           <div className="form-card detail-card" style={{ maxWidth: '600px' }}>
@@ -81,7 +112,7 @@ const EmpresasDashboard = () => {
         </div>
       )}
 
-      {/* --- Header con Botón de Filtros Integrado --- */}
+      {/* --- HEADER Y BOTONES --- */}
       <div className="module-header" style={{ justifyContent: 'flex-end', paddingBottom: '16px' }}>
         <div className="action-buttons" style={{ display: 'flex', gap: '12px', position: 'relative' }}>
           
@@ -107,6 +138,7 @@ const EmpresasDashboard = () => {
         </div>
       </div>
 
+      {/* --- TABLA DE DATOS --- */}
       <div className="content-body" style={{ display: 'block' }}>
         <div className="table-container">
           <table className="data-table">
@@ -121,16 +153,24 @@ const EmpresasDashboard = () => {
               </tr>
             </thead>
             <tbody>
-              {empresas.map((emp) => (
-                <tr key={emp.id} onClick={() => setEmpresaViendo(emp)}>
-                  <td className="font-mono">{emp.numCliente}</td>
-                  <td style={{ fontWeight: '500', color: '#f0f6fc' }}>{emp.nombre}</td>
-                  <td>{mostrarDato(emp.nombreCorto)}</td>
-                  <td>{emp.tiposServicio}</td>
-                  <td className="font-mono">{mostrarDato(emp.rfcTaxId)}</td>
-                  <td>{mostrarDato(emp.fechaUltimoServicio)}</td>
+              {empresasFiltradas.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#8b949e' }}>
+                    Aún no hay empresas registradas o ninguna coincide con el filtro.
+                  </td>
                 </tr>
-              ))}
+              ) : (
+                empresasFiltradas.map((emp) => (
+                  <tr key={emp.id} onClick={() => setEmpresaViendo(emp)} style={{ cursor: 'pointer' }}>
+                    <td className="font-mono">{emp.numCliente}</td>
+                    <td style={{ fontWeight: '500', color: '#f0f6fc' }}>{emp.nombre}</td>
+                    <td>{mostrarDato(emp.nombreCorto)}</td>
+                    <td>{emp.tiposServicio}</td>
+                    <td className="font-mono">{mostrarDato(emp.rfcTaxId)}</td>
+                    <td>{mostrarDato(emp.fechaUltimoServicio)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

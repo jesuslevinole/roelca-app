@@ -1,20 +1,29 @@
 // src/features/empresas/components/FormularioEmpresa.tsx
 import React, { useState, useEffect } from 'react';
+import { agregarRegistro, actualizarRegistro } from '../../../config/firebase';
 
 interface FormProps {
   estado: 'abierto' | 'minimizado';
   initialData?: any;
+  registros: any[]; // <-- Recibimos la lista de empresas para calcular el consecutivo
   onClose: () => void;
   onMinimize: () => void;
   onRestore: () => void;
 }
 
-export const FormularioEmpresa = ({ estado, initialData, onClose, onMinimize, onRestore }: FormProps) => {
+export const FormularioEmpresa = ({ estado, initialData, registros, onClose, onMinimize, onRestore }: FormProps) => {
   const [pestañaActiva, setPestañaActiva] = useState<'general' | 'contacto'>('general');
 
   const [formData, setFormData] = useState({
-    numCliente: 'EMP-', nombre: '', nombreCorto: '', tiposServicio: 'Cliente (Mercancía)', 
-    rfcTaxId: '', status: 'Activa', direccion: '', telefono: '', correo: ''
+    numCliente: 'EMP-001', // Valor inicial por defecto
+    nombre: '', 
+    nombreCorto: '', 
+    tiposServicio: 'Cliente (Mercancía)', 
+    rfcTaxId: '', 
+    status: 'Activa', 
+    direccion: '', 
+    telefono: '', 
+    correo: ''
   });
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -22,15 +31,52 @@ export const FormularioEmpresa = ({ estado, initialData, onClose, onMinimize, on
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  // --- LÓGICA DE AUTO-GENERACIÓN DEL # DE CLIENTE ---
   useEffect(() => {
-    if (initialData) setFormData(prev => ({ ...prev, ...initialData }));
-  }, [initialData]);
+    if (initialData) {
+      // Si estamos editando, mantenemos los datos (incluyendo su numCliente original)
+      setFormData(prev => ({ ...prev, ...initialData }));
+    } else {
+      // Si es una NUEVA empresa, calculamos el siguiente consecutivo
+      if (registros && registros.length > 0) {
+        // Buscamos el número más alto actual
+        const maxNum = registros.reduce((max, emp) => {
+          if (emp.numCliente && emp.numCliente.startsWith('EMP-')) {
+            const numeroStr = emp.numCliente.replace('EMP-', '');
+            const numero = parseInt(numeroStr, 10);
+            return !isNaN(numero) && numero > max ? numero : max;
+          }
+          return max;
+        }, 0);
 
-  const handleSubmit = (e: React.FormEvent) => {
+        // Le sumamos 1 y lo formateamos para que siempre tenga 3 dígitos (Ej: 005)
+        const nextNum = maxNum + 1;
+        const formattedNum = `EMP-${nextNum.toString().padStart(3, '0')}`;
+        
+        setFormData(prev => ({ ...prev, numCliente: formattedNum }));
+      } else {
+        // Si no hay ninguna empresa en la base de datos, empezamos en EMP-001
+        setFormData(prev => ({ ...prev, numCliente: 'EMP-001' }));
+      }
+    }
+  }, [initialData, registros]);
+
+  // --- LÓGICA CRUD DE FIREBASE ---
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Aquí irá la lógica de Firebase: await guardarEmpresa(formData)
-    alert(initialData ? 'Empresa actualizada correctamente.' : 'Empresa guardada exitosamente');
-    onClose();
+    try {
+      if (initialData && initialData.id) {
+        await actualizarRegistro('empresas', initialData.id, formData);
+        alert('Empresa actualizada correctamente.');
+      } else {
+        await agregarRegistro('empresas', formData);
+        alert('Empresa guardada exitosamente.');
+      }
+      onClose();
+    } catch (error) {
+      console.error("Error guardando en Firebase:", error);
+      alert("Hubo un error al guardar. Verifica tu conexión.");
+    }
   };
 
   return (
@@ -57,8 +103,9 @@ export const FormularioEmpresa = ({ estado, initialData, onClose, onMinimize, on
               {pestañaActiva === 'general' && (
                 <div className="form-grid">
                   <div className="form-group">
-                    <label className="form-label orange"># de Cliente *</label>
-                    <input type="text" name="numCliente" className="form-control" value={formData.numCliente} onChange={handleChange} required />
+                    <label className="form-label orange"># de Cliente (Automático)</label>
+                    {/* El campo está deshabilitado para que nadie lo pueda cambiar manualmente */}
+                    <input type="text" name="numCliente" className="form-control" value={formData.numCliente} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Status</label>
@@ -81,7 +128,7 @@ export const FormularioEmpresa = ({ estado, initialData, onClose, onMinimize, on
                       <option value="Proveedor (Servicios)">Proveedor (Servicios)</option>
                       <option value="Cliente (Mercancía)">Cliente (Mercancía)</option>
                       <option value="Propietario (Remolques)">Propietario (Remolques)</option>
-                      <option value="Bódega">Bódega</option>
+                      <option value="Bodega">Bódega</option>
                       <option value="Cliente (Paga)">Cliente (Paga)</option>
                       <option value="Proveedor (Transporte)">Proveedor (Transporte)</option>
                       <option value="Empresas Roelca">Empresas Roelca</option>
