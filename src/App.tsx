@@ -4,11 +4,12 @@ import { Login } from './features/auth/components/Login';
 import OperacionesDashboard from './features/operaciones/components/OperacionesDashboard';
 import EmpresasDashboard from './features/empresas/components/EmpresasDashboard';
 import TipoCambioDashboard from './features/tipoCambio/components/TipoCambioDashboard';
+import CatalogosDashboard from './features/catalogos/components/CatalogosDashboard';
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio'>('operaciones');
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos'>('operaciones');
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
   
@@ -61,6 +62,14 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* NUEVO ITEM: Catálogos */}
+        <div 
+          className={`sidebar-item ${moduloActivo === 'catalogos' ? 'active' : ''}`} 
+          onClick={() => setModuloActivo('catalogos')}
+        >
+          Catálogos
+        </div>
 
         <div className="sidebar-footer">
           <button className="btn-logout-sidebar" onClick={() => setEstaAutenticado(false)}>
@@ -123,6 +132,7 @@ function App() {
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
+        {moduloActivo === 'catalogos' && <CatalogosDashboard />}
         
       </div>
     </div>

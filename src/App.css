@@ -804,3 +804,73 @@ body {
 .data-table {
   width: 100%; /* Obliga a la tabla a estirarse de punta a punta */
 }
+
+/* --- CUADRÍCULA DE CATÁLOGOS --- */
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+  padding: 8px 0;
+}
+
+.catalog-card {
+  background-color: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.catalog-card:hover {
+  background-color: #161b22;
+  border-color: #D84315;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.catalog-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #21262d;
+  color: #D84315;
+  border-radius: 8px;
+  margin-right: 16px;
+  font-size: 1.2rem;
+}
+
+.catalog-card:hover .catalog-icon {
+  background-color: #D84315;
+  color: #ffffff;
+}
+
+.catalog-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #c9d1d9;
+}
+
+.catalog-card:hover .catalog-title {
+  color: #f0f6fc;
+}
+
+.breadcrumb-nav {
+  display: flex;
+  align-items: center;
+  font-size: 1.2rem;
+  color: #8b949e;
+  margin-bottom: 24px;
+}
+
+.breadcrumb-nav span {
+  cursor: pointer;
+}
+
+.breadcrumb-nav span:hover {
+  color: #c9d1d9;
+}
