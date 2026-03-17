@@ -1,0 +1,203 @@
+// src/features/catalogos/config/catalogSchemas.tsx
+import React from 'react';
+
+export type FieldType = 'text' | 'number' | 'select';
+
+export interface CatalogField {
+  name: string;
+  label: string;
+  type: FieldType;
+  required?: boolean;
+  options?: string[];
+}
+
+export interface CatalogSchema {
+  id: string;
+  titulo: string;
+  icono: React.ReactNode;
+  fields: CatalogField[];
+}
+
+export const catalogosConfig: Record<string, CatalogSchema> = {
+  aduanas: {
+    id: 'aduanas', titulo: 'Aduanas',
+    icono: <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />,
+    fields: [{ name: 'aduana', label: 'Aduana', type: 'text', required: true }]
+  },
+  bancos: {
+    id: 'bancos', titulo: 'Bancos',
+    icono: <path d="M4 10h3v7H4zM10.5 10h3v7h-3zM2 19h20v3H2zM17 10h3v7h-3zM12 1L2 6v2h20V6L12 1z" />,
+    fields: [
+      { name: 'banco', label: 'Banco', type: 'text', required: true },
+      { name: 'moneda', label: 'Moneda', type: 'select', required: true, options: ['Dolares', 'Pesos'] }
+    ]
+  },
+  departamentos: {
+    id: 'departamentos', titulo: 'Departamentos',
+    icono: <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />,
+    fields: [{ name: 'departamento', label: 'Departamento', type: 'text', required: true }]
+  },
+  calles: {
+    id: 'calles', titulo: 'Direcciones / Calles',
+    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />,
+    fields: [
+      { name: 'codigo_postal', label: 'Código Postal', type: 'select', required: true, options: ['01090', '1211', '02300', '03900', '11550', '25295'] },
+      { name: 'calle', label: 'Calle', type: 'text', required: true }
+    ]
+  },
+  codigo_postal: {
+    id: 'codigo_postal', titulo: 'Direcciones / Código Postal',
+    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
+    fields: [
+      { name: 'colonia', label: 'Colonia', type: 'select', required: true, options: ['La Paz', 'Centro', 'Buena vista', 'Guerrero', 'Ejido La Cruz'] },
+      { name: 'codigo_postal', label: 'Codigo Postal', type: 'text', required: true }
+    ]
+  },
+  colonias: {
+    id: 'colonias', titulo: 'Direcciones / Colonia',
+    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
+    fields: [
+      { name: 'municipio', label: 'Municipio', type: 'select', required: true, options: ['Alpharetta', 'Alvaro Obregon', 'Apodaca', 'Azcapotzalco', 'Benito Juarez', 'Brownsville', 'CDMX'] },
+      { name: 'colonia', label: 'Colonia', type: 'text', required: true }
+    ]
+  },
+  estados: {
+    id: 'estados', titulo: 'Direcciones / Estado',
+    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
+    fields: [
+      { name: 'pais', label: 'País', type: 'select', required: true, options: ['México', 'Estados Unidos'] },
+      { name: 'estado', label: 'Estado', type: 'text', required: true }
+    ]
+  },
+  municipios: {
+    id: 'municipios', titulo: 'Direcciones / Municipios',
+    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
+    fields: [
+      { name: 'estado', label: 'Estado', type: 'select', required: true, options: ['Ciudad de México', 'Coahuila', 'Estado de México', 'Florida', 'Georgia'] },
+      { name: 'municipio', label: 'Municipio', type: 'text', required: true }
+    ]
+  },
+  paises: {
+    id: 'paises', titulo: 'Direcciones / País',
+    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />,
+    fields: [
+      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
+      { name: 'codigo', label: 'Código', type: 'number', required: true }
+    ]
+  },
+  dispositivos: {
+    id: 'dispositivos', titulo: 'Dispositivos',
+    icono: <path d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>,
+    fields: [{ name: 'dispositivo', label: 'Dispositivo', type: 'text', required: true }]
+  },
+  embalaje: {
+    id: 'embalaje', titulo: 'Embalaje',
+    icono: <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 14H4v-6h8v6zm8 0h-6v-6h6v6zm0-8H4V6h16v4z"/>,
+    fields: [
+      { name: 'clave', label: 'Clave', type: 'text', required: true },
+      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
+      { name: 'descripcion', label: 'Descripción', type: 'text', required: true }
+    ]
+  },
+  empresas: {
+    id: 'empresas', titulo: 'Empresas Roelca',
+    icono: <path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm10 12h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V5h2v2zm4 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/>,
+    fields: [
+      { name: 'tipo_empresa', label: 'Tipo de Empresa', type: 'select', required: true, options: ['Empresas Roelca', 'Cliente (Paga)', 'Bodega', 'Propietario'] },
+      { name: 'empresa', label: 'Empresa', type: 'text', required: true },
+      { name: 'rfc_tax_id', label: 'RFC / Tax Id', type: 'text', required: true },
+      { name: 'regimen_fiscal', label: 'Régimen Fiscal', type: 'select', options: ['Persona Física', 'Persona Moral', '601 - General de Ley Personas Morales'] },
+      { name: 'maps', label: 'Maps (Link)', type: 'text' },
+      { name: 'direccion', label: 'Dirección', type: 'text', required: true },
+      { name: 'telefono', label: 'Teléfono', type: 'text' },
+      { name: 'correo', label: 'Correo', type: 'text' }
+    ]
+  },
+  formas_pago: {
+    id: 'formas_pago', titulo: 'Formas de Pago',
+    icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />,
+    fields: [
+      { name: 'forma_pago', label: 'Forma de Pago', type: 'text', required: true },
+      { name: 'descripcion', label: 'Descripción', type: 'text' }
+    ]
+  },
+  moneda: {
+    id: 'moneda', titulo: 'Monedas',
+    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.21 1.87 1.53 0 2.15-.81 2.15-1.5 0-2.09-4.44-1.61-4.44-4.83 0-1.46 1.03-2.57 2.41-2.94V5.11h2.67v1.94c1.37.33 2.49 1.25 2.65 2.85h-2.04c-.11-.83-.69-1.34-1.69-1.34-1.21 0-1.9.59-1.9 1.37 0 1.9 4.46 1.35 4.46 4.62 0 1.51-.92 2.98-2.56 3.54z" />,
+    fields: [
+      { name: 'moneda', label: 'Moneda', type: 'text', required: true },
+      { name: 'pais', label: 'Pais', type: 'text' },
+      { name: 'estado', label: 'Estado', type: 'text' },
+      { name: 'municipio', label: 'Municipio', type: 'text' },
+      { name: 'colonia', label: 'Colonia', type: 'text' },
+      { name: 'calle', label: 'Calle', type: 'text' },
+      { name: 'codigo_postal', label: 'Codigo_Postal', type: 'text' },
+      { name: 'num_interior', label: 'Numero_interior', type: 'text' },
+      { name: 'num_exterior', label: 'Numero_exterior', type: 'text' },
+      { name: 'descripcion_dir', label: 'DescripcionDireccion', type: 'text' },
+      { name: 'city_state_zip', label: 'CityStateZip', type: 'text' }
+    ]
+  },
+  tipo_operacion: {
+    id: 'tipo_operacion', titulo: 'Tipo de Operación',
+    icono: <path d="M19 15v4H5v-4h14m1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 18.5c-.82 0-1.5-.68-1.5-1.5s.68-1.5 1.5-1.5 1.5.68 1.5 1.5-.68 1.5-1.5 1.5zM19 5v4H5V5h14m1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 8.5c-.82 0-1.5-.68-1.5-1.5S6.18 5.5 7 5.5s1.5.68 1.5 1.5S7.82 8.5 7 8.5z" />,
+    fields: [{ name: 'tipo_operacion', label: 'Tipo de Operación', type: 'text', required: true }]
+  },
+  tipo_cargo: {
+    id: 'tipo_cargo', titulo: 'Tipo de Cargo',
+    icono: <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />,
+    fields: [
+      { name: 'nombre_puesto', label: 'Nombre del puesto', type: 'text', required: true },
+      { name: 'departamento', label: 'Departamento', type: 'select', options: ['Contabilidad', 'Transfer', 'Logistica', 'Facturación', 'Dirección', 'Sistemas'] },
+      { name: 'empresa', label: 'Empresa', type: 'select', required: true, options: ['Roelcainc SA de CV', 'Roelca Inc.'] }
+    ]
+  },
+  regimen_fiscal: {
+    id: 'regimen_fiscal', titulo: 'Régimen Fiscal',
+    icono: <path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" />,
+    fields: [
+      { name: 'clave', label: 'Clave', type: 'text', required: true },
+      { name: 'descripcion', label: 'Descripción', type: 'text', required: true }
+    ]
+  },
+  status_servicio: {
+    id: 'status_servicio', titulo: 'Status del Servicio',
+    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />,
+    fields: [
+      { name: 'boton_status', label: 'Botón/Status', type: 'select', required: true, options: ['Botón', 'Status'] },
+      { name: 'nombre', label: 'Name', type: 'text', required: true },
+      { name: 'descripcion', label: 'Descripción', type: 'text' },
+      { name: 'operacion', label: 'Operación', type: 'text' },
+      { name: 'tipo', label: 'Type', type: 'text' },
+      { name: 'obligatorio', label: 'Obligatorio', type: 'select', options: ['Sí', 'No'] }
+    ]
+  },
+  tipo_remolque: {
+    id: 'tipo_remolque', titulo: 'Tipo de Remolque',
+    icono: <path d="M23 18h-2v-2h2v2zm-4-4h-2v2h2v-2zm-4-4h-2v2h2v-2zM1 18v-2h2v2H1zm4-4v-2h2v2H5zm4-4V8h2v2H9zm8 10H7v-2h10v2zm4-12v2h-2V8h2zm-4 4v2h-2v-2h2zm-4 4v2h-2v-2h2zM12 2L2 7l10 5 10-5-10-5z" />,
+    fields: [
+      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
+      { name: 'medida', label: 'Medida', type: 'text' },
+      { name: 'descripcion', label: 'Descripción', type: 'text' },
+      { name: 'ejes', label: 'Ejes', type: 'number' }
+    ]
+  },
+  tipo_servicio: {
+    id: 'tipo_servicio', titulo: 'Tipo de Servicio',
+    icono: <path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM7 7h10v2H7V7zm10 12H7v-2h10v2zm0-4H7v-2h10v2zm0-4H7v-2h10v2z" />,
+    fields: [{ name: 'nombre', label: 'Nombre', type: 'text', required: true }]
+  },
+  tipos_gastos: {
+    id: 'tipos_gastos', titulo: 'Tipos de Gastos',
+    icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />,
+    fields: [
+      { name: 'nombre_gasto', label: 'Tipo de Gasto', type: 'text', required: true },
+      { name: 'categoria_gasto', label: 'Tipo de Gasto (Cat)', type: 'select', required: true, options: ['Puente', 'Gastos'] },
+      { name: 'importe', label: 'Importe', type: 'number', required: true },
+      { name: 'moneda', label: 'Moneda', type: 'select', required: true, options: ['Dolares', 'Pesos'] },
+      { name: 'trafico', label: 'Exportación/Importación', type: 'select', required: true, options: ['Exportación', 'Importación'] }
+    ]
+  }
+};
+
+export const listaCatalogos = Object.values(catalogosConfig);
