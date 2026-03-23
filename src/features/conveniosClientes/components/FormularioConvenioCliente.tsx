@@ -16,7 +16,7 @@ interface FormProps {
 export const FormularioConvenioCliente = ({ estado, initialData, registrosExistentes, onClose, onMinimize, onRestore }: FormProps) => {
   const todayISO = new Date().toISOString().split('T')[0];
 
-  // Estado del MAESTRO (Convenio)
+  // --- ESTADO DEL MAESTRO (CONVENIO) ---
   const [formData, setFormData] = useState<ConvenioClienteRecord>({
     numeroConvenio: '',
     clienteId: '',
@@ -26,25 +26,27 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     credito: 0,
     fechaConvenio: todayISO,
     fechaVencimiento: todayISO,
-    detalles: [] // Inicializamos el array de detalles vacío
+    detalles: [] // Array que guarda la lista de conceptos/tarifas
   });
 
-  // Estado del DETALLE (Borrador del subformulario)
+  // --- ESTADO DEL DETALLE (BORRADOR) ---
+  const [mostrandoDetalleForm, setMostrandoDetalleForm] = useState(false); // Controla si se ve el subformulario
   const [detalleDraft, setDetalleDraft] = useState({
     tipoConvenioId: '',
     tipoConvenioNombre: '',
-    tarifaSugeridaSeleccionada: '', // Solo visual, no se guarda en BD
+    tarifaSugeridaSeleccionada: '', // Visual, no se guarda
     tarifa: 0
   });
 
-  // Estados para catálogos relacionales
+  // --- ESTADOS PARA CATÁLOGOS ---
   const [clientes, setClientes] = useState<any[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
   const [tarifarios, setTarifarios] = useState<any[]>([]);
-  const [tarifasSugeridasActuales, setTarifasSugeridasActuales] = useState<any[]>([]); // Opciones a mostrar según el tarifario elegido
+  const [tarifasSugeridasActuales, setTarifasSugeridasActuales] = useState<any[]>([]); 
   
   const [cargando, setCargando] = useState(false);
 
+  // Lógica para Autogenerar el # de Convenio
   const generarSiguienteConvenio = () => {
     if (registrosExistentes.length === 0) return 'CONV-001';
     const numeros = registrosExistentes.map(reg => {
@@ -57,6 +59,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     return `CONV-${String(nextNum).padStart(3, '0')}`;
   };
 
+  // Cargar Catálogos al Iniciar
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
@@ -70,7 +73,6 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
         const monSnapshot = await getDocs(collection(db, 'catalogo_moneda'));
         setMonedas(monSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
-        // CORRECCIÓN: Cargar catálogo de Tarifarios
         const tarifarioSnapshot = await getDocs(collection(db, 'catalogo_tarifario'));
         setTarifarios(tarifarioSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       } catch (error) {
@@ -80,6 +82,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     cargarCatalogos();
   }, []);
 
+  // Inicializar Formulario
   useEffect(() => {
     if (initialData) {
       setFormData(initialData);
@@ -88,7 +91,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }
   }, [initialData, registrosExistentes]);
 
-  // Manejadores del Maestro
+  // --- MANEJADORES DEL MAESTRO ---
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
@@ -106,16 +109,13 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     setFormData(prev => ({ ...prev, monedaId: id, monedaNombre: moneda ? moneda.moneda : '' }));
   };
 
-  // --- LÓGICA DEL SUBFORMULARIO (DETALLES) ---
-
+  // --- MANEJADORES DEL DETALLE (SUBFORMULARIO) ---
   const handleTipoConvenioChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     const tarifario = tarifarios.find(t => t.id === id);
-    
-    // Obtenemos el nombre (asumimos que en BD el campo se llama 'concepto' o 'nombre')
     const nombreTarifario = tarifario ? (tarifario.concepto || tarifario.nombre || 'Desconocido') : '';
     
-    // Extraemos las tarifas sugeridas (Asumimos que puede ser un array llamado 'tarifas_sugeridas' o un string)
+    // Extraer sugerencias
     let sugerencias: any[] = [];
     if (tarifario) {
       if (Array.isArray(tarifario.tarifas_sugeridas)) {
@@ -126,16 +126,14 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }
     setTarifasSugeridasActuales(sugerencias);
 
-    setDetalleDraft(prev => ({
-      ...prev,
+    setDetalleDraft({
       tipoConvenioId: id,
       tipoConvenioNombre: nombreTarifario,
-      tarifaSugeridaSeleccionada: '',
-      tarifa: 0
-    }));
+      tarifaSugeridaSeleccionada: sugerencias.length > 0 ? sugerencias[0] : '', // Auto-selecciona la primera si existe
+      tarifa: sugerencias.length > 0 ? parseFloat(sugerencias[0]) : 0
+    });
   };
 
-  // Cuando el usuario elige una tarifa de la lista de sugerencias, rellenamos el input editable
   const handleSugerenciaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const valorSeleccionado = e.target.value;
     setDetalleDraft(prev => ({
@@ -152,7 +150,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }
 
     const nuevoDetalle: ConvenioDetalle = {
-      idLocal: Date.now().toString(), // Generar un ID único local rápido
+      idLocal: Date.now().toString(), 
       tipoConvenioId: detalleDraft.tipoConvenioId,
       tipoConvenioNombre: detalleDraft.tipoConvenioNombre,
       tarifa: detalleDraft.tarifa
@@ -163,14 +161,10 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
       detalles: [...(prev.detalles || []), nuevoDetalle]
     }));
 
-    // Limpiar el borrador
-    setDetalleDraft({
-      tipoConvenioId: '',
-      tipoConvenioNombre: '',
-      tarifaSugeridaSeleccionada: '',
-      tarifa: 0
-    });
+    // Resetear subformulario y ocultarlo
+    setDetalleDraft({ tipoConvenioId: '', tipoConvenioNombre: '', tarifaSugeridaSeleccionada: '', tarifa: 0 });
     setTarifasSugeridasActuales([]);
+    setMostrandoDetalleForm(false);
   };
 
   const handleEliminarDetalle = (idLocal: string) => {
@@ -180,6 +174,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }));
   };
 
+  // --- GUARDADO FINAL ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setCargando(true);
@@ -201,7 +196,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
 
   return (
     <div className={`modal-overlay ${estado === 'minimizado' ? 'minimized' : ''}`}>
-      <div className="form-card" style={{ maxWidth: '850px' }}> {/* Ligeramente más ancho para la tabla de detalles */}
+      <div className="form-card" style={{ maxWidth: '850px' }}>
         <div className="form-header">
           <h2>{estado === 'minimizado' ? 'Editando...' : (initialData ? `Editar Convenio` : 'Nuevo Convenio de Cliente')}</h2>
           <div className="header-actions">
@@ -214,21 +209,14 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
           </div>
         </div>
 
-        <div style={{ display: estado === 'minimizado' ? 'none' : 'block', padding: '10px 0', maxHeight: '75vh', overflowY: 'auto' }}>
+        <div style={{ display: estado === 'minimizado' ? 'none' : 'block', padding: '10px 0', maxHeight: '75vh', overflowY: 'auto', overflowX: 'hidden' }}>
           <form onSubmit={handleSubmit}>
             
-            {/* --- DATOS CABECERA (MAESTRO) --- */}
+            {/* --- CABECERA DEL CONVENIO --- */}
             <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-              
               <div className="form-group">
                 <label className="form-label orange"># de Convenio (Automático)</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
-                  value={formData.numeroConvenio} 
-                  disabled 
-                  style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} 
-                />
+                <input type="text" className="form-control" value={formData.numeroConvenio} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} />
               </div>
 
               <div className="form-group">
@@ -263,98 +251,119 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
 
               <div className="form-group">
                 <label className="form-label">Crédito (Días) *</label>
-                <input 
-                  type="number" 
-                  name="credito" 
-                  className="form-control" 
-                  value={formData.credito} 
-                  onChange={(e) => setFormData(prev => ({ ...prev, credito: parseFloat(e.target.value) || 0 }))} 
-                  required 
-                />
+                <input type="number" name="credito" className="form-control" value={formData.credito} onChange={(e) => setFormData(prev => ({ ...prev, credito: parseFloat(e.target.value) || 0 }))} required />
               </div>
             </div>
 
-            {/* --- DATOS DETALLE (SUBFORMULARIO) --- */}
-            <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid #30363d' }}>
-              <h3 style={{ fontSize: '1.1rem', color: '#f0f6fc', marginBottom: '16px' }}>Detalles del Convenio</h3>
+            {/* --- SECCIÓN ENCAPSULADA: LISTA DE DETALLES --- */}
+            <div style={{ marginTop: '32px', border: '1px solid #30363d', borderRadius: '8px', padding: '24px', backgroundColor: '#0d1117' }}>
               
-              <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr auto', gap: '16px', alignItems: 'end' }}>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio (Catálogo Tarifario)</label>
-                  <select className="form-control" value={detalleDraft.tipoConvenioId} onChange={handleTipoConvenioChange}>
-                    <option value="">Seleccione...</option>
-                    {tarifarios.map(t => (
-                      <option key={t.id} value={t.id}>{t.concepto || t.nombre || `Catálogo #${t.id}`}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem', color: '#3b82f6' }}>Tarifa Sugerida (Opcional)</label>
-                  <select className="form-control" value={detalleDraft.tarifaSugeridaSeleccionada} onChange={handleSugerenciaChange} disabled={tarifasSugeridasActuales.length === 0}>
-                    <option value="">{tarifasSugeridasActuales.length === 0 ? 'Sin sugerencias' : 'Ver opciones...'}</option>
-                    {tarifasSugeridasActuales.map((tar, i) => (
-                      <option key={i} value={tar}>${tar}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Tarifa Final *</label>
-                  <input 
-                    type="number" 
-                    step="0.01"
-                    className="form-control" 
-                    value={detalleDraft.tarifa} 
-                    onChange={(e) => setDetalleDraft(prev => ({ ...prev, tarifa: parseFloat(e.target.value) || 0 }))} 
-                  />
-                </div>
-
-                <div className="form-group">
-                  <button type="button" className="btn btn-outline" style={{ height: '38px', borderColor: '#3b82f6', color: '#3b82f6' }} onClick={handleAgregarDetalle}>
-                    + Agregar
-                  </button>
-                </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '1rem', color: '#f0f6fc', margin: 0, fontWeight: '600' }}>Lista de Detalles</h3>
+                
+                {/* Botón visualmente idéntico a tu referencia para abrir el subformulario */}
+                <button 
+                  type="button" 
+                  className="btn btn-outline" 
+                  style={{ padding: '6px 12px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  onClick={() => setMostrandoDetalleForm(!mostrandoDetalleForm)}
+                >
+                  <span style={{ fontSize: '1.2rem', lineHeight: '1' }}>{mostrandoDetalleForm ? '−' : '+'}</span> 
+                  {mostrandoDetalleForm ? 'Cancelar' : 'Agregar Detalle'}
+                </button>
               </div>
 
-              {/* TABLA DE DETALLES AGREGADOS */}
-              {formData.detalles && formData.detalles.length > 0 && (
-                <div className="table-container" style={{ marginTop: '20px', borderRadius: '4px', border: '1px solid #30363d' }}>
-                  <table className="data-table" style={{ fontSize: '0.8rem' }}>
-                    <thead style={{ backgroundColor: '#161b22' }}>
+              {/* Subformulario Desplegable */}
+              {mostrandoDetalleForm && (
+                <div style={{ backgroundColor: '#161b22', padding: '20px', borderRadius: '8px', border: '1px solid #30363d', marginBottom: '24px' }}>
+                  <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr auto', gap: '16px', alignItems: 'end', marginBottom: 0 }}>
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio (Catálogo)</label>
+                      <select className="form-control" value={detalleDraft.tipoConvenioId} onChange={handleTipoConvenioChange}>
+                        <option value="">Seleccione concepto...</option>
+                        {tarifarios.map(t => (
+                          <option key={t.id} value={t.id}>{t.concepto || t.nombre || `Catálogo #${t.id}`}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontSize: '0.75rem', color: '#8b949e' }}>Tarifa Sugerida</label>
+                      <select className="form-control" value={detalleDraft.tarifaSugeridaSeleccionada} onChange={handleSugerenciaChange} disabled={tarifasSugeridasActuales.length === 0}>
+                        <option value="">{tarifasSugeridasActuales.length === 0 ? 'Sin sugerencias' : 'Ver opciones...'}</option>
+                        {tarifasSugeridasActuales.map((tar, i) => (
+                          <option key={i} value={tar}>${tar}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="form-label" style={{ fontSize: '0.75rem' }}>Tarifa Final *</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        className="form-control" 
+                        value={detalleDraft.tarifa} 
+                        onChange={(e) => setDetalleDraft(prev => ({ ...prev, tarifa: parseFloat(e.target.value) || 0 }))} 
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <button type="button" className="btn btn-primary" style={{ height: '38px', padding: '0 16px' }} onClick={handleAgregarDetalle}>
+                        Guardar Fila
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Tabla Interna de Detalles Agregados */}
+              <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '6px', overflow: 'hidden' }}>
+                <table className="data-table" style={{ fontSize: '0.85rem' }}>
+                  <thead style={{ backgroundColor: '#161b22' }}>
+                    <tr>
+                      <th style={{ width: '40px', textAlign: 'center' }}>#</th>
+                      <th>TIPO DE CONVENIO</th>
+                      <th>TARIFA ACORDADA</th>
+                      <th style={{ width: '80px', textAlign: 'center' }}>ACCIÓN</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!formData.detalles || formData.detalles.length === 0 ? (
                       <tr>
-                        <th style={{ padding: '8px 12px' }}>Tipo de Convenio</th>
-                        <th style={{ padding: '8px 12px' }}>Tarifa Acordada</th>
-                        <th style={{ padding: '8px 12px', width: '50px', textAlign: 'center' }}>X</th>
+                        <td colSpan={4} style={{ textAlign: 'center', padding: '24px', color: '#8b949e' }}>
+                          No hay detalles agregados a este convenio.
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {formData.detalles.map((det) => (
+                    ) : (
+                      formData.detalles.map((det, index) => (
                         <tr key={det.idLocal}>
-                          <td style={{ padding: '8px 12px', color: '#c9d1d9' }}>{det.tipoConvenioNombre}</td>
-                          <td style={{ padding: '8px 12px', color: '#f0f6fc', fontWeight: 'bold' }}>${det.tarifa.toFixed(2)}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                          <td style={{ textAlign: 'center', color: '#8b949e' }}>{index + 1}</td>
+                          <td style={{ color: '#c9d1d9' }}>{det.tipoConvenioNombre}</td>
+                          <td style={{ color: '#f0f6fc', fontWeight: 'bold' }}>${det.tarifa.toFixed(2)}</td>
+                          <td style={{ textAlign: 'center' }}>
                             <button 
                               type="button" 
                               onClick={() => handleEliminarDetalle(det.idLocal)}
-                              style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '1rem' }}
-                              title="Eliminar detalle"
+                              style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 'bold' }}
+                              title="Quitar"
                             >
                               ✕
                             </button>
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
+            {/* --- ACCIONES FINALES DEL FORMULARIO --- */}
             <div className="form-actions" style={{ marginTop: '24px' }}>
               <button type="button" onClick={onClose} className="btn btn-outline">Cancelar</button>
               <button type="submit" className="btn btn-primary" disabled={cargando}>
-                {cargando ? 'Guardando...' : 'Guardar Convenio Completo'}
+                {cargando ? 'Guardando...' : 'Guardar Convenio'}
               </button>
             </div>
           </form>
