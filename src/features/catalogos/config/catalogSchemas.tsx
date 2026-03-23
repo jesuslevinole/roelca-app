@@ -3,12 +3,18 @@ import React from 'react';
 
 export type FieldType = 'text' | 'number' | 'select';
 
+// CORRECCIÓN: Se agrega dynamicOptions para manejar listas desplegables que vienen de Firebase
 export interface CatalogField {
   name: string;
   label: string;
   type: FieldType;
   required?: boolean;
-  options?: string[];
+  options?: string[]; // Para opciones estáticas
+  dynamicOptions?: {  // Para opciones dinámicas desde otra colección
+    collection: string;
+    labelField: string;
+    valueField: string;
+  };
 }
 
 export interface CatalogSchema {
@@ -29,7 +35,14 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     icono: <path d="M4 10h3v7H4zM10.5 10h3v7h-3zM2 19h20v3H2zM17 10h3v7h-3zM12 1L2 6v2h20V6L12 1z" />,
     fields: [
       { name: 'banco', label: 'Banco', type: 'text', required: true },
-      { name: 'moneda', label: 'Moneda', type: 'select', required: true, options: ['Dolares', 'Pesos'] }
+      // CORRECCIÓN: Ahora lee la llave primaria del catálogo de monedas
+      { 
+        name: 'moneda', 
+        label: 'Moneda', 
+        type: 'select', 
+        required: true, 
+        dynamicOptions: { collection: 'catalogo_moneda', labelField: 'moneda', valueField: 'id' }
+      }
     ]
   },
   departamentos: {
@@ -148,8 +161,21 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     icono: <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />,
     fields: [
       { name: 'nombre_puesto', label: 'Nombre del puesto', type: 'text', required: true },
-      { name: 'departamento', label: 'Departamento', type: 'select', options: ['Contabilidad', 'Transfer', 'Logistica', 'Facturación', 'Dirección', 'Sistemas'] },
-      { name: 'empresa', label: 'Empresa', type: 'select', required: true, options: ['Roelcainc SA de CV', 'Roelca Inc.'] }
+      // CORRECCIÓN: Leen desde las colecciones departametos y empresas
+      { 
+        name: 'departamento', 
+        label: 'Departamento', 
+        type: 'select', 
+        required: true,
+        dynamicOptions: { collection: 'catalogo_departamentos', labelField: 'departamento', valueField: 'id' } 
+      },
+      { 
+        name: 'empresa', 
+        label: 'Empresa', 
+        type: 'select', 
+        required: true, 
+        dynamicOptions: { collection: 'catalogo_empresas', labelField: 'empresa', valueField: 'id' }
+      }
     ]
   },
   regimen_fiscal: {

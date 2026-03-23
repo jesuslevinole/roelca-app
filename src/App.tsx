@@ -5,20 +5,35 @@ import OperacionesDashboard from './features/operaciones/components/OperacionesD
 import EmpresasDashboard from './features/empresas/components/EmpresasDashboard';
 import TipoCambioDashboard from './features/tipoCambio/components/TipoCambioDashboard';
 import CatalogosDashboard from './features/catalogos/components/CatalogosDashboard';
+import { CombustibleDashboard } from './features/combustible/components/CombustibleDashboard';
+import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
+import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
+
+// CORRECCIÓN 1: Importación del nuevo módulo Convenio de Clientes
+import { ConveniosClientesDashboard } from './features/conveniosClientes/components/ConveniosClientesDashboard';
+
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos'>('operaciones');
+  
+  // CORRECCIÓN 2: Se añade 'conveniosClientes' a los módulos aceptados
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes'>('operaciones');
+  
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
   
-  // NUEVO: Estado para abrir/cerrar el submenú de Bases de Datos
+  // Estados para abrir/cerrar los submenús
   const [menuBasesDatosAbierto, setMenuBasesDatosAbierto] = useState(false);
+  const [menuClientesAbierto, setMenuClientesAbierto] = useState(false); // <--- NUEVO ESTADO PARA CLIENTES
 
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
+
+  // Validaciones para mantener activos los menús padres
+  const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor';
+  const esClientesActivo = moduloActivo === 'conveniosClientes'; // <--- NUEVA VALIDACIÓN
 
   return (
     <div className="app-wrapper">
@@ -35,17 +50,43 @@ function App() {
         >
           Operaciones
         </div>
-        
+
+        {/* =========================================
+            NUEVO ITEM DESPLEGABLE: CLIENTES 
+            ========================================= */}
+        <div 
+          className={`sidebar-item sidebar-item-with-icon ${esClientesActivo && !menuClientesAbierto ? 'active' : ''}`} 
+          onClick={() => setMenuClientesAbierto(!menuClientesAbierto)}
+        >
+          <span>Clientes</span>
+          <span style={{ fontSize: '0.7rem' }}>{menuClientesAbierto ? '▼' : '▶'}</span>
+        </div>
+
+        {/* SUB-ITEMS DE CLIENTES */}
+        {menuClientesAbierto && (
+          <div className="sidebar-submenu">
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'conveniosClientes' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('conveniosClientes')}
+            >
+              Convenio de Clientes
+            </div>
+            {/* Aquí puedes agregar más opciones en el futuro, como "Alta de Clientes", etc. */}
+          </div>
+        )}
+        {/* ========================================= */}
+
+
         {/* ITEM DESPLEGABLE: Bases de Datos */}
         <div 
-          className={`sidebar-item sidebar-item-with-icon ${(moduloActivo === 'empresas' || moduloActivo === 'tipoCambio') && !menuBasesDatosAbierto ? 'active' : ''}`} 
+          className={`sidebar-item sidebar-item-with-icon ${esBaseDeDatosActiva && !menuBasesDatosAbierto ? 'active' : ''}`} 
           onClick={() => setMenuBasesDatosAbierto(!menuBasesDatosAbierto)}
         >
           <span>Bases de Datos</span>
           <span style={{ fontSize: '0.7rem' }}>{menuBasesDatosAbierto ? '▼' : '▶'}</span>
         </div>
 
-        {/* LOS SUB-ITEMS (Empresas y Tipo de Cambio) */}
+        {/* LOS SUB-ITEMS DE BASES DE DATOS */}
         {menuBasesDatosAbierto && (
           <div className="sidebar-submenu">
             <div 
@@ -60,10 +101,28 @@ function App() {
             >
               Tipo de Cambio
             </div>
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'combustible' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('combustible')}
+            >
+              Combustible
+            </div>
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'proveedoresUnidad' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('proveedoresUnidad')}
+            >
+              Proveedores de Unidad
+            </div>
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'unidadesProveedor' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('unidadesProveedor')}
+            >
+              Unidades del Proveedor
+            </div>
           </div>
         )}
 
-        {/* NUEVO ITEM: Catálogos */}
+        {/* ITEM: Catálogos */}
         <div 
           className={`sidebar-item ${moduloActivo === 'catalogos' ? 'active' : ''}`} 
           onClick={() => setModuloActivo('catalogos')}
@@ -132,6 +191,13 @@ function App() {
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
+        {moduloActivo === 'combustible' && <CombustibleDashboard />}
+        {moduloActivo === 'proveedoresUnidad' && <ProveedoresUnidadDashboard />}
+        {moduloActivo === 'unidadesProveedor' && <UnidadesProveedorDashboard />}
+        
+        {/* CORRECCIÓN 5: Renderizado del componente Convenio de Clientes */}
+        {moduloActivo === 'conveniosClientes' && <ConveniosClientesDashboard />}
+        
         {moduloActivo === 'catalogos' && <CatalogosDashboard />}
         
       </div>
