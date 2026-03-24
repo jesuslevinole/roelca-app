@@ -23,11 +23,9 @@ export const FormularioCombustible: React.FC<FormProps> = ({
   const todayISO = new Date().toISOString().split('T')[0];
 
   const [fecha, setFecha] = useState<string>(todayISO);
-  // Editable: Inicia en Diesel (o Gasolina), pero el usuario lo cambia a voluntad
   const [tipoCombustible, setTipoCombustible] = useState<'Gasolina' | 'Diesel'>('Diesel');
   const [monedaSeleccionada, setMonedaSeleccionada] = useState<Moneda | null>(null);
   
-  // CORRECCIÓN: Tipo de Medida ahora es un estado libre y editable
   const [tipoMedida, setTipoMedida] = useState<string>(''); 
   
   const [proveedor, setProveedor] = useState<string>('');
@@ -41,7 +39,6 @@ export const FormularioCombustible: React.FC<FormProps> = ({
       setMonedas(data);
       if (data.length > 0) {
         setMonedaSeleccionada(data[0]);
-        // Asignamos el valor inicial de la medida basado en la primera moneda cargada
         setTipoMedida(data[0].esDolar ? 'Galones' : 'Litros');
       }
     };
@@ -52,7 +49,8 @@ export const FormularioCombustible: React.FC<FormProps> = ({
     const fetchTipoCambio = async () => {
       if (monedaSeleccionada?.esDolar && fecha) {
         setCargandoApi(true);
-        const tc = await getTipoCambioPorFecha(fecha);
+        // CORRECCIÓN: Se eliminó la variable "fecha" de los paréntesis para coincidir con el servicio
+        const tc = await getTipoCambioPorFecha();
         setTipoCambio(tc);
         setCargandoApi(false);
       } else {
@@ -62,7 +60,6 @@ export const FormularioCombustible: React.FC<FormProps> = ({
     fetchTipoCambio();
   }, [fecha, monedaSeleccionada]);
 
-  // Lógica derivada para cálculos automáticos
   const esDolar = monedaSeleccionada?.esDolar ?? false;
   const totalPesos = esDolar ? costo * tipoCambio : 0;
 
@@ -70,9 +67,6 @@ export const FormularioCombustible: React.FC<FormProps> = ({
     e.preventDefault();
     if (!monedaSeleccionada) return;
 
-    // Forzamos el tipo 'Litros' | 'Galones' para evitar errores de TypeScript, 
-    // asumiendo que el usuario no escribirá algo fuera de contexto, 
-    // o puedes cambiar la interfaz CombustibleRecord para aceptar un string libre.
     const record: CombustibleRecord = {
       fecha,
       tipoCombustible,
@@ -94,7 +88,6 @@ export const FormularioCombustible: React.FC<FormProps> = ({
     const encontrada = monedas.find(m => m.id === id) || null;
     setMonedaSeleccionada(encontrada);
     
-    // CORRECCIÓN: Al cambiar la moneda, sugerimos automáticamente la medida correspondiente
     if (encontrada) {
       setTipoMedida(encontrada.esDolar ? 'Galones' : 'Litros');
     }
@@ -164,7 +157,6 @@ export const FormularioCombustible: React.FC<FormProps> = ({
                 </select>
               </div>
 
-              {/* CORRECCIÓN: Campo editable. Sin etiquetas extra, sin estilos grises */}
               <div className="form-group">
                 <label className="form-label">Tipo de Medida *</label>
                 <input 
