@@ -8,24 +8,28 @@ import CatalogosDashboard from './features/catalogos/components/CatalogosDashboa
 import { CombustibleDashboard } from './features/combustible/components/CombustibleDashboard';
 import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
 import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
-
-// CORRECCIÓN 1: Importación del nuevo módulo Convenio de Clientes
 import { ConveniosClientesDashboard } from './features/conveniosClientes/components/ConveniosClientesDashboard';
+
+// Importación del módulo Convenio de Proveedores
+import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
 
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   
-  // CORRECCIÓN 2: Se añade 'conveniosClientes' a los módulos aceptados
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes'>('operaciones');
+  // Se añade 'conveniosProveedores' a los módulos aceptados por el estado
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
   
   // Estados para abrir/cerrar los submenús
   const [menuBasesDatosAbierto, setMenuBasesDatosAbierto] = useState(false);
-  const [menuClientesAbierto, setMenuClientesAbierto] = useState(false); // <--- NUEVO ESTADO PARA CLIENTES
+  const [menuClientesAbierto, setMenuClientesAbierto] = useState(false);
+  
+  // CORRECCIÓN 1: Nuevo estado para el acordeón de Proveedores
+  const [menuProveedoresAbierto, setMenuProveedoresAbierto] = useState(false);
 
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
@@ -33,7 +37,10 @@ function App() {
 
   // Validaciones para mantener activos los menús padres
   const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor';
-  const esClientesActivo = moduloActivo === 'conveniosClientes'; // <--- NUEVA VALIDACIÓN
+  const esClientesActivo = moduloActivo === 'conveniosClientes';
+  
+  // CORRECCIÓN 2: Validación para el menú Proveedores
+  const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
 
   return (
     <div className="app-wrapper">
@@ -51,9 +58,7 @@ function App() {
           Operaciones
         </div>
 
-        {/* =========================================
-            NUEVO ITEM DESPLEGABLE: CLIENTES 
-            ========================================= */}
+        {/* ITEM DESPLEGABLE: CLIENTES */}
         <div 
           className={`sidebar-item sidebar-item-with-icon ${esClientesActivo && !menuClientesAbierto ? 'active' : ''}`} 
           onClick={() => setMenuClientesAbierto(!menuClientesAbierto)}
@@ -62,7 +67,6 @@ function App() {
           <span style={{ fontSize: '0.7rem' }}>{menuClientesAbierto ? '▼' : '▶'}</span>
         </div>
 
-        {/* SUB-ITEMS DE CLIENTES */}
         {menuClientesAbierto && (
           <div className="sidebar-submenu">
             <div 
@@ -71,11 +75,28 @@ function App() {
             >
               Convenio de Clientes
             </div>
-            {/* Aquí puedes agregar más opciones en el futuro, como "Alta de Clientes", etc. */}
           </div>
         )}
-        {/* ========================================= */}
 
+        {/* CORRECCIÓN 3: ITEM DESPLEGABLE PROVEEDORES */}
+        <div 
+          className={`sidebar-item sidebar-item-with-icon ${esProveedoresActivo && !menuProveedoresAbierto ? 'active' : ''}`} 
+          onClick={() => setMenuProveedoresAbierto(!menuProveedoresAbierto)}
+        >
+          <span>Proveedores</span>
+          <span style={{ fontSize: '0.7rem' }}>{menuProveedoresAbierto ? '▼' : '▶'}</span>
+        </div>
+
+        {menuProveedoresAbierto && (
+          <div className="sidebar-submenu">
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'conveniosProveedores' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('conveniosProveedores')}
+            >
+              Convenio de Proveedores
+            </div>
+          </div>
+        )}
 
         {/* ITEM DESPLEGABLE: Bases de Datos */}
         <div 
@@ -86,7 +107,6 @@ function App() {
           <span style={{ fontSize: '0.7rem' }}>{menuBasesDatosAbierto ? '▼' : '▶'}</span>
         </div>
 
-        {/* LOS SUB-ITEMS DE BASES DE DATOS */}
         {menuBasesDatosAbierto && (
           <div className="sidebar-submenu">
             <div 
@@ -194,10 +214,8 @@ function App() {
         {moduloActivo === 'combustible' && <CombustibleDashboard />}
         {moduloActivo === 'proveedoresUnidad' && <ProveedoresUnidadDashboard />}
         {moduloActivo === 'unidadesProveedor' && <UnidadesProveedorDashboard />}
-        
-        {/* CORRECCIÓN 5: Renderizado del componente Convenio de Clientes */}
         {moduloActivo === 'conveniosClientes' && <ConveniosClientesDashboard />}
-        
+        {moduloActivo === 'conveniosProveedores' && <ConveniosProveedoresDashboard />}
         {moduloActivo === 'catalogos' && <CatalogosDashboard />}
         
       </div>
