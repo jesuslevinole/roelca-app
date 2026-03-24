@@ -31,8 +31,8 @@ export const getMonedasCatalogo = async (): Promise<Moneda[]> => {
 };
 
 // 2. Obtener Tipo de Cambio
-// CORRECCIÓN APLICADA: _fecha ignora el warning de variable no usada
-export const getTipoCambioPorFecha = async (_fecha: string): Promise<number> => {
+// CORRECCIÓN APLICADA: Se eliminó el parámetro para evitar bloqueos estrictos de TS
+export const getTipoCambioPorFecha = async (): Promise<number> => {
   return 17.8117; 
 };
 
