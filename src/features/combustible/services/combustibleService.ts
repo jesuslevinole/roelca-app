@@ -13,12 +13,10 @@ export const getMonedasCatalogo = async (): Promise<Moneda[]> => {
       return {
         id: doc.id,
         nombre: data.moneda || 'Desconocida',
-        // Comprueba si el nombre incluye "dolar" o "usd" para el cálculo automático
         esDolar: data.moneda?.toLowerCase().includes('dolar') || data.moneda?.toLowerCase().includes('usd')
       };
     });
     
-    // Si la colección está vacía en Firebase, devolvemos unas por defecto para que no falle la UI
     if (monedas.length === 0) {
       return [
         { id: '1', nombre: 'Dólares (USD)', esDolar: true },
@@ -33,10 +31,8 @@ export const getMonedasCatalogo = async (): Promise<Moneda[]> => {
 };
 
 // 2. Obtener Tipo de Cambio
-// CORRECCIÓN: Se usa _fecha para decirle a TypeScript que ignore la variable sin arrojar error
+// CORRECCIÓN APLICADA: _fecha ignora el warning de variable no usada
 export const getTipoCambioPorFecha = async (_fecha: string): Promise<number> => {
-  // Aquí puedes conectar posteriormente tu API de Banxico. 
-  // Por ahora retornamos un valor seguro para que compile perfecto.
   return 17.8117; 
 };
 
@@ -46,7 +42,7 @@ export const saveCombustible = async (record: CombustibleRecord): Promise<void> 
     await addDoc(collection(db, 'combustibles'), record);
   } catch (error) {
     console.error("Error al guardar combustible:", error);
-    throw error; // Lanzamos el error para que el formulario lo atrape y avise al usuario
+    throw error;
   }
 };
 
@@ -59,7 +55,6 @@ export const getCombustibles = async (): Promise<CombustibleRecord[]> => {
       ...doc.data()
     })) as CombustibleRecord[];
     
-    // Ordenamos por fecha de forma descendente (los más recientes arriba)
     return records.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
   } catch (error) {
     console.error("Error al obtener combustibles:", error);
