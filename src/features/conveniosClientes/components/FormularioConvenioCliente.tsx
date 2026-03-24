@@ -5,6 +5,110 @@ import { db, agregarRegistro, actualizarRegistro } from '../../../config/firebas
 import type { ConvenioClienteRecord, ConvenioDetalle } from '../../../types/convenioCliente';
 
 // =========================================
+// SUB-COMPONENTE: SELECTOR CON BUSCADOR
+// =========================================
+const SearchableSelect: React.FC<{
+  options: { id: string, label: string }[];
+  value: string;
+  onChange: (id: string, label: string) => void;
+  placeholder?: string;
+  required?: boolean;
+}> = ({ options, value, onChange, placeholder = "Buscar...", required = false }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  // Buscar el label actual para mostrarlo si ya hay un valor seleccionado
+  const selectedLabel = options.find(o => o.id === value)?.label || '';
+
+  // Actualizar el buscador si cambia el valor externo
+  useEffect(() => {
+    setSearchTerm(selectedLabel);
+  }, [value, selectedLabel]);
+
+  const filteredOptions = options.filter(opt => 
+    opt.label.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <input
+        type="text"
+        className="form-control"
+        placeholder={placeholder}
+        value={isOpen ? searchTerm : selectedLabel}
+        onChange={(e) => {
+          setSearchTerm(e.target.value);
+          setIsOpen(true);
+        }}
+        onFocus={() => {
+          setSearchTerm(''); // Limpia al hacer click para ver todas las opciones
+          setIsOpen(true);
+        }}
+        onBlur={() => {
+          // Pequeño timeout para permitir que el onClick de la opción se ejecute
+          setTimeout(() => setIsOpen(false), 200);
+          setSearchTerm(selectedLabel); // Restaura el texto si no seleccionó nada nuevo
+        }}
+        required={required && !value} // Solo requerido si no hay un ID guardado
+        style={{
+          cursor: 'text',
+          border: isOpen ? '1px solid #3b82f6' : '',
+          backgroundColor: '#0d1117'
+        }}
+      />
+      
+      {isOpen && (
+        <ul style={{
+          position: 'absolute',
+          top: '100%',
+          left: 0,
+          right: 0,
+          maxHeight: '200px',
+          overflowY: 'auto',
+          backgroundColor: '#161b22',
+          border: '1px solid #30363d',
+          borderRadius: '4px',
+          marginTop: '4px',
+          padding: '0',
+          margin: '4px 0 0 0',
+          listStyle: 'none',
+          zIndex: 1000,
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.5)'
+        }}>
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map(opt => (
+              <li
+                key={opt.id}
+                onClick={() => {
+                  onChange(opt.id, opt.label);
+                  setSearchTerm(opt.label);
+                  setIsOpen(false);
+                }}
+                style={{
+                  padding: '8px 12px',
+                  cursor: 'pointer',
+                  color: '#c9d1d9',
+                  borderBottom: '1px solid #21262d',
+                  fontSize: '0.85rem'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                {opt.label}
+              </li>
+            ))
+          ) : (
+            <li style={{ padding: '8px 12px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>
+              No se encontraron coincidencias
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+// =========================================
 // SUB-COMPONENTE: MODAL DE CONFIGURACIÓN
 // =========================================
 const FieldConfigModal: React.FC<{
@@ -140,16 +244,14 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
-        const empSnapshot = await getDocs(collection(db, 'catalogo_empresas'));
+        const empSnapshot = await getDocs(collection(db, 'empresas'));
         const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // CORRECCIÓN: Filtro ampliado para buscar en múltiples llaves posibles de Firebase
-        const clientesFiltrados = todasEmpresas.filter((emp: any) => 
-          emp.tipo_empresa === 'Cliente (Paga)' || 
-          emp.tipo_servicios === 'Cliente (Paga)' || 
-          emp.tipo_servicio === 'Cliente (Paga)' || 
-          emp.categoria_principal === 'Cliente (Paga)'
-        );
+        const clientesFiltrados = todasEmpresas.filter((emp: any) => {
+          const stringData = JSON.stringify(emp).toLowerCase();
+          return stringData.includes('cliente (paga)');
+        });
+        
         setClientes(clientesFiltrados);
 
         const monSnapshot = await getDocs(collection(db, 'catalogo_moneda'));
@@ -172,16 +274,10 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }
   }, [initialData, registrosExistentes]);
 
-  // --- MANEJADORES ---
+  // Manejadores
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleClienteChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const id = e.target.value;
-    const cliente = clientes.find(c => c.id === id);
-    setFormData(prev => ({ ...prev, clienteId: id, clienteNombre: cliente ? cliente.empresa : '' }));
   };
 
   const handleMonedaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -247,6 +343,10 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isRequired('clienteId') && !formData.clienteId) {
+      alert("Por favor seleccione un cliente de la lista.");
+      return;
+    }
     setCargando(true);
     try {
       if (initialData && initialData.id) {
@@ -263,6 +363,16 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
       setCargando(false);
     }
   };
+
+  // Convertimos los clientes a un formato estándar para el nuevo componente SearchableSelect
+  const opcionesClientes = clientes.map(cli => {
+    const keys = Object.keys(cli);
+    const nombreKey = keys.find(k => k.toLowerCase().includes('empresa') || k.toLowerCase().includes('nombre'));
+    return {
+      id: cli.id,
+      label: nombreKey ? cli[nombreKey] : `Cliente ID: ${cli.id.slice(0,4)}`
+    };
+  });
 
   return (
     <>
@@ -310,12 +420,16 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
                   <input type="text" className="form-control" value={formData.numeroConvenio} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} />
                 </div>
 
+                {/* CORRECCIÓN: Se reemplaza el select nativo por el SearchableSelect */}
                 <div className="form-group">
                   <label className="form-label">Cliente {isRequired('clienteId') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                  <select className="form-control" value={formData.clienteId} onChange={handleClienteChange} required={isRequired('clienteId')}>
-                    <option value="">Seleccione un cliente...</option>
-                    {clientes.map(cli => <option key={cli.id} value={cli.id}>{cli.empresa}</option>)}
-                  </select>
+                  <SearchableSelect 
+                    options={opcionesClientes}
+                    value={formData.clienteId}
+                    onChange={(id, label) => setFormData(prev => ({ ...prev, clienteId: id, clienteNombre: label }))}
+                    placeholder="Escriba para buscar un cliente..."
+                    required={isRequired('clienteId')}
+                  />
                 </div>
 
                 <div className="form-group">
@@ -356,7 +470,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
                   <div style={{ backgroundColor: '#161b22', padding: '20px', borderRadius: '8px', border: '1px solid #30363d', marginBottom: '24px' }}>
                     <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr auto', gap: '16px', alignItems: 'end', marginBottom: 0 }}>
                       <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio (Catálogo)</label>
+                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio</label>
                         <select className="form-control" value={detalleDraft.tipoConvenioId} onChange={handleTipoConvenioChange}>
                           <option value="">Seleccione concepto...</option>
                           {tarifarios.map(t => <option key={t.id} value={t.id}>{t.concepto || t.nombre || `Catálogo #${t.id}`}</option>)}
