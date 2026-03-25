@@ -1,291 +1,333 @@
-// src/features/catalogos/config/catalogSchemas.tsx
-import React from 'react';
+// src/features/catalogos/components/CatalogosDashboard.tsx
+import React, { useState, useEffect } from 'react';
+import { collection, onSnapshot, getDocs } from 'firebase/firestore';
+import { db, agregarRegistro, actualizarRegistro, eliminarRegistro } from '../../../config/firebase';
+import { listaCatalogos, type CatalogSchema } from '../config/catalogSchemas';
 
-export type FieldType = 'text' | 'number' | 'select';
-
-// dynamicOptions maneja listas desplegables que vienen de Firebase (Llaves Foráneas)
-export interface CatalogField {
-  name: string;
-  label: string;
-  type: FieldType;
-  required?: boolean;
-  options?: string[]; // Para opciones estáticas
-  dynamicOptions?: {  // Para opciones dinámicas desde otra colección
-    collection: string;
-    labelField: string;
-    valueField: string;
-  };
-}
-
-export interface CatalogSchema {
-  id: string;
-  titulo: string;
-  icono: React.ReactNode;
-  fields: CatalogField[];
-}
-
-export const catalogosConfig: Record<string, CatalogSchema> = {
-  aduanas: {
-    id: 'aduanas', titulo: 'Aduanas',
-    icono: <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />,
-    fields: [{ name: 'aduana', label: 'Aduana', type: 'text', required: true }]
-  },
-  bancos: {
-    id: 'bancos', titulo: 'Bancos',
-    icono: <path d="M4 10h3v7H4zM10.5 10h3v7h-3zM2 19h20v3H2zM17 10h3v7h-3zM12 1L2 6v2h20V6L12 1z" />,
-    fields: [
-      { name: 'banco', label: 'Banco', type: 'text', required: true },
-      { 
-        name: 'moneda', 
-        label: 'Moneda', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_moneda', labelField: 'moneda', valueField: 'id' }
-      }
-    ]
-  },
-  departamentos: {
-    id: 'departamentos', titulo: 'Departamentos',
-    icono: <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />,
-    fields: [{ name: 'departamento', label: 'Departamento', type: 'text', required: true }]
-  },
-  paises: {
-    id: 'paises', titulo: 'Direcciones / País',
-    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />,
-    fields: [
-      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
-      { name: 'codigo', label: 'Código', type: 'number', required: true }
-    ]
-  },
-  estados: {
-    id: 'estados', titulo: 'Direcciones / Estado',
-    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
-    fields: [
-      { 
-        name: 'pais', 
-        label: 'País', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_paises', labelField: 'nombre', valueField: 'id' } 
-      },
-      { name: 'estado', label: 'Estado', type: 'text', required: true }
-    ]
-  },
-  municipios: {
-    id: 'municipios', titulo: 'Direcciones / Municipios',
-    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
-    fields: [
-      { 
-        name: 'estado', 
-        label: 'Estado', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_estados', labelField: 'estado', valueField: 'id' } 
-      },
-      { name: 'municipio', label: 'Municipio', type: 'text', required: true }
-    ]
-  },
-  colonias: {
-    id: 'colonias', titulo: 'Direcciones / Colonia',
-    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
-    fields: [
-      { 
-        name: 'municipio', 
-        label: 'Municipio', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_municipios', labelField: 'municipio', valueField: 'id' } 
-      },
-      { name: 'colonia', label: 'Colonia', type: 'text', required: true }
-    ]
-  },
-  codigo_postal: {
-    id: 'codigo_postal', titulo: 'Direcciones / Código Postal',
-    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
-    fields: [
-      { 
-        name: 'colonia', 
-        label: 'Colonia', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_colonias', labelField: 'colonia', valueField: 'id' } 
-      },
-      { name: 'codigo_postal', label: 'Codigo Postal', type: 'text', required: true }
-    ]
-  },
-  calles: {
-    id: 'calles', titulo: 'Direcciones / Calles',
-    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />,
-    fields: [
-      { 
-        name: 'codigo_postal', 
-        label: 'Código Postal', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_codigo_postal', labelField: 'codigo_postal', valueField: 'id' } 
-      },
-      { name: 'calle', label: 'Calle', type: 'text', required: true }
-    ]
-  },
-  dispositivos: {
-    id: 'dispositivos', titulo: 'Dispositivos',
-    icono: <path d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>,
-    fields: [{ name: 'dispositivo', label: 'Dispositivo', type: 'text', required: true }]
-  },
-  embalaje: {
-    id: 'embalaje', titulo: 'Embalaje',
-    icono: <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 14H4v-6h8v6zm8 0h-6v-6h6v6zm0-8H4V6h16v4z"/>,
-    fields: [
-      { name: 'clave', label: 'Clave', type: 'text', required: true },
-      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
-      { name: 'descripcion', label: 'Descripción', type: 'text', required: true }
-    ]
-  },
-  empresas: {
-    id: 'empresas', titulo: 'Empresas Roelca',
-    icono: <path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm10 12h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V5h2v2zm4 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/>,
-    fields: [
-      { name: 'tipo_empresa', label: 'Tipo de Empresa', type: 'select', required: true, options: ['Empresas Roelca', 'Cliente (Paga)', 'Bodega', 'Propietario', 'Proveedor (Transporte)'] },
-      { name: 'empresa', label: 'Empresa', type: 'text', required: true },
-      { name: 'rfc_tax_id', label: 'RFC / Tax Id', type: 'text', required: true },
-      { name: 'regimen_fiscal', label: 'Régimen Fiscal', type: 'select', options: ['Persona Física', 'Persona Moral', '601 - General de Ley Personas Morales'] },
-      { name: 'maps', label: 'Maps (Link)', type: 'text' },
-      { name: 'direccion', label: 'Dirección', type: 'text', required: true },
-      { name: 'telefono', label: 'Teléfono', type: 'text' },
-      { name: 'correo', label: 'Correo', type: 'text' }
-    ]
-  },
-  formas_pago: {
-    id: 'formas_pago', titulo: 'Formas de Pago',
-    icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />,
-    fields: [
-      { name: 'forma_pago', label: 'Forma de Pago', type: 'text', required: true },
-      { name: 'descripcion', label: 'Descripción', type: 'text' }
-    ]
-  },
-  moneda: {
-    id: 'moneda', titulo: 'Monedas',
-    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.21 1.87 1.53 0 2.15-.81 2.15-1.5 0-2.09-4.44-1.61-4.44-4.83 0-1.46 1.03-2.57 2.41-2.94V5.11h2.67v1.94c1.37.33 2.49 1.25 2.65 2.85h-2.04c-.11-.83-.69-1.34-1.69-1.34-1.21 0-1.9.59-1.9 1.37 0 1.9 4.46 1.35 4.46 4.62 0 1.51-.92 2.98-2.56 3.54z" />,
-    fields: [
-      { name: 'moneda', label: 'Moneda', type: 'text', required: true },
-      { name: 'pais', label: 'Pais', type: 'text' },
-      { name: 'estado', label: 'Estado', type: 'text' },
-      { name: 'municipio', label: 'Municipio', type: 'text' },
-      { name: 'colonia', label: 'Colonia', type: 'text' },
-      { name: 'calle', label: 'Calle', type: 'text' },
-      { name: 'codigo_postal', label: 'Codigo_Postal', type: 'text' },
-      { name: 'num_interior', label: 'Numero_interior', type: 'text' },
-      { name: 'num_exterior', label: 'Numero_exterior', type: 'text' },
-      { name: 'descripcion_dir', label: 'DescripcionDireccion', type: 'text' },
-      { name: 'city_state_zip', label: 'CityStateZip', type: 'text' }
-    ]
-  },
-  tipo_operacion: {
-    id: 'tipo_operacion', titulo: 'Tipo de Operación',
-    icono: <path d="M19 15v4H5v-4h14m1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1v-6c0-.55-.45-1-1-1zM7 18.5c-.82 0-1.5-.68-1.5-1.5s.68-1.5 1.5-1.5 1.5.68 1.5 1.5-.68 1.5-1.5 1.5zM19 5v4H5V5h14m1-2H4c-.55 0-1 .45-1 1v6c0 .55.45 1 1 1h16c.55 0 1-.45 1-1V4c0-.55-.45-1-1-1zM7 8.5c-.82 0-1.5-.68-1.5-1.5S6.18 5.5 7 5.5s1.5.68 1.5 1.5S7.82 8.5 7 8.5z" />,
-    fields: [{ name: 'tipo_operacion', label: 'Tipo de Operación', type: 'text', required: true }]
-  },
-  tipo_cargo: {
-    id: 'tipo_cargo', titulo: 'Tipo de Cargo',
-    icono: <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />,
-    fields: [
-      { name: 'nombre_puesto', label: 'Nombre del puesto', type: 'text', required: true },
-      { 
-        name: 'departamento', 
-        label: 'Departamento', 
-        type: 'select', 
-        required: true,
-        dynamicOptions: { collection: 'catalogo_departamentos', labelField: 'departamento', valueField: 'id' } 
-      },
-      { 
-        name: 'empresa', 
-        label: 'Empresa', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'empresas', labelField: 'empresa', valueField: 'id' }
-      }
-    ]
-  },
-  regimen_fiscal: {
-    id: 'regimen_fiscal', titulo: 'Régimen Fiscal',
-    icono: <path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" />,
-    fields: [
-      { name: 'clave', label: 'Clave', type: 'text', required: true },
-      { name: 'descripcion', label: 'Descripción', type: 'text', required: true }
-    ]
-  },
-  status_servicio: {
-    id: 'status_servicio', titulo: 'Status del Servicio',
-    icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />,
-    fields: [
-      { name: 'boton_status', label: 'Botón/Status', type: 'select', required: true, options: ['Botón', 'Status'] },
-      { name: 'nombre', label: 'Name', type: 'text', required: true },
-      { name: 'descripcion', label: 'Descripción', type: 'text' },
-      { name: 'operacion', label: 'Operación', type: 'text' },
-      { name: 'tipo', label: 'Type', type: 'text' },
-      { name: 'obligatorio', label: 'Obligatorio', type: 'select', options: ['Sí', 'No'] }
-    ]
-  },
-  tipo_remolque: {
-    id: 'tipo_remolque', titulo: 'Tipo de Remolque',
-    icono: <path d="M23 18h-2v-2h2v2zm-4-4h-2v2h2v-2zm-4-4h-2v2h2v-2zM1 18v-2h2v2H1zm4-4v-2h2v2H5zm4-4V8h2v2H9zm8 10H7v-2h10v2zm4-12v2h-2V8h2zm-4 4v2h-2v-2h2zm-4 4v2h-2v-2h2zM12 2L2 7l10 5 10-5-10-5z" />,
-    fields: [
-      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
-      { name: 'medida', label: 'Medida', type: 'text' },
-      { name: 'descripcion', label: 'Descripción', type: 'text' },
-      { name: 'ejes', label: 'Ejes', type: 'number' }
-    ]
-  },
-  tipo_servicio: {
-    id: 'tipo_servicio', titulo: 'Tipo de Servicio',
-    icono: <path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zM7 7h10v2H7V7zm10 12H7v-2h10v2zm0-4H7v-2h10v2zm0-4H7v-2h10v2z" />,
-    fields: [{ name: 'nombre', label: 'Nombre', type: 'text', required: true }]
-  },
-  tipos_gastos: {
-    id: 'tipos_gastos', titulo: 'Tipos de Gastos',
-    icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />,
-    fields: [
-      { name: 'nombre_gasto', label: 'Tipo de Gasto', type: 'text', required: true },
-      { name: 'categoria_gasto', label: 'Tipo de Gasto (Cat)', type: 'select', required: true, options: ['Puente', 'Gastos'] },
-      { name: 'importe', label: 'Importe', type: 'number', required: true },
-      { name: 'moneda', label: 'Moneda', type: 'select', required: true, options: ['Dolares', 'Pesos'] },
-      { name: 'trafico', label: 'Exportación/Importación', type: 'select', required: true, options: ['Exportación', 'Importación'] }
-    ]
-  },
-  
-  // --- NUEVOS CATÁLOGOS AÑADIDOS ---
-  tipos_tarifarios: {
-    id: 'tipos_tarifarios', titulo: 'Tipos de Tarifarios',
-    icono: <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 14h-4v-2h4v2zm0-4h-4v-2h4v2zm-3-5V3.5L18.5 9H13z" />, // Icono de documento/lista
-    fields: [
-      { name: 'descripcion', label: 'Descripción', type: 'text', required: true },
-      { name: 'aduana', label: 'Aduana', type: 'select', required: true, options: ['Sí', 'No'] },
-      { name: 'movimiento', label: 'Importación/Exportación/Movimiento', type: 'select', required: true, options: ['Exportación', 'Importación', 'Movimiento'] }
-    ]
-  },
-  tarifas_referencia: {
-    id: 'tarifas_referencia', titulo: 'Tarifas de Referencia',
-    icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />, // Icono monetario/tarifa
-    fields: [
-      { 
-        name: 'tipo_operacion', 
-        label: 'Tipo de Operación', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_tipos_tarifarios', labelField: 'descripcion', valueField: 'id' } 
-      },
-      { name: 'tipo_remolque', label: 'Tipo de Remolque', type: 'text', required: true },
-      { name: 'estado_carga', label: 'Cargada / Vacía', type: 'select', required: true, options: ['Cargada', 'Vacía'] },
-      { name: 'trompo', label: 'Trompo', type: 'select', required: true, options: ['Sí', 'No'] },
-      { name: 'descripcion', label: 'Descripción', type: 'text', required: true },
-      { name: 'tarifa_cliente_1', label: 'Tarifa Cliente 1', type: 'number' },
-      { name: 'tarifa_cliente_2', label: 'Tarifa Cliente 2', type: 'number' },
-      { name: 'tarifa_cliente_3', label: 'Tarifa Cliente 3', type: 'number' },
-      { name: 'tarifa_proveedor_1', label: 'Tarifa Proveedor 1', type: 'number' },
-      { name: 'tarifa_proveedor_2', label: 'Tarifa Proveedor 2', type: 'number' },
-      { name: 'tarifa_proveedor_3', label: 'Tarifa Proveedor 3', type: 'number' }
-    ]
-  }
+// =========================================
+// SUB-COMPONENTE: MODAL DE CONFIGURACIÓN
+// =========================================
+const FieldConfigModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  fields: { name: string; label: string }[];
+  requiredFields: string[];
+  toggleRequired: (f: string) => void;
+}> = ({ isOpen, onClose, fields, requiredFields, toggleRequired }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 2000 }}>
+      <div className="form-card" style={{ maxWidth: '400px', borderRadius: '16px', border: '1px solid #30363d', backgroundColor: '#0d1117' }}>
+        <div className="form-header" style={{ padding: '20px 24px', borderBottom: '1px solid #30363d', marginBottom: '0' }}>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem', margin: 0, color: '#f0f6fc' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            Campos Obligatorios
+          </h3>
+          <button className="close-x" onClick={onClose} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+        </div>
+        <div style={{ padding: '24px' }}>
+          <p style={{ fontSize: '0.85rem', color: '#8b949e', marginBottom: '20px', lineHeight: '1.5' }}>
+            Selecciona qué campos deben ser obligatorios al llenar este formulario.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {fields.map(f => (
+              <label key={f.name} style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '0.95rem', color: '#c9d1d9' }}>
+                <input 
+                  type="checkbox" 
+                  checked={requiredFields.includes(f.name)} 
+                  onChange={() => toggleRequired(f.name)} 
+                  style={{ width: '18px', height: '18px', accentColor: '#D84315', cursor: 'pointer' }}
+                />
+                {f.label}
+              </label>
+            ))}
+          </div>
+          <div style={{ marginTop: '30px', display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="button" className="btn-primary" onClick={onClose} style={{ width: '100%', padding: '10px' }}>Listo</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 };
 
-export const listaCatalogos = Object.values(catalogosConfig);
+// =========================================
+// COMPONENTE PRINCIPAL
+// =========================================
+const CatalogosDashboard = () => {
+  const [catalogoSeleccionado, setCatalogoSeleccionado] = useState<CatalogSchema | null>(null);
+  const [registros, setRegistros] = useState<any[]>([]);
+  const [modalEstado, setModalEstado] = useState<'cerrado' | 'formulario' | 'detalle'>('cerrado');
+  const [registroActual, setRegistroActual] = useState<any | null>(null);
+  const [formData, setFormData] = useState<any>({});
+  
+  const [opcionesDinamicas, setOpcionesDinamicas] = useState<Record<string, any[]>>({});
+  
+  // ESTADOS NUEVOS PARA CONFIGURACIÓN DE CAMPOS
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [requiredFields, setRequiredFields] = useState<string[]>([]);
+
+  // Efecto para cargar los datos del catálogo y su configuración de campos obligatorios
+  useEffect(() => {
+    if (!catalogoSeleccionado) return;
+    
+    // 1. Cargar configuración de campos requeridos desde LocalStorage o usar defaults del Schema
+    const savedConfig = localStorage.getItem(`formConfig_${catalogoSeleccionado.id}`);
+    if (savedConfig) {
+      setRequiredFields(JSON.parse(savedConfig));
+    } else {
+      const defaults = catalogoSeleccionado.fields.filter(f => f.required).map(f => f.name);
+      setRequiredFields(defaults);
+    }
+
+    // 2. Suscripción al catálogo principal
+    const unsubscribe = onSnapshot(collection(db, `catalogo_${catalogoSeleccionado.id}`), (snapshot) => {
+      setRegistros(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    // 3. Cerebro dinámico. Busca campos que requieran datos de otra tabla.
+    const cargarOpcionesDinamicas = async () => {
+      const nuevasOpciones: Record<string, any[]> = {};
+      for (const field of catalogoSeleccionado.fields) {
+        if (field.dynamicOptions) {
+          const { collection: col } = field.dynamicOptions;
+          try {
+            const querySnapshot = await getDocs(collection(db, col));
+            nuevasOpciones[field.name] = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          } catch (error) {
+            console.error(`Error cargando colección dinámica ${col}:`, error);
+          }
+        }
+      }
+      setOpcionesDinamicas(nuevasOpciones);
+    };
+
+    cargarOpcionesDinamicas();
+
+    return () => unsubscribe();
+  }, [catalogoSeleccionado]);
+
+  // Manejador para alternar si un campo es obligatorio o no
+  const toggleRequired = (fieldName: string) => {
+    if (!catalogoSeleccionado) return;
+    const newRequired = requiredFields.includes(fieldName)
+      ? requiredFields.filter(f => f !== fieldName)
+      : [...requiredFields, fieldName];
+    
+    setRequiredFields(newRequired);
+    localStorage.setItem(`formConfig_${catalogoSeleccionado.id}`, JSON.stringify(newRequired));
+  };
+
+  const isRequired = (fieldName: string) => requiredFields.includes(fieldName);
+
+  const guardarRegistro = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const col = `catalogo_${catalogoSeleccionado!.id}`;
+      registroActual ? await actualizarRegistro(col, registroActual.id, formData) : await agregarRegistro(col, formData);
+      setModalEstado('cerrado');
+    } catch (error) { alert('Error en Firebase.'); }
+  };
+
+  // Variable de UX para determinar si el formulario es largo y debe mostrarse en 2 columnas
+  const isLongForm = catalogoSeleccionado ? catalogoSeleccionado.fields.length > 4 : false;
+
+  // Renderizado de la cuadrícula de catálogos cuando no hay ninguno seleccionado
+  if (!catalogoSeleccionado) return (
+    <div className="catalog-grid">
+      {listaCatalogos.map((cat) => (
+        <div key={cat.id} className="catalog-card" onClick={() => setCatalogoSeleccionado(cat)}>
+          <div className="catalog-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">{cat.icono}</svg>
+          </div>
+          <div className="catalog-title">{cat.titulo}</div>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Renderizado de la tabla y formulario del catálogo seleccionado
+  return (
+    <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
+      <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', maxWidth: '1100px' }}>
+        <div>
+          <button className="btn-outline" onClick={() => setCatalogoSeleccionado(null)} style={{ fontSize: '0.85rem' }}>← Volver</button>
+          <h2 style={{ display: 'inline', marginLeft: '20px', fontWeight: '500', letterSpacing: '-0.02em', color: '#f0f6fc' }}>
+            {catalogoSeleccionado.titulo}
+          </h2>
+        </div>
+        <button className="btn-primary" onClick={() => { setRegistroActual(null); setFormData({}); setModalEstado('formulario'); }}>+ Agregar</button>
+      </div>
+
+      <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden', maxWidth: '1100px' }}>
+        <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d' }}>
+            <tr>
+              {catalogoSeleccionado.fields.map(f => (
+                <th key={f.name} style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
+                  {f.label}
+                </th>
+              ))}
+              <th style={{ padding: '16px', width: '100px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {registros.length === 0 ? (
+              <tr><td colSpan={catalogoSeleccionado.fields.length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>No hay registros en este catálogo.</td></tr>
+            ) : (
+              registros.map((reg) => (
+                <tr 
+                  key={reg.id} 
+                  style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'} 
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  onClick={() => { setRegistroActual(reg); setModalEstado('detalle'); }}
+                >
+                  {catalogoSeleccionado.fields.map(f => (
+                    <td key={f.name} style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>
+                      {f.dynamicOptions && opcionesDinamicas[f.name]
+                        ? (opcionesDinamicas[f.name].find(opt => opt[f.dynamicOptions!.valueField] === reg[f.name])?.[f.dynamicOptions!.labelField] || reg[f.name] || '-')
+                        : (reg[f.name] || '-')}
+                    </td>
+                  ))}
+                  <td style={{ padding: '16px', textAlign: 'center' }}>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+                      <button 
+                        onClick={() => { setRegistroActual(reg); setFormData(reg); setModalEstado('formulario'); }}
+                        style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', padding: '4px' }}
+                        title="Editar"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4L18.5 2.5z"></path></svg>
+                      </button>
+                      <button 
+                        onClick={async () => { if (window.confirm('¿Desea eliminar permanentemente este registro?')) await eliminarRegistro(`catalogo_${catalogoSeleccionado!.id}`, reg.id); }}
+                        style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
+                        title="Eliminar"
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* COMPONENTE DE CONFIGURACIÓN DE CAMPOS */}
+      <FieldConfigModal 
+        isOpen={isConfigOpen} 
+        onClose={() => setIsConfigOpen(false)} 
+        fields={catalogoSeleccionado.fields} 
+        requiredFields={requiredFields} 
+        toggleRequired={toggleRequired} 
+      />
+
+      {/* Ventana Modal (Formulario / Detalle) */}
+      {modalEstado !== 'cerrado' && (
+        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)' }}>
+          {/* AQUÍ SE APLICA LA MAGIA VISUAL: Si es formulario largo, el modal se expande a 800px, si no, se queda en 480px */}
+          <div className="form-card" style={{ maxWidth: modalEstado === 'formulario' && isLongForm ? '800px' : '480px', width: '100%', borderRadius: '12px', border: '1px solid #444', backgroundColor: '#0d1117', transition: 'max-width 0.3s ease' }}>
+            <div className="form-header" style={{ padding: '24px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: '500', margin: 0, color: '#f0f6fc' }}>
+                {modalEstado === 'detalle' ? 'Información del Registro' : (registroActual ? 'Editar Registro' : 'Nuevo Registro')}
+              </h2>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                {/* BOTÓN DE CONFIGURACIÓN */}
+                {modalEstado === 'formulario' && (
+                  <button 
+                    type="button" 
+                    onClick={() => setIsConfigOpen(true)} 
+                    style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                    title="Configurar campos obligatorios"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="3"></circle>
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                  </button>
+                )}
+                <button className="close-x" onClick={() => setModalEstado('cerrado')} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+              </div>
+            </div>
+            
+            <div>
+              {modalEstado === 'formulario' ? (
+                <form onSubmit={guardarRegistro} style={{ padding: '24px' }}>
+                  {/* SEGUNDA PARTE DE LA MAGIA: El contenedor se vuelve CSS Grid de 2 columnas si es largo */}
+                  <div style={{ display: 'grid', gridTemplateColumns: isLongForm ? '1fr 1fr' : '1fr', gap: '20px' }}>
+                    {catalogoSeleccionado.fields.map(field => {
+                      const esRequerido = isRequired(field.name);
+                      return (
+                        <div key={field.name} className="form-group" style={{ marginBottom: 0 }}>
+                          <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>
+                            {field.label} {esRequerido && <span style={{ color: '#ff4d4d' }}>*</span>}
+                          </label>
+                          {field.type === 'select' ? (
+                            <select 
+                              value={formData[field.name] || ''} 
+                              onChange={(e) => setFormData({...formData, [field.name]: e.target.value})} 
+                              className="form-control" 
+                              required={esRequerido}
+                              style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}
+                            >
+                              <option value="">Seleccione una opción</option>
+                              {field.dynamicOptions 
+                                ? opcionesDinamicas[field.name]?.map(opt => (
+                                    <option key={opt[field.dynamicOptions!.valueField]} value={opt[field.dynamicOptions!.valueField]}>
+                                      {opt[field.dynamicOptions!.labelField]}
+                                    </option>
+                                  ))
+                                : field.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)
+                              }
+                            </select>
+                          ) : (
+                            <input 
+                              type={field.type} 
+                              value={formData[field.name] || ''} 
+                              onChange={(e) => setFormData({...formData, [field.name]: e.target.value})} 
+                              className="form-control" 
+                              required={esRequerido} 
+                              style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  <div style={{ marginTop: '32px', display: 'flex', gap: '16px', justifyContent: 'flex-end', borderTop: '1px solid #30363d', paddingTop: '24px' }}>
+                    <button type="button" onClick={() => setModalEstado('cerrado')} style={{ backgroundColor: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}>Cancelar</button>
+                    <button type="submit" style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}>Guardar</button>
+                  </div>
+                </form>
+              ) : (
+                <div className="detalle-view" style={{ padding: '24px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: isLongForm ? '1fr 1fr' : '1fr', gap: '20px' }}>
+                    {catalogoSeleccionado.fields.map(f => (
+                      <div key={f.name} style={{ borderBottom: '1px solid #21262d', paddingBottom: '8px' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#8b949e', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>{f.label}</span>
+                        <span style={{ fontSize: '1rem', color: '#f0f6fc' }}>
+                          {f.dynamicOptions && opcionesDinamicas[f.name]
+                            ? (opcionesDinamicas[f.name].find(opt => opt[f.dynamicOptions!.valueField] === registroActual[f.name])?.[f.dynamicOptions!.labelField] || registroActual[f.name] || '-')
+                            : (registroActual[f.name] || '-')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <button type="button" onClick={() => setModalEstado('cerrado')} style={{ width: '100%', marginTop: '32px', backgroundColor: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}>Cerrar</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default CatalogosDashboard;
