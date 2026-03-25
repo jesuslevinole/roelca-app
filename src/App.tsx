@@ -9,17 +9,18 @@ import { CombustibleDashboard } from './features/combustible/components/Combusti
 import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
 import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
 import { ConveniosClientesDashboard } from './features/conveniosClientes/components/ConveniosClientesDashboard';
-
-// Importación del módulo Convenio de Proveedores
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
+
+// NUEVA IMPORTACIÓN: Dashboard de Direcciones
+import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
 
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   
-  // Se añade 'conveniosProveedores' a los módulos aceptados por el estado
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores'>('operaciones');
+  // CORRECCIÓN: Se añade 'direcciones' a los módulos aceptados por el estado
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -27,19 +28,15 @@ function App() {
   // Estados para abrir/cerrar los submenús
   const [menuBasesDatosAbierto, setMenuBasesDatosAbierto] = useState(false);
   const [menuClientesAbierto, setMenuClientesAbierto] = useState(false);
-  
-  // CORRECCIÓN 1: Nuevo estado para el acordeón de Proveedores
   const [menuProveedoresAbierto, setMenuProveedoresAbierto] = useState(false);
 
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
 
-  // Validaciones para mantener activos los menús padres
-  const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor';
+  // CORRECCIÓN: Validaciones para mantener activos los menús padres, incluyendo 'direcciones'
+  const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'direcciones';
   const esClientesActivo = moduloActivo === 'conveniosClientes';
-  
-  // CORRECCIÓN 2: Validación para el menú Proveedores
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
 
   return (
@@ -78,7 +75,7 @@ function App() {
           </div>
         )}
 
-        {/* CORRECCIÓN 3: ITEM DESPLEGABLE PROVEEDORES */}
+        {/* ITEM DESPLEGABLE: PROVEEDORES */}
         <div 
           className={`sidebar-item sidebar-item-with-icon ${esProveedoresActivo && !menuProveedoresAbierto ? 'active' : ''}`} 
           onClick={() => setMenuProveedoresAbierto(!menuProveedoresAbierto)}
@@ -115,6 +112,15 @@ function App() {
             >
               Empresas
             </div>
+            
+            {/* NUEVO ITEM: Direcciones */}
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'direcciones' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('direcciones')}
+            >
+              Direcciones
+            </div>
+
             <div 
               className={`sidebar-subitem ${moduloActivo === 'tipoCambio' ? 'active' : ''}`} 
               onClick={() => setModuloActivo('tipoCambio')}
@@ -210,6 +216,7 @@ function App() {
         {/* --- CONTENIDO DINÁMICO --- */}
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
+        {moduloActivo === 'direcciones' && <DireccionesDashboard />}  {/* NUEVO MÓDULO RENDERIZADO */}
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
         {moduloActivo === 'combustible' && <CombustibleDashboard />}
         {moduloActivo === 'proveedoresUnidad' && <ProveedoresUnidadDashboard />}
