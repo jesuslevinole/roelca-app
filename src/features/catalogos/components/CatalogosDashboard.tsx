@@ -2,10 +2,6 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot, getDocs } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro, eliminarRegistro } from '../../../config/firebase';
-
-// =========================================
-// CORRECCIÓN: IMPORTACIÓN SEPARADA (Valores vs Tipos)
-// =========================================
 import { listaCatalogos } from '../config/catalogSchemas';
 import type { CatalogSchema, CatalogField } from '../config/catalogSchemas';
 
@@ -180,7 +176,7 @@ const CatalogosDashboard = () => {
             {registros.length === 0 ? (
               <tr><td colSpan={catalogoSeleccionado.fields.length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>No hay registros en este catálogo.</td></tr>
             ) : (
-              registros.map((reg) => (
+              registros.map((reg: any) => (
                 <tr 
                   key={reg.id} 
                   style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
@@ -193,7 +189,7 @@ const CatalogosDashboard = () => {
                     return (
                       <td key={f.name} style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>
                         {dOpt && opcionesDinamicas[f.name]
-                          ? (opcionesDinamicas[f.name].find(opt => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || reg[f.name] || '-')
+                          ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || reg[f.name] || '-')
                           : (reg[f.name] || '-')}
                       </td>
                     );
@@ -278,12 +274,12 @@ const CatalogosDashboard = () => {
                             >
                               <option value="">Seleccione una opción</option>
                               {dOpt 
-                                ? opcionesDinamicas[field.name]?.map(opt => (
+                                ? opcionesDinamicas[field.name]?.map((opt: any) => (
                                     <option key={opt[dOpt.valueField]} value={opt[dOpt.valueField]}>
                                       {opt[dOpt.labelField]}
                                     </option>
                                   ))
-                                : field.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)
+                                : field.options?.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)
                               }
                             </select>
                           ) : (
@@ -316,7 +312,7 @@ const CatalogosDashboard = () => {
                           <span style={{ fontSize: '0.75rem', color: '#8b949e', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>{f.label}</span>
                           <span style={{ fontSize: '1rem', color: '#f0f6fc' }}>
                             {dOpt && opcionesDinamicas[f.name]
-                              ? (opcionesDinamicas[f.name].find(opt => opt[dOpt.valueField] === registroActual[f.name])?.[dOpt.labelField] || registroActual[f.name] || '-')
+                              ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === registroActual[f.name])?.[dOpt.labelField] || registroActual[f.name] || '-')
                               : (registroActual[f.name] || '-')}
                           </span>
                         </div>

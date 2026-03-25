@@ -3,14 +3,13 @@ import React from 'react';
 
 export type FieldType = 'text' | 'number' | 'select';
 
-// dynamicOptions maneja listas desplegables que vienen de Firebase (Llaves Foráneas)
 export interface CatalogField {
   name: string;
   label: string;
   type: FieldType;
   required?: boolean;
-  options?: string[]; // Para opciones estáticas
-  dynamicOptions?: {  // Para opciones dinámicas desde otra colección
+  options?: string[]; 
+  dynamicOptions?: {  
     collection: string;
     labelField: string;
     valueField: string;
