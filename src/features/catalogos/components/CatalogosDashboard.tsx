@@ -1,7 +1,8 @@
 // src/features/catalogos/components/CatalogosDashboard.tsx
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, getDocs } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro, eliminarRegistro } from '../../../config/firebase';
+
 import { listaCatalogos } from '../config/catalogSchemas';
 import type { CatalogSchema, CatalogField } from '../config/catalogSchemas';
 
@@ -40,7 +41,7 @@ const FieldConfigModal = ({
             Selecciona qué campos deben ser obligatorios al llenar este formulario.
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {fields.map(f => (
+            {fields.map((f: { name: string; label: string }) => (
               <label key={f.name} style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '0.95rem', color: '#c9d1d9' }}>
                 <input 
                   type="checkbox" 
@@ -115,7 +116,7 @@ const CatalogosDashboard = () => {
   const toggleRequired = (fieldName: string) => {
     if (!catalogoSeleccionado) return;
     const newRequired = requiredFields.includes(fieldName)
-      ? requiredFields.filter(f => f !== fieldName)
+      ? requiredFields.filter((f: string) => f !== fieldName)
       : [...requiredFields, fieldName];
     
     setRequiredFields(newRequired);
@@ -180,8 +181,8 @@ const CatalogosDashboard = () => {
                 <tr 
                   key={reg.id} 
                   style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'} 
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} 
+                  onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
                   onClick={() => { setRegistroActual(reg); setModalEstado('detalle'); }}
                 >
                   {catalogoSeleccionado.fields.map((f: CatalogField) => {
@@ -195,7 +196,7 @@ const CatalogosDashboard = () => {
                     );
                   })}
                   <td style={{ padding: '16px', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }} onClick={(e: any) => e.stopPropagation()}>
                       <button 
                         onClick={() => { setRegistroActual(reg); setFormData(reg); setModalEstado('formulario'); }}
                         style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', padding: '4px' }}
@@ -267,7 +268,7 @@ const CatalogosDashboard = () => {
                           {field.type === 'select' ? (
                             <select 
                               value={formData[field.name] || ''} 
-                              onChange={(e) => setFormData({...formData, [field.name]: e.target.value})} 
+                              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({...formData, [field.name]: e.target.value})} 
                               className="form-control" 
                               required={esRequerido}
                               style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}
@@ -286,7 +287,7 @@ const CatalogosDashboard = () => {
                             <input 
                               type={field.type} 
                               value={formData[field.name] || ''} 
-                              onChange={(e) => setFormData({...formData, [field.name]: e.target.value})} 
+                              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, [field.name]: e.target.value})} 
                               className="form-control" 
                               required={esRequerido} 
                               style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}
