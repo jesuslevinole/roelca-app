@@ -190,7 +190,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
   const [proveedores, setProveedores] = useState<any[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
   const [tarifarios, setTarifarios] = useState<any[]>([]);
-  const [tarifasSugeridasActuales, setTarifasSugeridasActuales] = useState<any[]>([]); 
+  const [tarifasSugeridasActuales, setTarifasSugeridasActuales] = useState<number[]>([]); 
   const [cargando, setCargando] = useState(false);
 
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -251,7 +251,8 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
         const monSnapshot = await getDocs(collection(db, 'catalogo_moneda'));
         setMonedas(monSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
-        const tarifarioSnapshot = await getDocs(collection(db, 'catalogo_tarifario'));
+        // NUEVA COLECCIÓN: Tarifas de Referencia
+        const tarifarioSnapshot = await getDocs(collection(db, 'catalogo_tarifas_referencia'));
         setTarifarios(tarifarioSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       } catch (error) {
         console.error("Error al obtener catálogos:", error);
@@ -279,26 +280,29 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
     setFormData(prev => ({ ...prev, monedaId: id, monedaNombre: moneda ? moneda.moneda : '' }));
   };
 
+  // --- NUEVA LÓGICA DE EXTRACCIÓN DE TARIFAS DE PROVEEDORES ---
   const handleTipoConvenioChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     const tarifario = tarifarios.find(t => t.id === id);
-    const nombreTarifario = tarifario ? (tarifario.concepto || tarifario.nombre || 'Desconocido') : '';
     
-    let sugerencias: any[] = [];
+    // Leemos la descripción del nuevo catálogo
+    const nombreTarifario = tarifario ? (tarifario.descripcion || 'Desconocido') : '';
+    
+    let sugerencias: number[] = [];
     if (tarifario) {
-      if (Array.isArray(tarifario.tarifas_sugeridas)) {
-        sugerencias = tarifario.tarifas_sugeridas;
-      } else if (tarifario.tarifa_sugerida) {
-        sugerencias = [tarifario.tarifa_sugerida];
-      }
+      // Extraemos exclusivamente las tarifas configuradas para PROVEEDORES
+      if (tarifario.tarifa_proveedor_1 && Number(tarifario.tarifa_proveedor_1) > 0) sugerencias.push(Number(tarifario.tarifa_proveedor_1));
+      if (tarifario.tarifa_proveedor_2 && Number(tarifario.tarifa_proveedor_2) > 0) sugerencias.push(Number(tarifario.tarifa_proveedor_2));
+      if (tarifario.tarifa_proveedor_3 && Number(tarifario.tarifa_proveedor_3) > 0) sugerencias.push(Number(tarifario.tarifa_proveedor_3));
     }
+    
     setTarifasSugeridasActuales(sugerencias);
 
     setDetalleDraft({
       tipoConvenioId: id,
       tipoConvenioNombre: nombreTarifario,
-      tarifaSugeridaSeleccionada: sugerencias.length > 0 ? sugerencias[0] : '', 
-      tarifa: sugerencias.length > 0 ? parseFloat(sugerencias[0]) : 0
+      tarifaSugeridaSeleccionada: sugerencias.length > 0 ? String(sugerencias[0]) : '', 
+      tarifa: sugerencias.length > 0 ? sugerencias[0] : 0
     });
   };
 
@@ -313,7 +317,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
 
   const handleAgregarDetalle = () => {
     if (!detalleDraft.tipoConvenioId || detalleDraft.tarifa <= 0) {
-      alert("Seleccione un tipo de convenio y asegúrese de que la tarifa sea mayor a 0.");
+      alert("Seleccione un tipo de convenio y asegúrese de que la tarifa final sea mayor a 0.");
       return;
     }
 
@@ -459,11 +463,12 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
                 {mostrandoDetalleForm && (
                   <div style={{ backgroundColor: '#161b22', padding: '20px', borderRadius: '8px', border: '1px solid #30363d', marginBottom: '24px' }}>
                     <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr auto', gap: '16px', alignItems: 'end', marginBottom: 0 }}>
+                      
                       <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio</label>
+                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio (Tarifa de Referencia)</label>
                         <select className="form-control" value={detalleDraft.tipoConvenioId} onChange={handleTipoConvenioChange}>
                           <option value="">Seleccione concepto...</option>
-                          {tarifarios.map(t => <option key={t.id} value={t.id}>{t.concepto || t.nombre || `Catálogo #${t.id}`}</option>)}
+                          {tarifarios.map(t => <option key={t.id} value={t.id}>{t.descripcion || `Catálogo #${t.id}`}</option>)}
                         </select>
                       </div>
 
@@ -471,7 +476,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
                         <label className="form-label" style={{ fontSize: '0.75rem', color: '#8b949e' }}>Tarifa Sugerida</label>
                         <select className="form-control" value={detalleDraft.tarifaSugeridaSeleccionada} onChange={handleSugerenciaChange} disabled={tarifasSugeridasActuales.length === 0}>
                           <option value="">{tarifasSugeridasActuales.length === 0 ? 'Sin sugerencias' : 'Ver opciones...'}</option>
-                          {tarifasSugeridasActuales.map((tar, i) => <option key={i} value={tar}>${tar}</option>)}
+                          {tarifasSugeridasActuales.map((tar, i) => <option key={i} value={tar}>${tar.toFixed(2)}</option>)}
                         </select>
                       </div>
 
