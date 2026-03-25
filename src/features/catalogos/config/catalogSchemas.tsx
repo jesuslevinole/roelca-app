@@ -3,7 +3,7 @@ import React from 'react';
 
 export type FieldType = 'text' | 'number' | 'select';
 
-// CORRECCIÓN: Se agrega dynamicOptions para manejar listas desplegables que vienen de Firebase
+// dynamicOptions maneja listas desplegables que vienen de Firebase (Llaves Foráneas)
 export interface CatalogField {
   name: string;
   label: string;
@@ -35,7 +35,6 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     icono: <path d="M4 10h3v7H4zM10.5 10h3v7h-3zM2 19h20v3H2zM17 10h3v7h-3zM12 1L2 6v2h20V6L12 1z" />,
     fields: [
       { name: 'banco', label: 'Banco', type: 'text', required: true },
-      // CORRECCIÓN: Ahora lee la llave primaria del catálogo de monedas
       { 
         name: 'moneda', 
         label: 'Moneda', 
@@ -50,35 +49,26 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     icono: <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />,
     fields: [{ name: 'departamento', label: 'Departamento', type: 'text', required: true }]
   },
-  calles: {
-    id: 'calles', titulo: 'Direcciones / Calles',
+  paises: {
+    id: 'paises', titulo: 'Direcciones / País',
     icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />,
     fields: [
-      { name: 'codigo_postal', label: 'Código Postal', type: 'select', required: true, options: ['01090', '1211', '02300', '03900', '11550', '25295'] },
-      { name: 'calle', label: 'Calle', type: 'text', required: true }
-    ]
-  },
-  codigo_postal: {
-    id: 'codigo_postal', titulo: 'Direcciones / Código Postal',
-    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
-    fields: [
-      { name: 'colonia', label: 'Colonia', type: 'select', required: true, options: ['La Paz', 'Centro', 'Buena vista', 'Guerrero', 'Ejido La Cruz'] },
-      { name: 'codigo_postal', label: 'Codigo Postal', type: 'text', required: true }
-    ]
-  },
-  colonias: {
-    id: 'colonias', titulo: 'Direcciones / Colonia',
-    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
-    fields: [
-      { name: 'municipio', label: 'Municipio', type: 'select', required: true, options: ['Alpharetta', 'Alvaro Obregon', 'Apodaca', 'Azcapotzalco', 'Benito Juarez', 'Brownsville', 'CDMX'] },
-      { name: 'colonia', label: 'Colonia', type: 'text', required: true }
+      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
+      { name: 'codigo', label: 'Código', type: 'number', required: true }
     ]
   },
   estados: {
     id: 'estados', titulo: 'Direcciones / Estado',
     icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
     fields: [
-      { name: 'pais', label: 'País', type: 'select', required: true, options: ['México', 'Estados Unidos'] },
+      // CORRECCIÓN: El selector de país ahora lee desde la base de datos de Paises
+      { 
+        name: 'pais', 
+        label: 'País', 
+        type: 'select', 
+        required: true, 
+        dynamicOptions: { collection: 'catalogo_paises', labelField: 'nombre', valueField: 'id' } 
+      },
       { name: 'estado', label: 'Estado', type: 'text', required: true }
     ]
   },
@@ -86,16 +76,60 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     id: 'municipios', titulo: 'Direcciones / Municipios',
     icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
     fields: [
-      { name: 'estado', label: 'Estado', type: 'select', required: true, options: ['Ciudad de México', 'Coahuila', 'Estado de México', 'Florida', 'Georgia'] },
+      // CORRECCIÓN: El selector de estado ahora lee desde la base de datos de Estados
+      { 
+        name: 'estado', 
+        label: 'Estado', 
+        type: 'select', 
+        required: true, 
+        dynamicOptions: { collection: 'catalogo_estados', labelField: 'estado', valueField: 'id' } 
+      },
       { name: 'municipio', label: 'Municipio', type: 'text', required: true }
     ]
   },
-  paises: {
-    id: 'paises', titulo: 'Direcciones / País',
+  colonias: {
+    id: 'colonias', titulo: 'Direcciones / Colonia',
+    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
+    fields: [
+      // CORRECCIÓN: El selector de municipio lee desde la base de datos de Municipios
+      { 
+        name: 'municipio', 
+        label: 'Municipio', 
+        type: 'select', 
+        required: true, 
+        dynamicOptions: { collection: 'catalogo_municipios', labelField: 'municipio', valueField: 'id' } 
+      },
+      { name: 'colonia', label: 'Colonia', type: 'text', required: true }
+    ]
+  },
+  codigo_postal: {
+    id: 'codigo_postal', titulo: 'Direcciones / Código Postal',
+    icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
+    fields: [
+      // CORRECCIÓN: El selector de colonia lee desde la base de datos de Colonias
+      { 
+        name: 'colonia', 
+        label: 'Colonia', 
+        type: 'select', 
+        required: true, 
+        dynamicOptions: { collection: 'catalogo_colonias', labelField: 'colonia', valueField: 'id' } 
+      },
+      { name: 'codigo_postal', label: 'Codigo Postal', type: 'text', required: true }
+    ]
+  },
+  calles: {
+    id: 'calles', titulo: 'Direcciones / Calles',
     icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />,
     fields: [
-      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
-      { name: 'codigo', label: 'Código', type: 'number', required: true }
+      // CORRECCIÓN: El selector de código postal lee desde la base de datos de Códigos Postales
+      { 
+        name: 'codigo_postal', 
+        label: 'Código Postal', 
+        type: 'select', 
+        required: true, 
+        dynamicOptions: { collection: 'catalogo_codigo_postal', labelField: 'codigo_postal', valueField: 'id' } 
+      },
+      { name: 'calle', label: 'Calle', type: 'text', required: true }
     ]
   },
   dispositivos: {
@@ -161,7 +195,6 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     icono: <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />,
     fields: [
       { name: 'nombre_puesto', label: 'Nombre del puesto', type: 'text', required: true },
-      // CORRECCIÓN: Leen desde las colecciones departametos y empresas
       { 
         name: 'departamento', 
         label: 'Departamento', 
