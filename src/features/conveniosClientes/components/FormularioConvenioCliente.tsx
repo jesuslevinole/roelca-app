@@ -17,10 +17,8 @@ const SearchableSelect: React.FC<{
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
-  // Buscar el label actual para mostrarlo si ya hay un valor seleccionado
   const selectedLabel = options.find(o => o.id === value)?.label || '';
 
-  // Actualizar el buscador si cambia el valor externo
   useEffect(() => {
     setSearchTerm(selectedLabel);
   }, [value, selectedLabel]);
@@ -41,15 +39,14 @@ const SearchableSelect: React.FC<{
           setIsOpen(true);
         }}
         onFocus={() => {
-          setSearchTerm(''); // Limpia al hacer click para ver todas las opciones
+          setSearchTerm(''); 
           setIsOpen(true);
         }}
         onBlur={() => {
-          // Pequeño timeout para permitir que el onClick de la opción se ejecute
           setTimeout(() => setIsOpen(false), 200);
-          setSearchTerm(selectedLabel); // Restaura el texto si no seleccionó nada nuevo
+          setSearchTerm(selectedLabel); 
         }}
-        required={required && !value} // Solo requerido si no hay un ID guardado
+        required={required && !value} 
         style={{
           cursor: 'text',
           border: isOpen ? '1px solid #3b82f6' : '',
@@ -170,7 +167,6 @@ interface FormProps {
 export const FormularioConvenioCliente = ({ estado, initialData, registrosExistentes, onClose, onMinimize, onRestore }: FormProps) => {
   const todayISO = new Date().toISOString().split('T')[0];
 
-  // --- ESTADO DEL MAESTRO (CONVENIO) ---
   const [formData, setFormData] = useState<ConvenioClienteRecord>({
     numeroConvenio: '',
     clienteId: '',
@@ -194,10 +190,9 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
   const [clientes, setClientes] = useState<any[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
   const [tarifarios, setTarifarios] = useState<any[]>([]);
-  const [tarifasSugeridasActuales, setTarifasSugeridasActuales] = useState<any[]>([]); 
+  const [tarifasSugeridasActuales, setTarifasSugeridasActuales] = useState<number[]>([]); 
   const [cargando, setCargando] = useState(false);
 
-  // --- CONFIGURACIÓN DE CAMPOS OBLIGATORIOS (LOCALSTORAGE) ---
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [requiredFields, setRequiredFields] = useState<string[]>([]);
   
@@ -228,7 +223,6 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
 
   const isRequired = (fieldName: string) => requiredFields.includes(fieldName);
 
-  // --- LÓGICA DE DATOS ---
   const generarSiguienteConvenio = () => {
     if (registrosExistentes.length === 0) return 'CONV-001';
     const numeros = registrosExistentes.map(reg => {
@@ -257,7 +251,8 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
         const monSnapshot = await getDocs(collection(db, 'catalogo_moneda'));
         setMonedas(monSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
-        const tarifarioSnapshot = await getDocs(collection(db, 'catalogo_tarifario'));
+        // NUEVA COLECCIÓN: Tarifas de Referencia
+        const tarifarioSnapshot = await getDocs(collection(db, 'catalogo_tarifas_referencia'));
         setTarifarios(tarifarioSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       } catch (error) {
         console.error("Error al obtener catálogos:", error);
@@ -274,7 +269,6 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }
   }, [initialData, registrosExistentes]);
 
-  // Manejadores
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
@@ -286,26 +280,29 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     setFormData(prev => ({ ...prev, monedaId: id, monedaNombre: moneda ? moneda.moneda : '' }));
   };
 
+  // --- NUEVA LÓGICA DE EXTRACCIÓN DE TARIFAS DE CLIENTES ---
   const handleTipoConvenioChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     const tarifario = tarifarios.find(t => t.id === id);
-    const nombreTarifario = tarifario ? (tarifario.concepto || tarifario.nombre || 'Desconocido') : '';
     
-    let sugerencias: any[] = [];
+    // Leemos la descripción del nuevo catálogo
+    const nombreTarifario = tarifario ? (tarifario.descripcion || 'Desconocido') : '';
+    
+    let sugerencias: number[] = [];
     if (tarifario) {
-      if (Array.isArray(tarifario.tarifas_sugeridas)) {
-        sugerencias = tarifario.tarifas_sugeridas;
-      } else if (tarifario.tarifa_sugerida) {
-        sugerencias = [tarifario.tarifa_sugerida];
-      }
+      // Extraemos exclusivamente las tarifas configuradas para Clientes
+      if (tarifario.tarifa_cliente_1 && Number(tarifario.tarifa_cliente_1) > 0) sugerencias.push(Number(tarifario.tarifa_cliente_1));
+      if (tarifario.tarifa_cliente_2 && Number(tarifario.tarifa_cliente_2) > 0) sugerencias.push(Number(tarifario.tarifa_cliente_2));
+      if (tarifario.tarifa_cliente_3 && Number(tarifario.tarifa_cliente_3) > 0) sugerencias.push(Number(tarifario.tarifa_cliente_3));
     }
+    
     setTarifasSugeridasActuales(sugerencias);
 
     setDetalleDraft({
       tipoConvenioId: id,
       tipoConvenioNombre: nombreTarifario,
-      tarifaSugeridaSeleccionada: sugerencias.length > 0 ? sugerencias[0] : '', 
-      tarifa: sugerencias.length > 0 ? parseFloat(sugerencias[0]) : 0
+      tarifaSugeridaSeleccionada: sugerencias.length > 0 ? String(sugerencias[0]) : '', 
+      tarifa: sugerencias.length > 0 ? sugerencias[0] : 0
     });
   };
 
@@ -320,7 +317,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
 
   const handleAgregarDetalle = () => {
     if (!detalleDraft.tipoConvenioId || detalleDraft.tarifa <= 0) {
-      alert("Seleccione un tipo de convenio y asegúrese de que la tarifa sea mayor a 0.");
+      alert("Seleccione un tipo de convenio y asegúrese de que la tarifa final sea mayor a 0.");
       return;
     }
 
@@ -364,7 +361,6 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }
   };
 
-  // Convertimos los clientes a un formato estándar para el nuevo componente SearchableSelect
   const opcionesClientes = clientes.map(cli => {
     const keys = Object.keys(cli);
     const nombreKey = keys.find(k => k.toLowerCase().includes('empresa') || k.toLowerCase().includes('nombre'));
@@ -420,7 +416,6 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
                   <input type="text" className="form-control" value={formData.numeroConvenio} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} />
                 </div>
 
-                {/* CORRECCIÓN: Se reemplaza el select nativo por el SearchableSelect */}
                 <div className="form-group">
                   <label className="form-label">Cliente {isRequired('clienteId') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
                   <SearchableSelect 
@@ -469,11 +464,12 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
                 {mostrandoDetalleForm && (
                   <div style={{ backgroundColor: '#161b22', padding: '20px', borderRadius: '8px', border: '1px solid #30363d', marginBottom: '24px' }}>
                     <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr auto', gap: '16px', alignItems: 'end', marginBottom: 0 }}>
+                      
                       <div className="form-group">
-                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio</label>
+                        <label className="form-label" style={{ fontSize: '0.75rem' }}>Tipo de Convenio (Tarifa de Referencia)</label>
                         <select className="form-control" value={detalleDraft.tipoConvenioId} onChange={handleTipoConvenioChange}>
                           <option value="">Seleccione concepto...</option>
-                          {tarifarios.map(t => <option key={t.id} value={t.id}>{t.concepto || t.nombre || `Catálogo #${t.id}`}</option>)}
+                          {tarifarios.map(t => <option key={t.id} value={t.id}>{t.descripcion || `Catálogo #${t.id}`}</option>)}
                         </select>
                       </div>
 
@@ -481,7 +477,7 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
                         <label className="form-label" style={{ fontSize: '0.75rem', color: '#8b949e' }}>Tarifa Sugerida</label>
                         <select className="form-control" value={detalleDraft.tarifaSugeridaSeleccionada} onChange={handleSugerenciaChange} disabled={tarifasSugeridasActuales.length === 0}>
                           <option value="">{tarifasSugeridasActuales.length === 0 ? 'Sin sugerencias' : 'Ver opciones...'}</option>
-                          {tarifasSugeridasActuales.map((tar, i) => <option key={i} value={tar}>${tar}</option>)}
+                          {tarifasSugeridasActuales.map((tar, i) => <option key={i} value={tar}>${tar.toFixed(2)}</option>)}
                         </select>
                       </div>
 
