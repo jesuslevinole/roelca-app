@@ -10,17 +10,18 @@ import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/
 import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
 import { ConveniosClientesDashboard } from './features/conveniosClientes/components/ConveniosClientesDashboard';
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
-
-// NUEVA IMPORTACIÓN: Dashboard de Direcciones
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
+
+// NUEVA IMPORTACIÓN: Dashboard de Empleados
+import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDashboard';
 
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   
-  // CORRECCIÓN: Se añade 'direcciones' a los módulos aceptados por el estado
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones'>('operaciones');
+  // SE AÑADIÓ 'colaboradores' AL ESTADO
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -29,15 +30,21 @@ function App() {
   const [menuBasesDatosAbierto, setMenuBasesDatosAbierto] = useState(false);
   const [menuClientesAbierto, setMenuClientesAbierto] = useState(false);
   const [menuProveedoresAbierto, setMenuProveedoresAbierto] = useState(false);
+  
+  // NUEVO ESTADO: Para el menú de Empleados
+  const [menuEmpleadosAbierto, setMenuEmpleadosAbierto] = useState(false);
 
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
 
-  // CORRECCIÓN: Validaciones para mantener activos los menús padres, incluyendo 'direcciones'
+  // Validaciones para mantener activos los menús padres
   const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'direcciones';
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
+  
+  // NUEVA VALIDACIÓN: Empleados
+  const esEmpleadosActivo = moduloActivo === 'colaboradores';
 
   return (
     <div className="app-wrapper">
@@ -95,6 +102,26 @@ function App() {
           </div>
         )}
 
+        {/* NUEVO ITEM DESPLEGABLE: EMPLEADOS */}
+        <div 
+          className={`sidebar-item sidebar-item-with-icon ${esEmpleadosActivo && !menuEmpleadosAbierto ? 'active' : ''}`} 
+          onClick={() => setMenuEmpleadosAbierto(!menuEmpleadosAbierto)}
+        >
+          <span>Empleados</span>
+          <span style={{ fontSize: '0.7rem' }}>{menuEmpleadosAbierto ? '▼' : '▶'}</span>
+        </div>
+
+        {menuEmpleadosAbierto && (
+          <div className="sidebar-submenu">
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'colaboradores' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('colaboradores')}
+            >
+              Colaboradores
+            </div>
+          </div>
+        )}
+
         {/* ITEM DESPLEGABLE: Bases de Datos */}
         <div 
           className={`sidebar-item sidebar-item-with-icon ${esBaseDeDatosActiva && !menuBasesDatosAbierto ? 'active' : ''}`} 
@@ -112,15 +139,12 @@ function App() {
             >
               Empresas
             </div>
-            
-            {/* NUEVO ITEM: Direcciones */}
             <div 
               className={`sidebar-subitem ${moduloActivo === 'direcciones' ? 'active' : ''}`} 
               onClick={() => setModuloActivo('direcciones')}
             >
               Direcciones
             </div>
-
             <div 
               className={`sidebar-subitem ${moduloActivo === 'tipoCambio' ? 'active' : ''}`} 
               onClick={() => setModuloActivo('tipoCambio')}
@@ -216,7 +240,7 @@ function App() {
         {/* --- CONTENIDO DINÁMICO --- */}
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
-        {moduloActivo === 'direcciones' && <DireccionesDashboard />}  {/* NUEVO MÓDULO RENDERIZADO */}
+        {moduloActivo === 'direcciones' && <DireccionesDashboard />}
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
         {moduloActivo === 'combustible' && <CombustibleDashboard />}
         {moduloActivo === 'proveedoresUnidad' && <ProveedoresUnidadDashboard />}
@@ -224,6 +248,9 @@ function App() {
         {moduloActivo === 'conveniosClientes' && <ConveniosClientesDashboard />}
         {moduloActivo === 'conveniosProveedores' && <ConveniosProveedoresDashboard />}
         {moduloActivo === 'catalogos' && <CatalogosDashboard />}
+        
+        {/* RENDERIZADO DEL NUEVO MÓDULO */}
+        {moduloActivo === 'colaboradores' && <EmpleadosDashboard />}
         
       </div>
     </div>
