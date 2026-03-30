@@ -10,6 +10,10 @@ export const EmpleadosDashboard: React.FC = () => {
   const [registroEditando, setRegistroEditando] = useState<Employee | null>(null);
   const [registros, setRegistros] = useState<Employee[]>([]);
 
+  // Estados para los filtros (Visuales para coincidir con la UI)
+  const [filtroActivo, setFiltroActivo] = useState('Todo');
+  const [mostrarFiltros, setMostrarFiltros] = useState(false);
+
   // --- OBTENER DATOS EN TIEMPO REAL ---
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'empleados'), (snapshot) => {
@@ -39,9 +43,8 @@ export const EmpleadosDashboard: React.FC = () => {
     setEstadoFormulario('abierto'); 
   };
 
-  const handleEliminar = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation(); // Evita que se abra el modal de edición al hacer clic en eliminar
-    if (window.confirm('¿Estás seguro de que deseas dar de baja y eliminar a este empleado permanentemente?')) {
+  const handleEliminar = async (id: string) => {
+    if (window.confirm('¿Estás seguro de que deseas eliminar permanentemente este registro?')) {
       try {
         await eliminarRegistro('empleados', id);
       } catch (error) {
@@ -51,10 +54,11 @@ export const EmpleadosDashboard: React.FC = () => {
     }
   };
 
+  const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
+
   return (
-    <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
-      
-      {/* RENDERIZADO CONDICIONAL DEL FORMULARIO MODAL */}
+    <>
+      {/* RENDERIZADO DEL FORMULARIO MODAL */}
       {estadoFormulario !== 'cerrado' && (
         <EmployeeForm 
           estado={estadoFormulario} 
@@ -65,28 +69,45 @@ export const EmpleadosDashboard: React.FC = () => {
         />
       )}
 
-      {/* CABECERA DEL MÓDULO */}
-      <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h1 className="module-title" style={{ fontSize: '1.25rem', color: '#8b949e', margin: 0, fontWeight: '400' }}>
-          Recursos Humanos &gt; <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Base de Empleados ({registros.length})</span>
-        </h1>
-        <button className="btn btn-primary" onClick={handleNuevo} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}>
-          + Agregar Empleado
-        </button>
+      {/* --- HEADER CON BOTONES INTEGRADOS --- */}
+      <div className="module-header" style={{ justifyContent: 'flex-end', paddingBottom: '16px' }}>
+        <div className="action-buttons" style={{ display: 'flex', gap: '12px', position: 'relative' }}>
+          
+          <button className="btn btn-outline" onClick={() => setMostrarFiltros(!mostrarFiltros)}>
+            Filtro: {filtroActivo} ▼
+          </button>
+          
+          {mostrarFiltros && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '8px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', zIndex: 50, minWidth: '180px', boxShadow: '0 10px 30px rgba(0,0,0,0.8)', padding: '8px 0' }}>
+              {['Todo', 'Activos', 'Inactivos'].map((f) => (
+                <div 
+                  key={f} 
+                  style={{ padding: '10px 16px', cursor: 'pointer', fontSize: '0.9rem', color: filtroActivo === f ? '#f0f6fc' : '#8b949e', backgroundColor: filtroActivo === f ? '#21262d' : 'transparent' }}
+                  onClick={() => { setFiltroActivo(f); setMostrarFiltros(false); }}
+                >
+                  {f}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button className="btn btn-outline">Exportar CSV</button>
+          <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar Empleado</button>
+        </div>
       </div>
 
-      {/* ÁREA DE LA TABLA */}
+      {/* --- ÁREA DE LA TABLA --- */}
       <div className="content-body" style={{ display: 'block' }}>
-        <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-            <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d' }}>
+        <div className="table-container">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}># Emp ↓</th>
-                <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>Nombre Completo</th>
-                <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>Alias</th>
-                <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>RFC</th>
-                <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>Contacto</th>
-                <th style={{ padding: '16px', width: '150px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>Acciones</th>
+                <th># Emp</th>
+                <th>Nombre Completo</th>
+                <th>Alias</th>
+                <th>RFC</th>
+                <th>Contacto</th>
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -98,60 +119,21 @@ export const EmpleadosDashboard: React.FC = () => {
                 </tr>
               ) : (
                 registros.map((reg) => (
-                  <tr 
-                    key={reg.id} 
-                    onClick={() => editarRegistro(reg)} 
-                    style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'} 
-                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                  >
-                    {/* ID */}
-                    <td style={{ padding: '16px', fontWeight: 'bold', color: '#58a6ff', fontSize: '0.95rem' }}>
-                      {reg.employeeId}
-                    </td>
-                    
-                    {/* NOMBRE COMPLETO CONCATENADO */}
-                    <td style={{ padding: '16px', color: '#f0f6fc', fontSize: '0.95rem' }}>
-                      {`${reg.firstName} ${reg.lastNamePaternal} ${reg.lastNameMaternal}`}
-                    </td>
-                    
-                    {/* ALIAS */}
-                    <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', fontStyle: reg.alias ? 'normal' : 'italic' }}>
-                      {reg.alias || 'N/A'}
-                    </td>
-                    
-                    {/* RFC */}
-                    <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', fontFamily: 'monospace' }}>
-                      {reg.rfc}
-                    </td>
-
-                    {/* CONTACTO CONCATENADO */}
-                    <td style={{ padding: '16px', color: '#8b949e', fontSize: '0.85rem' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        <span style={{ color: '#c9d1d9' }}>📞 {reg.personalPhone}</span>
-                        <span>✉️ {reg.personalEmail}</span>
+                  <tr key={reg.id}>
+                    <td className="font-mono">{reg.employeeId}</td>
+                    <td>{`${reg.firstName} ${reg.lastNamePaternal} ${reg.lastNameMaternal}`}</td>
+                    <td><span style={{ fontStyle: reg.alias ? 'normal' : 'italic', color: reg.alias ? 'inherit' : '#8b949e' }}>{mostrarDato(reg.alias)}</span></td>
+                    <td className="font-mono">{mostrarDato(reg.rfc)}</td>
+                    <td style={{ fontSize: '0.85rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <span style={{ color: '#c9d1d9' }}>{mostrarDato(reg.personalPhone)}</span>
+                        <span style={{ color: '#8b949e' }}>{mostrarDato(reg.personalEmail)}</span>
                       </div>
                     </td>
-
-                    {/* ACCIONES */}
-                    <td style={{ padding: '16px', textAlign: 'center' }}>
-                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); editarRegistro(reg); }} 
-                          style={{ background: 'transparent', border: '1px solid #30363d', borderRadius: '4px', color: '#c9d1d9', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
-                          onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#8b949e'; e.currentTarget.style.color = '#fff'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#30363d'; e.currentTarget.style.color = '#c9d1d9'; }}
-                        >
-                          Editar
-                        </button>
-                        <button 
-                          onClick={(e) => handleEliminar(e, reg.id!)} 
-                          style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
-                          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#ef4444'; e.currentTarget.style.color = '#fff'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#ef4444'; }}
-                        >
-                          Eliminar
-                        </button>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <div className="actions-cell">
+                        <button className="btn-small btn-edit" onClick={() => editarRegistro(reg)}>Editar</button>
+                        <button className="btn-small btn-danger" onClick={() => handleEliminar(reg.id!)}>Eliminar</button>
                       </div>
                     </td>
                   </tr>
@@ -161,7 +143,7 @@ export const EmpleadosDashboard: React.FC = () => {
           </table>
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
