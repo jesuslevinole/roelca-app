@@ -79,6 +79,8 @@ const CatalogosDashboard = () => {
 
   // NUEVOS ESTADOS: Buscador y Filtros
   const [busqueda, setBusqueda] = useState('');
+  const [filtroActivo, setFiltroActivo] = useState('Todo');
+  const [mostrarFiltros, setMostrarFiltros] = useState(false);
 
   useEffect(() => {
     if (!catalogoSeleccionado) return;
@@ -113,6 +115,7 @@ const CatalogosDashboard = () => {
 
     cargarOpcionesDinamicas();
     setBusqueda(''); // Limpiar búsqueda al cambiar de catálogo
+    setFiltroActivo('Todo'); // Resetear filtro
 
     return () => unsubscribe();
   }, [catalogoSeleccionado]);
@@ -214,36 +217,60 @@ const CatalogosDashboard = () => {
   // --- VISTA 2: TABLA ESTANDARIZADA DEL CATÁLOGO SELECCIONADO ---
   return (
     <>
-      {/* HEADER DEL MÓDULO (Estandarizado) */}
-      <div className="module-header" style={{ justifyContent: 'space-between', paddingBottom: '16px' }}>
-        <div>
-          <button className="btn-outline" onClick={() => setCatalogoSeleccionado(null)} style={{ fontSize: '0.85rem', marginBottom: '8px' }}>← Volver a Catálogos</button>
-          <h2 style={{ display: 'flex', alignItems: 'center', fontWeight: '500', letterSpacing: '-0.02em', color: '#f0f6fc', margin: 0 }}>
-            {catalogoSeleccionado.titulo}
-            <span style={{ fontSize: '0.85rem', marginLeft: '12px', color: '#8b949e', fontWeight: 'normal' }}>({registrosFiltrados.length} registros)</span>
-          </h2>
+      {/* HEADER DEL MÓDULO (Limpio y centrado) */}
+      <div className="module-header" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: '32px' }}>
+        <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+          <div>
+            <button className="btn-outline" onClick={() => setCatalogoSeleccionado(null)} style={{ fontSize: '0.85rem', marginBottom: '8px' }}>← Volver a Catálogos</button>
+            <h2 style={{ display: 'flex', alignItems: 'center', fontWeight: '500', letterSpacing: '-0.02em', color: '#f0f6fc', margin: 0 }}>
+              {catalogoSeleccionado.titulo}
+            </h2>
+          </div>
+          <div className="action-buttons" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <button className="btn btn-outline" onClick={exportarCSV} disabled={registrosFiltrados.length === 0}>Exportar CSV</button>
+            <button className="btn btn-primary" onClick={() => { setRegistroActual(null); setFormData({}); setModalEstado('formulario'); }}>
+              + Agregar Registro
+            </button>
+          </div>
         </div>
-        <div className="action-buttons" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          
-          {/* BUSCADOR */}
+
+        {/* CONTROLES SOBRE LA TABLA (Filtros y Buscador Central) */}
+        <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ position: 'relative' }}>
+            <button className="btn btn-outline" onClick={() => setMostrarFiltros(!mostrarFiltros)}>
+              Filtro: {filtroActivo} ▼
+            </button>
+            {mostrarFiltros && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '8px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', zIndex: 50, minWidth: '180px', boxShadow: '0 10px 30px rgba(0,0,0,0.8)', padding: '8px 0' }}>
+                {['Todo'].map((f) => (
+                  <div 
+                    key={f} 
+                    style={{ padding: '10px 16px', cursor: 'pointer', fontSize: '0.9rem', color: filtroActivo === f ? '#f0f6fc' : '#8b949e', backgroundColor: filtroActivo === f ? '#21262d' : 'transparent' }}
+                    onClick={() => { setFiltroActivo(f); setMostrarFiltros(false); }}
+                  >
+                    {f}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: 'relative', width: '50%', maxWidth: '500px' }}>
             <input 
               type="text" 
-              placeholder="Buscar..." 
+              placeholder={`Buscar en ${catalogoSeleccionado.titulo.toLowerCase()}...`}
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
               style={{ 
                 backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', 
-                padding: '8px 12px 8px 32px', borderRadius: '6px', fontSize: '0.85rem', width: '200px' 
+                padding: '10px 12px 10px 40px', borderRadius: '6px', fontSize: '0.95rem', width: '100%' 
               }} 
             />
-            <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
           </div>
-
-          <button className="btn btn-outline" onClick={exportarCSV} disabled={registrosFiltrados.length === 0}>Exportar CSV</button>
-          <button className="btn btn-primary" onClick={() => { setRegistroActual(null); setFormData({}); setModalEstado('formulario'); }}>
-            + Agregar Registro
-          </button>
+          
+          {/* Espaciador invisible para balancear visualmente si es necesario, o lo dejas vacío */}
+          <div style={{ width: '100px' }}></div> 
         </div>
       </div>
 
@@ -251,7 +278,7 @@ const CatalogosDashboard = () => {
       <div className="content-body" style={{ display: 'block' }}>
         <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
           {/* Contenedor interno para manejar el scroll horizontal y vertical */}
-          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 220px)' }}> 
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}> 
             <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '800px' }}>
               <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
