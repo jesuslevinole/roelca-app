@@ -43,10 +43,8 @@ const SearchableSelect: React.FC<{
           setIsOpen(true);
         }}
         onBlur={() => {
-          // Timeout para permitir el clic en la lista
           setTimeout(() => {
             setIsOpen(false);
-            // LÓGICA ESTRICTA: Si no seleccionó nada válido, revertimos al label guardado o limpiamos
             const match = options.find(o => o.label.toLowerCase() === searchTerm.toLowerCase());
             if (!match && searchTerm !== selectedLabel) {
                setSearchTerm(selectedLabel);
@@ -160,13 +158,13 @@ interface FormProps {
 export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, registros, onClose, onMinimize, onRestore }) => {
   const [cargando, setCargando] = useState(false);
   
-  // ESTADO PARA LAS PESTAÑAS (Ahora son 3)
   const [activeTab, setActiveTab] = useState<'general' | 'fiscal' | 'contacto'>('general');
   
-  // ESTADOS DE LOS CATÁLOGOS Y MODALES
+  // ESTADOS DE LOS CATÁLOGOS
   const [regimenesFiscales, setRegimenesFiscales] = useState<{id: string, label: string}[]>([]);
   const [direccionesDB, setDireccionesDB] = useState<{id: string, label: string}[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
+  const [tiposFacturas, setTiposFacturas] = useState<any[]>([]); // <-- NUEVO ESTADO PARA TIPOS DE FACTURA
   
   const [modalDireccionAbierto, setModalDireccionAbierto] = useState(false);
   const [modalRegimenAbierto, setModalRegimenAbierto] = useState(false);
@@ -212,6 +210,11 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       }));
     });
 
+    // Cargar Catálogo de Tipos de Factura
+    const unsubFacturas = onSnapshot(collection(db, 'catalogo_tipo_factura'), (snap) => {
+      setTiposFacturas(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
     const fetchMonedas = async () => {
       const monedaSnap = await getDocs(collection(db, 'catalogo_moneda'));
       setMonedas(monedaSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -222,6 +225,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     return () => {
       unsubRegimenes();
       unsubDirecciones();
+      unsubFacturas();
     };
   }, []);
 
@@ -244,9 +248,21 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     }
   }, [initialData, registros]);
 
+  // Manejador genérico modificado para vigilar la moneda
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    
+    setFormData(prev => {
+      const newData = { ...prev, [name]: value };
+      
+      // Lógica de seguridad: Si cambiamos la moneda, borramos el Tipo de Factura anterior
+      // porque ya no coincidirá con la nueva moneda seleccionada.
+      if (name === 'moneda') {
+        newData.tipoFactura = '';
+      }
+      
+      return newData;
+    });
   };
 
   const handleCondicionPagoChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -262,7 +278,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validar requeridos visualmente saltando a la pestaña
     if (!formData.nombre || !formData.rfcTaxId) {
       alert("Faltan campos obligatorios en Información General.");
       setActiveTab('general');
@@ -294,6 +309,10 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     transition: 'all 0.2s ease', outline: 'none'
   });
 
+  // --- FILTRO DINÁMICO ---
+  // Filtramos la lista de facturas para que SOLO muestre las que su moneda coincide con la que el usuario seleccionó.
+  const tiposFacturasFiltrados = tiposFacturas.filter(tf => tf.moneda === formData.moneda);
+
   return (
     <>
       <div className={`modal-overlay ${estado === 'minimizado' ? 'minimized' : ''}`}>
@@ -315,7 +334,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
           <div style={{ display: estado === 'minimizado' ? 'none' : 'block' }}>
             
-            {/* NAVEGACIÓN DE PESTAÑAS (3 Tabs) */}
+            {/* NAVEGACIÓN DE PESTAÑAS */}
             <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
               <button type="button" onClick={() => setActiveTab('general')} style={tabStyle(activeTab === 'general')}>
                 Información General
@@ -397,6 +416,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     </div>
                   </div>
 
+                  {/* SELECTOR DE MONEDA */}
                   <div className="form-group">
                     <label className="form-label">Moneda</label>
                     <select name="moneda" className="form-control" value={formData.moneda} onChange={handleChange}>
@@ -407,9 +427,28 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     </select>
                   </div>
 
+                  {/* SELECTOR DE TIPO DE FACTURA (AHORA ES UN SELECT DINÁMICO) */}
                   <div className="form-group">
                     <label className="form-label">Tipo de Factura</label>
-                    <input type="text" name="tipoFactura" className="form-control" value={formData.tipoFactura} onChange={handleChange} placeholder="Ej. Factura Fiscal | Pesos" />
+                    <select 
+                      name="tipoFactura" 
+                      className="form-control" 
+                      value={formData.tipoFactura} 
+                      onChange={handleChange}
+                      disabled={!formData.moneda}
+                      style={{ 
+                        opacity: formData.moneda ? 1 : 0.5,
+                        backgroundColor: '#010409',
+                        color: formData.moneda ? '#c9d1d9' : '#8b949e'
+                      }}
+                    >
+                      <option value="">{formData.moneda ? 'Seleccione Tipo de Factura...' : 'Primero seleccione Moneda'}</option>
+                      {tiposFacturasFiltrados.map(tf => (
+                        <option key={tf.id} value={tf.nombre}>
+                          {tf.nombre}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div className="form-group">
@@ -443,7 +482,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                         <SearchableSelect 
                           options={direccionesDB}
                           value={formData.direccionId}
-                          onChange={(id, label) => setFormData(prev => ({ ...prev, direccionId: id, direccionLabel: label, direccion: label }))} // Guardamos tambien en 'direccion' por retrocompatibilidad
+                          onChange={(id, label) => setFormData(prev => ({ ...prev, direccionId: id, direccionLabel: label, direccion: label }))}
                           placeholder="Buscar dirección guardada..."
                         />
                       </div>
