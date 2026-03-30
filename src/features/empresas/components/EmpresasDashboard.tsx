@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, eliminarRegistro } from '../../../config/firebase';
 import { FormularioEmpresa } from './FormularioEmpresa';
+import * as XLSX from 'xlsx'; // <-- NUEVA IMPORTACIÓN PARA EXCEL
 
 const opcionesFiltro = [
   'Todo', 'Proveedor (Servicios)', 'Empresa Inactiva', 'Cliente (Mercancía)', 
@@ -14,7 +15,6 @@ const EmpresasDashboard = () => {
   const [empresaEditando, setEmpresaEditando] = useState<any | null>(null);
   
   const [empresaViendo, setEmpresaViendo] = useState<any | null>(null);
-  // ESTADO PARA TRES PESTAÑAS EN EL DETALLE
   const [activeTabDetalle, setActiveTabDetalle] = useState<'general' | 'fiscal' | 'contacto'>('general');
 
   const [empresas, setEmpresas] = useState<any[]>([]);
@@ -78,24 +78,60 @@ const EmpresasDashboard = () => {
     });
   }, [empresas, filtroActivo, busqueda]);
 
-  const exportarCSV = () => {
+  // --- NUEVA LÓGICA DE EXPORTACIÓN A EXCEL NATIVO ---
+  const exportarExcel = () => {
     if (empresasFiltradas.length === 0) return;
-    const headers = ['# de Cliente', 'Razon Social', 'Nombre Corto', 'Status', 'Tipo de Servicios', 'RFC/Tax ID', 'Ultimo Servicio', 'Direccion', 'Telefono', 'Correo'];
-    const csvContent = [
-      headers.join(','),
-      ...empresasFiltradas.map(emp => [
-        `"${emp.numCliente || ''}"`, `"${(emp.nombre || '').replace(/"/g, '""')}"`, `"${(emp.nombreCorto || '').replace(/"/g, '""')}"`,
-        `"${emp.status || ''}"`, `"${emp.tiposServicio || ''}"`, `"${emp.rfcTaxId || ''}"`, `"${emp.fechaUltimoServicio || ''}"`,
-        `"${(emp.direccionLabel || emp.direccion || '').replace(/"/g, '""')}"`, `"${emp.telefono || ''}"`, `"${emp.correo || ''}"`
-      ].join(','))
-    ].join('\n');
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Empresas_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    // 1. Preparamos los datos estructurados para Excel
+    const datosExcel = empresasFiltradas.map(emp => ({
+      '# de Cliente': emp.numCliente || '',
+      'Razón Social': emp.nombre || '',
+      'Nombre Corto': emp.nombreCorto || '',
+      'Status': emp.status || '',
+      'Tipo de Servicios': emp.tiposServicio || '',
+      'RFC/Tax ID': emp.rfcTaxId || '',
+      'Último Servicio': emp.fechaUltimoServicio || '',
+      'Régimen Fiscal': emp.regimenFiscalLabel || emp.regimenFiscal || '',
+      'Moneda': emp.moneda || '',
+      'Tipo de Factura': emp.tipoFactura || '',
+      'Condición de Pago': emp.condicionPago || '',
+      'Días de Crédito': emp.diasCredito || 0,
+      'Límite de Crédito': emp.limiteCredito || 0,
+      'Dirección': emp.direccionLabel || emp.direccion || '',
+      'Teléfono': emp.telefono || '',
+      'Correo': emp.correo || ''
+    }));
+
+    // 2. Creamos una hoja de trabajo (worksheet)
+    const worksheet = XLSX.utils.json_to_sheet(datosExcel);
+
+    // Ajustar el ancho de las columnas automáticamente (Opcional pero recomendado)
+    const columnWidths = [
+      { wch: 15 }, // # Cliente
+      { wch: 40 }, // Razón Social
+      { wch: 20 }, // Nombre Corto
+      { wch: 15 }, // Status
+      { wch: 25 }, // Tipo Servicio
+      { wch: 20 }, // RFC
+      { wch: 15 }, // Ultimo Servicio
+      { wch: 45 }, // Regimen
+      { wch: 15 }, // Moneda
+      { wch: 25 }, // Tipo Factura
+      { wch: 15 }, // Condicion
+      { wch: 15 }, // Dias Credito
+      { wch: 15 }, // Limite
+      { wch: 50 }, // Direccion
+      { wch: 20 }, // Telefono
+      { wch: 30 }  // Correo
+    ];
+    worksheet['!cols'] = columnWidths;
+
+    // 3. Creamos el libro de trabajo (workbook) y añadimos la hoja
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Directorio_Empresas');
+
+    // 4. Generamos y descargamos el archivo .xlsx
+    XLSX.writeFile(workbook, `Empresas_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const tabStyle = (isActive: boolean) => ({
@@ -188,7 +224,11 @@ const EmpresasDashboard = () => {
           Bases de Datos &gt; <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Empresas</span>
         </h1>
         <div className="action-buttons" style={{ display: 'flex', gap: '12px' }}>
-          <button className="btn btn-outline" onClick={exportarCSV} disabled={empresasFiltradas.length === 0}>Exportar CSV</button>
+          {/* BOTÓN ACTUALIZADO PARA EXCEL */}
+          <button className="btn btn-outline" onClick={exportarExcel} disabled={empresasFiltradas.length === 0} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Exportar Excel
+          </button>
           <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar Empresa</button>
         </div>
       </div>
