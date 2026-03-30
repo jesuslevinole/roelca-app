@@ -68,7 +68,9 @@ interface FormProps {
 export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, registros, onClose, onMinimize, onRestore }) => {
   const [cargando, setCargando] = useState(false);
   
-  // Catálogos para los nuevos campos fiscales
+  // ESTADO PARA LAS PESTAÑAS
+  const [activeTab, setActiveTab] = useState<'general' | 'fiscal'>('general');
+  
   const [regimenesFiscales, setRegimenesFiscales] = useState<any[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
 
@@ -83,7 +85,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     direccion: '',
     telefono: '',
     correo: '',
-    // --- NUEVOS CAMPOS ---
     regimenFiscal: '',
     moneda: '',
     tipoFactura: '',
@@ -103,9 +104,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     { name: 'moneda', label: 'Moneda' }
   ];
 
-  // --- Cargar Configuración y Catálogos ---
   useEffect(() => {
-    // Configuración de campos obligatorios
     const savedConfig = localStorage.getItem('formConfig_empresa');
     if (savedConfig) {
       setRequiredFields(JSON.parse(savedConfig));
@@ -113,7 +112,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       setRequiredFields(['nombre', 'tiposServicio', 'rfcTaxId']);
     }
 
-    // Cargar Catálogos de Firebase
     const fetchCatalogos = async () => {
       try {
         const regimenSnap = await getDocs(collection(db, 'catalogo_regimen_fiscal'));
@@ -158,19 +156,16 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     }
   }, [initialData, registros]);
 
-  // Manejo de cambios estándar
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  // Manejo dinámico para Crédito/Contado
   const handleCondicionPagoChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     setFormData(prev => ({
       ...prev,
       condicionPago: value,
-      // Si es de Contado, bloqueamos a 0 los días y límite de crédito
       diasCredito: value === 'Contado' ? 0 : prev.diasCredito,
       limiteCredito: value === 'Contado' ? 0 : prev.limiteCredito
     }));
@@ -178,6 +173,23 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Validación manual para evitar que el navegador falle al tener inputs ocultos en otra pestaña
+    for (const field of requiredFields) {
+      if (!formData[field as keyof typeof formData]) {
+        const label = configuracionCampos.find(c => c.name === field)?.label || field;
+        alert(`El campo "${label}" es obligatorio.`);
+        
+        // Cambiamos automáticamente a la pestaña donde falta el dato
+        if (['regimenFiscal', 'moneda'].includes(field)) {
+          setActiveTab('fiscal');
+        } else {
+          setActiveTab('general');
+        }
+        return; 
+      }
+    }
+
     setCargando(true);
     try {
       if (initialData && initialData.id) {
@@ -194,6 +206,20 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       setCargando(false);
     }
   };
+
+  // --- ESTILOS DE LAS PESTAÑAS ---
+  const tabStyle = (isActive: boolean) => ({
+    padding: '12px 24px',
+    background: 'none',
+    border: 'none',
+    borderBottom: isActive ? '2px solid #D84315' : '2px solid transparent',
+    color: isActive ? '#f0f6fc' : '#8b949e',
+    cursor: 'pointer',
+    fontWeight: isActive ? '600' : 'normal',
+    fontSize: '0.95rem',
+    transition: 'all 0.2s ease',
+    outline: 'none'
+  });
 
   return (
     <>
@@ -227,152 +253,159 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
             </div>
           </div>
 
-          <div style={{ display: estado === 'minimizado' ? 'none' : 'block', padding: '10px 0', maxHeight: '75vh', overflowY: 'auto' }}>
-            <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
-              
-              {/* --- SECCIÓN: INFORMACIÓN GENERAL --- */}
-              <h3 style={{ color: '#8b949e', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px', borderBottom: '1px solid #30363d', paddingBottom: '8px', marginBottom: '20px' }}>
+          <div style={{ display: estado === 'minimizado' ? 'none' : 'block' }}>
+            
+            {/* NAVEGACIÓN DE PESTAÑAS */}
+            <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
+              <button type="button" onClick={() => setActiveTab('general')} style={tabStyle(activeTab === 'general')}>
                 Información General
-              </h3>
+              </button>
+              <button type="button" onClick={() => setActiveTab('fiscal')} style={tabStyle(activeTab === 'fiscal')}>
+                Comercial y Fiscal
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} style={{ padding: '24px', maxHeight: '65vh', overflowY: 'auto' }}>
               
-              <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '32px' }}>
-                <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                  <label className="form-label orange"># de Empresa (Automático)</label>
-                  <input type="text" className="form-control" value={formData.numCliente} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed', width: '150px', textAlign: 'center', fontWeight: 'bold' }} />
-                </div>
+              {/* --- PESTAÑA 1: INFORMACIÓN GENERAL --- */}
+              <div style={{ display: activeTab === 'general' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
+                <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <label className="form-label orange"># de Empresa (Automático)</label>
+                    <input type="text" className="form-control" value={formData.numCliente} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed', width: '150px', textAlign: 'center', fontWeight: 'bold' }} />
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">Razón Social {isRequired('nombre') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                  <input type="text" name="nombre" className="form-control" value={formData.nombre} onChange={handleChange} required={isRequired('nombre')} />
-                </div>
+                  <div className="form-group">
+                    <label className="form-label">Razón Social {isRequired('nombre') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
+                    <input type="text" name="nombre" className="form-control" value={formData.nombre} onChange={handleChange} />
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">Nombre Corto / Alias</label>
-                  <input type="text" name="nombreCorto" className="form-control" value={formData.nombreCorto} onChange={handleChange} />
-                </div>
+                  <div className="form-group">
+                    <label className="form-label">Nombre Corto / Alias</label>
+                    <input type="text" name="nombreCorto" className="form-control" value={formData.nombreCorto} onChange={handleChange} />
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">Status</label>
-                  <select name="status" className="form-control" value={formData.status} onChange={handleChange}>
-                    <option value="Activa">Activa</option>
-                    <option value="Inactiva">Inactiva</option>
-                  </select>
-                </div>
+                  <div className="form-group">
+                    <label className="form-label">Status</label>
+                    <select name="status" className="form-control" value={formData.status} onChange={handleChange}>
+                      <option value="Activa">Activa</option>
+                      <option value="Inactiva">Inactiva</option>
+                    </select>
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">Tipo de Servicios {isRequired('tiposServicio') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                  <select name="tiposServicio" className="form-control" value={formData.tiposServicio} onChange={handleChange} required={isRequired('tiposServicio')}>
-                    <option value="Cliente (Paga)">Cliente (Paga)</option>
-                    <option value="Proveedor (Transporte)">Proveedor (Transporte)</option>
-                    <option value="Proveedor (Servicios)">Proveedor (Servicios)</option>
-                    <option value="Cliente (Mercancía)">Cliente (Mercancía)</option>
-                    <option value="Propietario (Remolques)">Propietario (Remolques)</option>
-                    <option value="Bodega">Bodega</option>
-                    <option value="Empresas Roelca">Empresas Roelca</option>
-                  </select>
-                </div>
+                  <div className="form-group">
+                    <label className="form-label">Tipo de Servicios {isRequired('tiposServicio') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
+                    <select name="tiposServicio" className="form-control" value={formData.tiposServicio} onChange={handleChange}>
+                      <option value="Cliente (Paga)">Cliente (Paga)</option>
+                      <option value="Proveedor (Transporte)">Proveedor (Transporte)</option>
+                      <option value="Proveedor (Servicios)">Proveedor (Servicios)</option>
+                      <option value="Cliente (Mercancía)">Cliente (Mercancía)</option>
+                      <option value="Propietario (Remolques)">Propietario (Remolques)</option>
+                      <option value="Bodega">Bodega</option>
+                      <option value="Empresas Roelca">Empresas Roelca</option>
+                    </select>
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">RFC / Tax ID {isRequired('rfcTaxId') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                  <input type="text" name="rfcTaxId" className="form-control font-mono" value={formData.rfcTaxId} onChange={handleChange} required={isRequired('rfcTaxId')} />
-                </div>
+                  <div className="form-group">
+                    <label className="form-label">RFC / Tax ID {isRequired('rfcTaxId') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
+                    <input type="text" name="rfcTaxId" className="form-control font-mono" value={formData.rfcTaxId} onChange={handleChange} />
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">Dirección Completa</label>
-                  <input type="text" name="direccion" className="form-control" value={formData.direccion} onChange={handleChange} />
-                </div>
+                  <div className="form-group">
+                    <label className="form-label">Dirección Completa</label>
+                    <input type="text" name="direccion" className="form-control" value={formData.direccion} onChange={handleChange} />
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">Teléfono</label>
-                  <input type="tel" name="telefono" className="form-control" value={formData.telefono} onChange={handleChange} />
-                </div>
+                  <div className="form-group">
+                    <label className="form-label">Teléfono</label>
+                    <input type="tel" name="telefono" className="form-control" value={formData.telefono} onChange={handleChange} />
+                  </div>
 
-                <div className="form-group">
-                  <label className="form-label">Correo Electrónico</label>
-                  <input type="email" name="correo" className="form-control" value={formData.correo} onChange={handleChange} />
+                  <div className="form-group">
+                    <label className="form-label">Correo Electrónico</label>
+                    <input type="email" name="correo" className="form-control" value={formData.correo} onChange={handleChange} />
+                  </div>
                 </div>
               </div>
 
-              {/* --- SECCIÓN: INFORMACIÓN FISCAL Y COMERCIAL --- */}
-              <h3 style={{ color: '#8b949e', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px', borderBottom: '1px solid #30363d', paddingBottom: '8px', marginBottom: '20px' }}>
-                Información Fiscal y Comercial
-              </h3>
+              {/* --- PESTAÑA 2: INFORMACIÓN FISCAL Y COMERCIAL --- */}
+              <div style={{ display: activeTab === 'fiscal' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
+                <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                  
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <label className="form-label">Régimen Fiscal {isRequired('regimenFiscal') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
+                    <select name="regimenFiscal" className="form-control" value={formData.regimenFiscal} onChange={handleChange}>
+                      <option value="">Seleccione Régimen Fiscal...</option>
+                      {regimenesFiscales.map(reg => (
+                        <option key={reg.id} value={`${reg.clave} - ${reg.descripcion}`}>
+                          {reg.clave} - {reg.descripcion}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-              <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                
-                <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                  <label className="form-label">Régimen Fiscal {isRequired('regimenFiscal') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                  <select name="regimenFiscal" className="form-control" value={formData.regimenFiscal} onChange={handleChange} required={isRequired('regimenFiscal')}>
-                    <option value="">Seleccione Régimen Fiscal...</option>
-                    {regimenesFiscales.map(reg => (
-                      <option key={reg.id} value={`${reg.clave} - ${reg.descripcion}`}>
-                        {reg.clave} - {reg.descripcion}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="form-group">
+                    <label className="form-label">Moneda {isRequired('moneda') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
+                    <select name="moneda" className="form-control" value={formData.moneda} onChange={handleChange}>
+                      <option value="">Seleccione Moneda...</option>
+                      {monedas.map(mon => (
+                        <option key={mon.id} value={mon.moneda}>{mon.moneda}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Tipo de Factura</label>
+                    <input 
+                      type="text" 
+                      name="tipoFactura" 
+                      className="form-control" 
+                      value={formData.tipoFactura} 
+                      onChange={handleChange} 
+                      placeholder="Ej. Factura Fiscal | Pesos" 
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label" style={{ color: '#58a6ff' }}>Crédito / Contado</label>
+                    <select name="condicionPago" className="form-control" value={formData.condicionPago} onChange={handleCondicionPagoChange}>
+                      <option value="Crédito">Crédito</option>
+                      <option value="Contado">Contado</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>
+                      Días de Crédito
+                    </label>
+                    <input 
+                      type="number" 
+                      name="diasCredito" 
+                      className="form-control" 
+                      value={formData.diasCredito} 
+                      onChange={(e) => setFormData(prev => ({ ...prev, diasCredito: parseInt(e.target.value) || 0 }))} 
+                      disabled={formData.condicionPago === 'Contado'}
+                      style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>
+                      Límite de Crédito ($)
+                    </label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      name="limiteCredito" 
+                      className="form-control" 
+                      value={formData.limiteCredito} 
+                      onChange={(e) => setFormData(prev => ({ ...prev, limiteCredito: parseFloat(e.target.value) || 0 }))} 
+                      disabled={formData.condicionPago === 'Contado'}
+                      style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }}
+                    />
+                  </div>
+
                 </div>
-
-                <div className="form-group">
-                  <label className="form-label">Moneda {isRequired('moneda') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                  <select name="moneda" className="form-control" value={formData.moneda} onChange={handleChange} required={isRequired('moneda')}>
-                    <option value="">Seleccione Moneda...</option>
-                    {monedas.map(mon => (
-                      <option key={mon.id} value={mon.moneda}>{mon.moneda}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Tipo de Factura</label>
-                  <input 
-                    type="text" 
-                    name="tipoFactura" 
-                    className="form-control" 
-                    value={formData.tipoFactura} 
-                    onChange={handleChange} 
-                    placeholder="Ej. Factura Fiscal | Pesos" 
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" style={{ color: '#58a6ff' }}>Crédito / Contado</label>
-                  <select name="condicionPago" className="form-control" value={formData.condicionPago} onChange={handleCondicionPagoChange}>
-                    <option value="Crédito">Crédito</option>
-                    <option value="Contado">Contado</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>
-                    Días de Crédito
-                  </label>
-                  <input 
-                    type="number" 
-                    name="diasCredito" 
-                    className="form-control" 
-                    value={formData.diasCredito} 
-                    onChange={(e) => setFormData(prev => ({ ...prev, diasCredito: parseInt(e.target.value) || 0 }))} 
-                    disabled={formData.condicionPago === 'Contado'}
-                    style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>
-                    Límite de Crédito ($)
-                  </label>
-                  <input 
-                    type="number" 
-                    step="0.01"
-                    name="limiteCredito" 
-                    className="form-control" 
-                    value={formData.limiteCredito} 
-                    onChange={(e) => setFormData(prev => ({ ...prev, limiteCredito: parseFloat(e.target.value) || 0 }))} 
-                    disabled={formData.condicionPago === 'Contado'}
-                    style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }}
-                  />
-                </div>
-
               </div>
 
               {/* --- ACCIONES --- */}

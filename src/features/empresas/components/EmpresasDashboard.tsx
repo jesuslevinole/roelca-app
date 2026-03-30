@@ -12,20 +12,21 @@ const opcionesFiltro = [
 const EmpresasDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [empresaEditando, setEmpresaEditando] = useState<any | null>(null);
+  
+  // Estado para la ventana de detalles
   const [empresaViendo, setEmpresaViendo] = useState<any | null>(null);
+  const [activeTabDetalle, setActiveTabDetalle] = useState<'general' | 'fiscal'>('general');
+
   const [empresas, setEmpresas] = useState<any[]>([]);
 
-  // Estados para Búsqueda y Filtros
   const [filtroActivo, setFiltroActivo] = useState('Todo');
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [busqueda, setBusqueda] = useState('');
 
-  // --- FIREBASE: Lectura en tiempo real ---
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'empresas'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
-      // Ordenamos las empresas por su número de cliente (EMP-001, EMP-002, etc.)
       data.sort((a: any, b: any) => {
         if (a.numCliente && b.numCliente) {
           return a.numCliente.localeCompare(b.numCliente);
@@ -39,13 +40,17 @@ const EmpresasDashboard = () => {
     return () => unsubscribe();
   }, []);
 
-  // --- MANEJADORES DE ESTADO ---
   const handleNuevo = () => { setEmpresaEditando(null); setEstadoFormulario('abierto'); };
   
   const editarEmpresa = (empresa: any) => { 
     setEmpresaEditando(empresa); 
     setEmpresaViendo(null); 
     setEstadoFormulario('abierto'); 
+  };
+
+  const verDetalle = (empresa: any) => {
+    setEmpresaViendo(empresa);
+    setActiveTabDetalle('general'); // Resetear pestaña al abrir un nuevo detalle
   };
   
   const eliminarEmpresa = async (id: string) => {
@@ -62,10 +67,8 @@ const EmpresasDashboard = () => {
 
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
 
-  // --- LÓGICA DE FILTRADO Y BÚSQUEDA ---
   const empresasFiltradas = useMemo(() => {
     return empresas.filter(emp => {
-      // 1. Filtrar por Categoría (Status o Tipo)
       let pasaFiltro = true;
       if (filtroActivo === 'Empresa Inactiva') {
         pasaFiltro = emp.status === 'Inactiva';
@@ -74,11 +77,9 @@ const EmpresasDashboard = () => {
       }
 
       if (!pasaFiltro) return false;
-
-      // 2. Filtrar por Texto de Búsqueda
       if (!busqueda.trim()) return true;
-      const term = busqueda.toLowerCase();
       
+      const term = busqueda.toLowerCase();
       return (
         (emp.nombre || '').toLowerCase().includes(term) ||
         (emp.numCliente || '').toLowerCase().includes(term) ||
@@ -88,12 +89,10 @@ const EmpresasDashboard = () => {
     });
   }, [empresas, filtroActivo, busqueda]);
 
-  // --- EXPORTAR CSV ---
   const exportarCSV = () => {
     if (empresasFiltradas.length === 0) return;
 
     const headers = ['# de Cliente', 'Razon Social', 'Nombre Corto', 'Status', 'Tipo de Servicios', 'RFC/Tax ID', 'Ultimo Servicio', 'Direccion', 'Telefono', 'Correo'];
-    
     const csvContent = [
       headers.join(','),
       ...empresasFiltradas.map(emp => {
@@ -123,6 +122,19 @@ const EmpresasDashboard = () => {
     document.body.removeChild(link);
   };
 
+  const tabStyle = (isActive: boolean) => ({
+    padding: '12px 24px',
+    background: 'none',
+    border: 'none',
+    borderBottom: isActive ? '2px solid #D84315' : '2px solid transparent',
+    color: isActive ? '#f0f6fc' : '#8b949e',
+    cursor: 'pointer',
+    fontWeight: isActive ? '600' : 'normal',
+    fontSize: '0.95rem',
+    transition: 'all 0.2s ease',
+    outline: 'none'
+  });
+
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
       
@@ -138,29 +150,57 @@ const EmpresasDashboard = () => {
         />
       )}
 
-      {/* MODAL DETALLES */}
+      {/* MODAL DETALLES CON PESTAÑAS */}
       {empresaViendo && (
         <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 1000 }}>
-          <div className="form-card detail-card" style={{ maxWidth: '600px', backgroundColor: '#0d1117', border: '1px solid #444' }}>
+          <div className="form-card detail-card" style={{ maxWidth: '650px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px', overflow: 'hidden' }}>
+            
             <div className="form-header" style={{ borderBottom: '1px solid #30363d', padding: '24px' }}>
               <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.25rem' }}>Detalle de Empresa <span style={{ color: '#D84315' }}>{empresaViendo.numCliente}</span></h2>
               <button onClick={() => setEmpresaViendo(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
             
-            <div className="detail-content" style={{ padding: '24px' }}>
-              <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px' }}>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Razón Social</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '1rem', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.nombre)}</span></div>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Nombre Corto</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.nombreCorto)}</span></div>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Status</span><span className="detail-value" style={{ color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: '8px' }}><span className={`dot ${empresaViendo.status === 'Activa' ? 'dot-green' : 'dot-gray'}`}></span>{mostrarDato(empresaViendo.status)}</span></div>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Servicios</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tiposServicio)}</span></div>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.direccion)}</span></div>
-                <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Teléfono / Correo</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.telefono)} | {mostrarDato(empresaViendo.correo)}</span></div>
-              </div>
+            {/* PESTAÑAS DEL DETALLE */}
+            <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
+              <button type="button" onClick={() => setActiveTabDetalle('general')} style={tabStyle(activeTabDetalle === 'general')}>
+                General
+              </button>
+              <button type="button" onClick={() => setActiveTabDetalle('fiscal')} style={tabStyle(activeTabDetalle === 'fiscal')}>
+                Comercial / Fiscal
+              </button>
             </div>
 
-            <div className="form-actions detail-actions" style={{ padding: '24px', justifyContent: 'space-between', borderTop: '1px solid #30363d', backgroundColor: '#161b22', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
+            <div className="detail-content" style={{ padding: '24px', minHeight: '300px' }}>
+              
+              {/* CONTENIDO PESTAÑA: GENERAL */}
+              {activeTabDetalle === 'general' && (
+                <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Razón Social</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '1rem', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.nombre)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Nombre Corto</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.nombreCorto)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Status</span><span className="detail-value" style={{ color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: '8px' }}><span className={`dot ${empresaViendo.status === 'Activa' ? 'dot-green' : 'dot-gray'}`}></span>{mostrarDato(empresaViendo.status)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Servicios</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tiposServicio)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.direccion)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Teléfono / Correo</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.telefono)} | {mostrarDato(empresaViendo.correo)}</span></div>
+                </div>
+              )}
+
+              {/* CONTENIDO PESTAÑA: FISCAL Y COMERCIAL */}
+              {activeTabDetalle === 'fiscal' && (
+                <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo.regimenFiscal)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Moneda</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.moneda)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Factura</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tipoFactura)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Condición de Pago</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.condicionPago)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Días de Crédito</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.diasCredito)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Límite de Crédito</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>${Number(empresaViendo.limiteCredito || 0).toFixed(2)}</span></div>
+                </div>
+              )}
+
+            </div>
+
+            <div className="form-actions detail-actions" style={{ padding: '24px', justifyContent: 'space-between', borderTop: '1px solid #30363d', backgroundColor: '#161b22' }}>
               <div style={{ display: 'flex', gap: '12px' }}>
                 <button onClick={() => eliminarEmpresa(empresaViendo.id)} className="btn btn-danger-solid" style={{ backgroundColor: '#da3633', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Eliminar</button>
                 <button onClick={() => editarEmpresa(empresaViendo)} className="btn btn-primary" style={{ backgroundColor: '#2ea043', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Editar</button>
@@ -182,10 +222,9 @@ const EmpresasDashboard = () => {
         </div>
       </div>
 
-      {/* --- BARRA DE CONTROLES (Buscador Centrado y Filtros) --- */}
+      {/* --- BARRA DE CONTROLES --- */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         
-        {/* Menú de Filtro (Izquierda) */}
         <div style={{ position: 'relative', width: '200px' }}>
           <button className="btn btn-outline" onClick={() => setMostrarFiltros(!mostrarFiltros)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
             <span>Filtro: {filtroActivo}</span> <span>▼</span>
@@ -205,7 +244,6 @@ const EmpresasDashboard = () => {
           )}
         </div>
 
-        {/* Buscador Central (Largo) */}
         <div style={{ position: 'relative', width: '50%', maxWidth: '600px' }}>
           <input 
             type="text" 
@@ -220,7 +258,6 @@ const EmpresasDashboard = () => {
           <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
         </div>
 
-        {/* Div espaciador para equilibrar el layout (Derecha) */}
         <div style={{ width: '200px' }}></div>
       </div>
 
@@ -252,7 +289,7 @@ const EmpresasDashboard = () => {
                   empresasFiltradas.map((emp) => (
                     <tr 
                       key={emp.id} 
-                      onClick={() => setEmpresaViendo(emp)} 
+                      onClick={() => verDetalle(emp)} 
                       style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
                       onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} 
                       onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
