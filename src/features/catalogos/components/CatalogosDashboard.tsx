@@ -1,5 +1,5 @@
 // src/features/catalogos/components/CatalogosDashboard.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, onSnapshot, getDocs } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro, eliminarRegistro } from '../../../config/firebase';
 
@@ -77,6 +77,9 @@ const CatalogosDashboard = () => {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [requiredFields, setRequiredFields] = useState<string[]>([]);
 
+  // NUEVOS ESTADOS: Buscador y Filtros
+  const [busqueda, setBusqueda] = useState('');
+
   useEffect(() => {
     if (!catalogoSeleccionado) return;
     
@@ -109,6 +112,7 @@ const CatalogosDashboard = () => {
     };
 
     cargarOpcionesDinamicas();
+    setBusqueda(''); // Limpiar búsqueda al cambiar de catálogo
 
     return () => unsubscribe();
   }, [catalogoSeleccionado]);
@@ -134,6 +138,63 @@ const CatalogosDashboard = () => {
     } catch (error) { alert('Error en Firebase.'); }
   };
 
+  // --- LÓGICA DE BÚSQUEDA ---
+  const registrosFiltrados = useMemo(() => {
+    if (!busqueda.trim() || !catalogoSeleccionado) return registros;
+    
+    const termino = busqueda.toLowerCase();
+    return registros.filter(reg => {
+      // Buscar en cualquier campo del registro
+      return Object.entries(reg).some(([key, value]) => {
+        if (key === 'id') return false; // Ignorar el ID interno
+        
+        // Si el campo es dinámico, buscar por el label que se muestra, no por el ID guardado
+        const fieldConfig = catalogoSeleccionado.fields.find((f: CatalogField) => f.name === key);
+        if (fieldConfig?.dynamicOptions && opcionesDinamicas[key]) {
+          const dOpt = fieldConfig.dynamicOptions;
+          const labelAsociado = opcionesDinamicas[key].find((opt: any) => opt[dOpt.valueField] === value)?.[dOpt.labelField];
+          return labelAsociado?.toLowerCase().includes(termino);
+        }
+        
+        return String(value).toLowerCase().includes(termino);
+      });
+    });
+  }, [registros, busqueda, catalogoSeleccionado, opcionesDinamicas]);
+
+  // --- EXPORTAR CSV ---
+  const exportarCSV = () => {
+    if (!catalogoSeleccionado || registrosFiltrados.length === 0) return;
+
+    const headers = catalogoSeleccionado.fields.map(f => f.label);
+    const csvContent = [
+      headers.join(','),
+      ...registrosFiltrados.map(reg => {
+        return catalogoSeleccionado.fields.map((f: CatalogField) => {
+          let valor = reg[f.name] || '';
+          
+          // Reemplazar IDs dinámicos por sus etiquetas reales
+          if (f.dynamicOptions && opcionesDinamicas[f.name]) {
+            const dOpt = f.dynamicOptions;
+            valor = opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === valor)?.[dOpt.labelField] || valor;
+          }
+          
+          // Escapar comillas dobles y comas
+          return `"${String(valor).replace(/"/g, '""')}"`;
+        }).join(',');
+      })
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `Catalogo_${catalogoSeleccionado.titulo}_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const isLongForm = catalogoSeleccionado ? catalogoSeleccionado.fields.length > 4 : false;
 
   // --- VISTA 1: CUADRÍCULA DE CATÁLOGOS ---
@@ -156,75 +217,105 @@ const CatalogosDashboard = () => {
       {/* HEADER DEL MÓDULO (Estandarizado) */}
       <div className="module-header" style={{ justifyContent: 'space-between', paddingBottom: '16px' }}>
         <div>
-          <button className="btn-outline" onClick={() => setCatalogoSeleccionado(null)} style={{ fontSize: '0.85rem' }}>← Volver a Catálogos</button>
-          <h2 style={{ display: 'inline', marginLeft: '20px', fontWeight: '500', letterSpacing: '-0.02em', color: '#f0f6fc' }}>
+          <button className="btn-outline" onClick={() => setCatalogoSeleccionado(null)} style={{ fontSize: '0.85rem', marginBottom: '8px' }}>← Volver a Catálogos</button>
+          <h2 style={{ display: 'flex', alignItems: 'center', fontWeight: '500', letterSpacing: '-0.02em', color: '#f0f6fc', margin: 0 }}>
             {catalogoSeleccionado.titulo}
+            <span style={{ fontSize: '0.85rem', marginLeft: '12px', color: '#8b949e', fontWeight: 'normal' }}>({registrosFiltrados.length} registros)</span>
           </h2>
         </div>
-        <div className="action-buttons" style={{ display: 'flex', gap: '12px' }}>
-          <button className="btn btn-outline">Exportar CSV</button>
+        <div className="action-buttons" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          
+          {/* BUSCADOR */}
+          <div style={{ position: 'relative' }}>
+            <input 
+              type="text" 
+              placeholder="Buscar..." 
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              style={{ 
+                backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', 
+                padding: '8px 12px 8px 32px', borderRadius: '6px', fontSize: '0.85rem', width: '200px' 
+              }} 
+            />
+            <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          </div>
+
+          <button className="btn btn-outline" onClick={exportarCSV} disabled={registrosFiltrados.length === 0}>Exportar CSV</button>
           <button className="btn btn-primary" onClick={() => { setRegistroActual(null); setFormData({}); setModalEstado('formulario'); }}>
             + Agregar Registro
           </button>
         </div>
       </div>
 
-      {/* CUERPO DE LA TABLA (Estandarizado) */}
+      {/* CUERPO DE LA TABLA CON SCROLL */}
       <div className="content-body" style={{ display: 'block' }}>
-        <div className="table-container">
-          <table className="data-table">
-            <thead>
-              <tr>
-                {catalogoSeleccionado.fields.map((f: CatalogField) => (
-                  <th key={f.name}>{f.label}</th>
-                ))}
-                <th style={{ textAlign: 'center' }}>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {registros.length === 0 ? (
+        <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
+          {/* Contenedor interno para manejar el scroll horizontal y vertical */}
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 220px)' }}> 
+            <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '800px' }}>
+              <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
-                  <td colSpan={catalogoSeleccionado.fields.length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
-                    No hay registros en este catálogo. Haz clic en "+ Agregar Registro" para comenzar.
-                  </td>
+                  {catalogoSeleccionado.fields.map((f: CatalogField) => (
+                    <th key={f.name} style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+                      {f.label}
+                    </th>
+                  ))}
+                  <th style={{ padding: '16px', width: '100px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', right: 0, backgroundColor: '#161b22', zIndex: 11 }}>
+                    Acciones
+                  </th>
                 </tr>
-              ) : (
-                registros.map((reg: any) => (
-                  <tr 
-                    key={reg.id} 
-                    onClick={() => { setRegistroActual(reg); setModalEstado('detalle'); }}
-                  >
-                    {catalogoSeleccionado.fields.map((f: CatalogField) => {
-                      const dOpt = f.dynamicOptions;
-                      return (
-                        <td key={f.name}>
-                          {dOpt && opcionesDinamicas[f.name]
-                            ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || reg[f.name] || '-')
-                            : (reg[f.name] || '-')}
-                        </td>
-                      );
-                    })}
-                    <td onClick={(e: any) => e.stopPropagation()}>
-                      <div className="actions-cell">
-                        <button 
-                          className="btn-small btn-edit" 
-                          onClick={() => { setRegistroActual(reg); setFormData(reg); setModalEstado('formulario'); }}
-                        >
-                          Editar
-                        </button>
-                        <button 
-                          className="btn-small btn-danger" 
-                          onClick={async () => { if (window.confirm('¿Desea eliminar permanentemente este registro?')) await eliminarRegistro(`catalogo_${catalogoSeleccionado!.id}`, reg.id); }}
-                        >
-                          Eliminar
-                        </button>
-                      </div>
+              </thead>
+              <tbody>
+                {registrosFiltrados.length === 0 ? (
+                  <tr>
+                    <td colSpan={catalogoSeleccionado.fields.length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+                      {busqueda ? 'No se encontraron coincidencias.' : 'No hay registros en este catálogo. Haz clic en "+ Agregar Registro" para comenzar.'}
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  registrosFiltrados.map((reg: any) => (
+                    <tr 
+                      key={reg.id} 
+                      onClick={() => { setRegistroActual(reg); setModalEstado('detalle'); }}
+                      style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
+                      onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} 
+                      onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      {catalogoSeleccionado.fields.map((f: CatalogField) => {
+                        const dOpt = f.dynamicOptions;
+                        return (
+                          <td key={f.name} style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>
+                            {dOpt && opcionesDinamicas[f.name]
+                              ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || reg[f.name] || '-')
+                              : (reg[f.name] || '-')}
+                          </td>
+                        );
+                      })}
+                      {/* Celda de acciones sticky para que siempre se vea aunque haya scroll horizontal */}
+                      <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', right: 0, backgroundColor: 'inherit', zIndex: 5 }} onClick={(e: any) => e.stopPropagation()}>
+                        <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                          <button 
+                            className="btn-small btn-edit" 
+                            onClick={() => { setRegistroActual(reg); setFormData(reg); setModalEstado('formulario'); }}
+                            style={{ background: 'transparent', border: '1px solid #30363d', borderRadius: '4px', color: '#c9d1d9', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem' }}
+                          >
+                            Editar
+                          </button>
+                          <button 
+                            className="btn-small btn-danger" 
+                            onClick={async () => { if (window.confirm('¿Desea eliminar permanentemente este registro?')) await eliminarRegistro(`catalogo_${catalogoSeleccionado!.id}`, reg.id); }}
+                            style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem' }}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -266,7 +357,7 @@ const CatalogosDashboard = () => {
             <div>
               {modalEstado === 'formulario' ? (
                 <form onSubmit={guardarRegistro} style={{ padding: '24px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: isLongForm ? '1fr 1fr' : '1fr', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: isLongForm ? '1fr 1fr' : '1fr', gap: '20px', maxHeight: '60vh', overflowY: 'auto', paddingRight: '8px' }}>
                     {catalogoSeleccionado.fields.map((field: CatalogField) => {
                       const esRequerido = isRequired(field.name);
                       const dOpt = field.dynamicOptions;
@@ -315,7 +406,7 @@ const CatalogosDashboard = () => {
                 </form>
               ) : (
                 <div className="detalle-view" style={{ padding: '24px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: isLongForm ? '1fr 1fr' : '1fr', gap: '20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: isLongForm ? '1fr 1fr' : '1fr', gap: '20px', maxHeight: '60vh', overflowY: 'auto', paddingRight: '8px' }}>
                     {catalogoSeleccionado.fields.map((f: CatalogField) => {
                       const dOpt = f.dynamicOptions;
                       return (
