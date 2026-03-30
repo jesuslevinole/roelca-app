@@ -13,12 +13,11 @@ const EmpresasDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [empresaEditando, setEmpresaEditando] = useState<any | null>(null);
   
-  // Estado para la ventana de detalles
   const [empresaViendo, setEmpresaViendo] = useState<any | null>(null);
-  const [activeTabDetalle, setActiveTabDetalle] = useState<'general' | 'fiscal'>('general');
+  // ESTADO PARA TRES PESTAÑAS EN EL DETALLE
+  const [activeTabDetalle, setActiveTabDetalle] = useState<'general' | 'fiscal' | 'contacto'>('general');
 
   const [empresas, setEmpresas] = useState<any[]>([]);
-
   const [filtroActivo, setFiltroActivo] = useState('Todo');
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [busqueda, setBusqueda] = useState('');
@@ -26,17 +25,12 @@ const EmpresasDashboard = () => {
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'empresas'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
       data.sort((a: any, b: any) => {
-        if (a.numCliente && b.numCliente) {
-          return a.numCliente.localeCompare(b.numCliente);
-        }
+        if (a.numCliente && b.numCliente) return a.numCliente.localeCompare(b.numCliente);
         return 0;
       });
-
       setEmpresas(data);
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -50,7 +44,7 @@ const EmpresasDashboard = () => {
 
   const verDetalle = (empresa: any) => {
     setEmpresaViendo(empresa);
-    setActiveTabDetalle('general'); // Resetear pestaña al abrir un nuevo detalle
+    setActiveTabDetalle('general');
   };
   
   const eliminarEmpresa = async (id: string) => {
@@ -59,7 +53,6 @@ const EmpresasDashboard = () => {
         await eliminarRegistro('empresas', id);
         setEmpresaViendo(null); 
       } catch (error) {
-        console.error("Error al eliminar:", error);
         alert('Hubo un error al eliminar. Revisa tu conexión a internet.');
       }
     }
@@ -70,11 +63,8 @@ const EmpresasDashboard = () => {
   const empresasFiltradas = useMemo(() => {
     return empresas.filter(emp => {
       let pasaFiltro = true;
-      if (filtroActivo === 'Empresa Inactiva') {
-        pasaFiltro = emp.status === 'Inactiva';
-      } else if (filtroActivo !== 'Todo') {
-        pasaFiltro = emp.tiposServicio === filtroActivo;
-      }
+      if (filtroActivo === 'Empresa Inactiva') pasaFiltro = emp.status === 'Inactiva';
+      else if (filtroActivo !== 'Todo') pasaFiltro = emp.tiposServicio === filtroActivo;
 
       if (!pasaFiltro) return false;
       if (!busqueda.trim()) return true;
@@ -83,7 +73,6 @@ const EmpresasDashboard = () => {
       return (
         (emp.nombre || '').toLowerCase().includes(term) ||
         (emp.numCliente || '').toLowerCase().includes(term) ||
-        (emp.nombreCorto || '').toLowerCase().includes(term) ||
         (emp.rfcTaxId || '').toLowerCase().includes(term)
       );
     });
@@ -91,24 +80,14 @@ const EmpresasDashboard = () => {
 
   const exportarCSV = () => {
     if (empresasFiltradas.length === 0) return;
-
     const headers = ['# de Cliente', 'Razon Social', 'Nombre Corto', 'Status', 'Tipo de Servicios', 'RFC/Tax ID', 'Ultimo Servicio', 'Direccion', 'Telefono', 'Correo'];
     const csvContent = [
       headers.join(','),
-      ...empresasFiltradas.map(emp => {
-        return [
-          `"${emp.numCliente || ''}"`,
-          `"${(emp.nombre || '').replace(/"/g, '""')}"`,
-          `"${(emp.nombreCorto || '').replace(/"/g, '""')}"`,
-          `"${emp.status || ''}"`,
-          `"${emp.tiposServicio || ''}"`,
-          `"${emp.rfcTaxId || ''}"`,
-          `"${emp.fechaUltimoServicio || ''}"`,
-          `"${(emp.direccion || '').replace(/"/g, '""')}"`,
-          `"${emp.telefono || ''}"`,
-          `"${emp.correo || ''}"`
-        ].join(',');
-      })
+      ...empresasFiltradas.map(emp => [
+        `"${emp.numCliente || ''}"`, `"${(emp.nombre || '').replace(/"/g, '""')}"`, `"${(emp.nombreCorto || '').replace(/"/g, '""')}"`,
+        `"${emp.status || ''}"`, `"${emp.tiposServicio || ''}"`, `"${emp.rfcTaxId || ''}"`, `"${emp.fechaUltimoServicio || ''}"`,
+        `"${(emp.direccionLabel || emp.direccion || '').replace(/"/g, '""')}"`, `"${emp.telefono || ''}"`, `"${emp.correo || ''}"`
+      ].join(','))
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -116,41 +95,29 @@ const EmpresasDashboard = () => {
     const link = document.createElement('a');
     link.setAttribute('href', url);
     link.setAttribute('download', `Empresas_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
   const tabStyle = (isActive: boolean) => ({
-    padding: '12px 24px',
-    background: 'none',
-    border: 'none',
+    padding: '12px 20px', background: 'none', border: 'none',
     borderBottom: isActive ? '2px solid #D84315' : '2px solid transparent',
-    color: isActive ? '#f0f6fc' : '#8b949e',
-    cursor: 'pointer',
-    fontWeight: isActive ? '600' : 'normal',
-    fontSize: '0.95rem',
-    transition: 'all 0.2s ease',
-    outline: 'none'
+    color: isActive ? '#f0f6fc' : '#8b949e', cursor: 'pointer',
+    fontWeight: isActive ? '600' : 'normal', fontSize: '0.9rem',
+    transition: 'all 0.2s ease', outline: 'none'
   });
 
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
       
-      {/* FORMULARIO MODAL */}
       {estadoFormulario !== 'cerrado' && (
         <FormularioEmpresa 
-          estado={estadoFormulario} 
-          initialData={empresaEditando}
-          registros={empresas}
+          estado={estadoFormulario} initialData={empresaEditando} registros={empresas}
           onClose={() => { setEstadoFormulario('cerrado'); setEmpresaEditando(null); }}
-          onMinimize={() => setEstadoFormulario('minimizado')} 
-          onRestore={() => setEstadoFormulario('abierto')}
+          onMinimize={() => setEstadoFormulario('minimizado')} onRestore={() => setEstadoFormulario('abierto')}
         />
       )}
 
-      {/* MODAL DETALLES CON PESTAÑAS */}
+      {/* MODAL DETALLES CON 3 PESTAÑAS */}
       {empresaViendo && (
         <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 1000 }}>
           <div className="form-card detail-card" style={{ maxWidth: '650px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px', overflow: 'hidden' }}>
@@ -162,17 +129,14 @@ const EmpresasDashboard = () => {
             
             {/* PESTAÑAS DEL DETALLE */}
             <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
-              <button type="button" onClick={() => setActiveTabDetalle('general')} style={tabStyle(activeTabDetalle === 'general')}>
-                General
-              </button>
-              <button type="button" onClick={() => setActiveTabDetalle('fiscal')} style={tabStyle(activeTabDetalle === 'fiscal')}>
-                Comercial / Fiscal
-              </button>
+              <button type="button" onClick={() => setActiveTabDetalle('general')} style={tabStyle(activeTabDetalle === 'general')}>General</button>
+              <button type="button" onClick={() => setActiveTabDetalle('fiscal')} style={tabStyle(activeTabDetalle === 'fiscal')}>Comercial / Fiscal</button>
+              <button type="button" onClick={() => setActiveTabDetalle('contacto')} style={tabStyle(activeTabDetalle === 'contacto')}>Contacto</button>
             </div>
 
             <div className="detail-content" style={{ padding: '24px', minHeight: '300px' }}>
               
-              {/* CONTENIDO PESTAÑA: GENERAL */}
+              {/* PESTAÑA: GENERAL */}
               {activeTabDetalle === 'general' && (
                 <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Razón Social</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '1rem', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.nombre)}</span></div>
@@ -181,15 +145,13 @@ const EmpresasDashboard = () => {
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Servicios</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tiposServicio)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.direccion)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Teléfono / Correo</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.telefono)} | {mostrarDato(empresaViendo.correo)}</span></div>
                 </div>
               )}
 
-              {/* CONTENIDO PESTAÑA: FISCAL Y COMERCIAL */}
+              {/* PESTAÑA: FISCAL Y COMERCIAL */}
               {activeTabDetalle === 'fiscal' && (
                 <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo.regimenFiscal)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo.regimenFiscalLabel || empresaViendo.regimenFiscal)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Moneda</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.moneda)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Factura</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tipoFactura)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Condición de Pago</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.condicionPago)}</span></div>
@@ -198,9 +160,18 @@ const EmpresasDashboard = () => {
                 </div>
               )}
 
+              {/* PESTAÑA: CONTACTO */}
+              {activeTabDetalle === 'contacto' && (
+                <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección de la Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.direccionLabel || empresaViendo.direccion)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Teléfono</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.telefono)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Correo Electrónico</span><span className="detail-value" style={{ color: '#58a6ff' }}>{mostrarDato(empresaViendo.correo)}</span></div>
+                </div>
+              )}
+
             </div>
 
-            <div className="form-actions detail-actions" style={{ padding: '24px', justifyContent: 'space-between', borderTop: '1px solid #30363d', backgroundColor: '#161b22' }}>
+            <div className="form-actions detail-actions" style={{ padding: '24px', justifyContent: 'space-between', borderTop: '1px solid #30363d', backgroundColor: '#161b22', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
               <div style={{ display: 'flex', gap: '12px' }}>
                 <button onClick={() => eliminarEmpresa(empresaViendo.id)} className="btn btn-danger-solid" style={{ backgroundColor: '#da3633', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Eliminar</button>
                 <button onClick={() => editarEmpresa(empresaViendo)} className="btn btn-primary" style={{ backgroundColor: '#2ea043', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Editar</button>

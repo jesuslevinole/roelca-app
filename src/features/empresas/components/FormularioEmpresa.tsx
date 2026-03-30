@@ -1,57 +1,149 @@
 // src/features/empresas/components/FormularioEmpresa.tsx
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, onSnapshot, addDoc } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro } from '../../../config/firebase';
+import { FormularioDireccion } from '../../direcciones/components/FormularioDireccion'; 
 
 // =========================================
-// SUB-COMPONENTE: MODAL DE CONFIGURACIÓN
+// SUB-COMPONENTE: SELECTOR CON BUSCADOR ESTRICTO
 // =========================================
-const FieldConfigModal: React.FC<{
-  isOpen: boolean;
-  onClose: () => void;
-  fields: { name: string; label: string }[];
-  requiredFields: string[];
-  toggleRequired: (f: string) => void;
-}> = ({ isOpen, onClose, fields, requiredFields, toggleRequired }) => {
+const SearchableSelect: React.FC<{
+  options: { id: string, label: string }[];
+  value: string;
+  onChange: (id: string, label: string) => void;
+  placeholder?: string;
+  required?: boolean;
+}> = ({ options, value, onChange, placeholder = "Buscar...", required = false }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  const selectedLabel = options.find(o => o.id === value)?.label || '';
+
+  useEffect(() => {
+    setSearchTerm(selectedLabel);
+  }, [value, selectedLabel]);
+
+  const filteredOptions = options.filter(opt => 
+    opt.label.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <input
+        type="text"
+        className="form-control"
+        placeholder={placeholder}
+        value={isOpen ? searchTerm : selectedLabel}
+        onChange={(e) => {
+          setSearchTerm(e.target.value);
+          setIsOpen(true);
+        }}
+        onFocus={() => {
+          setSearchTerm(''); 
+          setIsOpen(true);
+        }}
+        onBlur={() => {
+          // Timeout para permitir el clic en la lista
+          setTimeout(() => {
+            setIsOpen(false);
+            // LÓGICA ESTRICTA: Si no seleccionó nada válido, revertimos al label guardado o limpiamos
+            const match = options.find(o => o.label.toLowerCase() === searchTerm.toLowerCase());
+            if (!match && searchTerm !== selectedLabel) {
+               setSearchTerm(selectedLabel);
+            }
+          }, 200);
+        }}
+        required={required && !value} 
+        style={{
+          cursor: 'text',
+          border: isOpen ? '1px solid #3b82f6' : '1px solid #30363d',
+          backgroundColor: '#010409',
+          color: '#c9d1d9'
+        }}
+      />
+      
+      {isOpen && (
+        <ul style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '200px', overflowY: 'auto',
+          backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '4px', marginTop: '4px',
+          padding: '0', margin: '4px 0 0 0', listStyle: 'none', zIndex: 1000, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.5)'
+        }}>
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map(opt => (
+              <li
+                key={opt.id}
+                onClick={() => {
+                  onChange(opt.id, opt.label);
+                  setSearchTerm(opt.label);
+                  setIsOpen(false);
+                }}
+                style={{ padding: '8px 12px', cursor: 'pointer', color: '#c9d1d9', borderBottom: '1px solid #21262d', fontSize: '0.85rem' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                {opt.label}
+              </li>
+            ))
+          ) : (
+            <li style={{ padding: '8px 12px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>
+              No se encontraron coincidencias
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+// =========================================
+// SUB-COMPONENTE: MODAL NUEVO RÉGIMEN FISCAL
+// =========================================
+const ModalNuevoRegimen: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const [clave, setClave] = useState('');
+  const [descripcion, setDescripcion] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
   if (!isOpen) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGuardando(true);
+    try {
+      await addDoc(collection(db, 'catalogo_regimen_fiscal'), { clave, descripcion });
+      onClose();
+    } catch (error) {
+      alert("Error al guardar el régimen fiscal.");
+    } finally {
+      setGuardando(false);
+    }
+  };
+
   return (
     <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 2000 }}>
-      <div className="form-card" style={{ maxWidth: '400px', borderRadius: '16px', border: '1px solid #444', backgroundColor: '#0d1117' }}>
-        <div className="form-header" style={{ padding: '20px 24px', borderBottom: '1px solid #30363d', marginBottom: '0' }}>
-          <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem', margin: 0, color: '#f0f6fc' }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
-            Campos Obligatorios
-          </h3>
-          <button className="close-x" onClick={onClose} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+      <div className="form-card" style={{ maxWidth: '400px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px' }}>
+        <div className="form-header" style={{ padding: '20px', borderBottom: '1px solid #30363d' }}>
+          <h3 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.1rem' }}>Nuevo Régimen Fiscal</h3>
+          <button onClick={onClose} className="close-x" style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer' }}>✕</button>
         </div>
-        <div style={{ padding: '24px' }}>
-          <p style={{ fontSize: '0.85rem', color: '#8b949e', marginBottom: '20px', lineHeight: '1.5' }}>
-            Selecciona qué campos deben ser obligatorios al llenar este formulario.
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            {fields.map(f => (
-              <label key={f.name} style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '0.95rem', color: '#c9d1d9' }}>
-                <input 
-                  type="checkbox" 
-                  checked={requiredFields.includes(f.name)} 
-                  onChange={() => toggleRequired(f.name)} 
-                  style={{ width: '18px', height: '18px', accentColor: '#D84315', cursor: 'pointer' }}
-                />
-                {f.label}
-              </label>
-            ))}
+        <form onSubmit={handleSubmit} style={{ padding: '20px' }}>
+          <div className="form-group">
+            <label className="form-label">Clave (Ej. 601) *</label>
+            <input type="text" className="form-control" value={clave} onChange={e => setClave(e.target.value)} required />
           </div>
-          <div style={{ marginTop: '30px', display: 'flex', justifyContent: 'flex-end' }}>
-            <button type="button" className="btn-primary" onClick={onClose} style={{ width: '100%', padding: '10px' }}>Listo</button>
+          <div className="form-group">
+            <label className="form-label">Descripción *</label>
+            <input type="text" className="form-control" value={descripcion} onChange={e => setDescripcion(e.target.value)} required />
           </div>
-        </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '20px' }}>
+            <button type="button" onClick={onClose} className="btn btn-outline">Cancelar</button>
+            <button type="submit" className="btn btn-primary" disabled={guardando}>{guardando ? 'Guardando...' : 'Guardar'}</button>
+          </div>
+        </form>
       </div>
     </div>
   );
 };
+
 
 // =========================================
 // COMPONENTE PRINCIPAL
@@ -68,11 +160,16 @@ interface FormProps {
 export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, registros, onClose, onMinimize, onRestore }) => {
   const [cargando, setCargando] = useState(false);
   
-  // ESTADO PARA LAS PESTAÑAS
-  const [activeTab, setActiveTab] = useState<'general' | 'fiscal'>('general');
+  // ESTADO PARA LAS PESTAÑAS (Ahora son 3)
+  const [activeTab, setActiveTab] = useState<'general' | 'fiscal' | 'contacto'>('general');
   
-  const [regimenesFiscales, setRegimenesFiscales] = useState<any[]>([]);
+  // ESTADOS DE LOS CATÁLOGOS Y MODALES
+  const [regimenesFiscales, setRegimenesFiscales] = useState<{id: string, label: string}[]>([]);
+  const [direccionesDB, setDireccionesDB] = useState<{id: string, label: string}[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
+  
+  const [modalDireccionAbierto, setModalDireccionAbierto] = useState(false);
+  const [modalRegimenAbierto, setModalRegimenAbierto] = useState(false);
 
   const [formData, setFormData] = useState({
     numCliente: '',
@@ -82,60 +179,51 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     tiposServicio: 'Cliente (Paga)',
     rfcTaxId: '',
     fechaUltimoServicio: '',
-    direccion: '',
-    telefono: '',
-    correo: '',
-    regimenFiscal: '',
+    
+    // --- FISCAL ---
+    regimenFiscalId: '',
+    regimenFiscalLabel: '',
     moneda: '',
     tipoFactura: '',
     condicionPago: 'Crédito',
     diasCredito: 30,
-    limiteCredito: 0.00
+    limiteCredito: 0.00,
+
+    // --- CONTACTO ---
+    direccionId: '',
+    direccionLabel: '',
+    telefono: '',
+    correo: ''
   });
 
-  const [isConfigOpen, setIsConfigOpen] = useState(false);
-  const [requiredFields, setRequiredFields] = useState<string[]>([]);
-  
-  const configuracionCampos = [
-    { name: 'nombre', label: 'Razón Social' },
-    { name: 'tiposServicio', label: 'Tipo de Servicio' },
-    { name: 'rfcTaxId', label: 'RFC / Tax ID' },
-    { name: 'regimenFiscal', label: 'Régimen Fiscal' },
-    { name: 'moneda', label: 'Moneda' }
-  ];
-
+  // --- Cargar Catálogos de Firebase en Tiempo Real ---
   useEffect(() => {
-    const savedConfig = localStorage.getItem('formConfig_empresa');
-    if (savedConfig) {
-      setRequiredFields(JSON.parse(savedConfig));
-    } else {
-      setRequiredFields(['nombre', 'tiposServicio', 'rfcTaxId']);
-    }
+    const unsubRegimenes = onSnapshot(collection(db, 'catalogo_regimen_fiscal'), (snap) => {
+      setRegimenesFiscales(snap.docs.map(doc => {
+        const d = doc.data();
+        return { id: doc.id, label: `${d.clave} - ${d.descripcion}` };
+      }));
+    });
 
-    const fetchCatalogos = async () => {
-      try {
-        const regimenSnap = await getDocs(collection(db, 'catalogo_regimen_fiscal'));
-        setRegimenesFiscales(regimenSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const unsubDirecciones = onSnapshot(collection(db, 'direcciones'), (snap) => {
+      setDireccionesDB(snap.docs.map(doc => {
+        const d = doc.data();
+        return { id: doc.id, label: d.direccionCompleta || 'Dirección sin formato' };
+      }));
+    });
 
-        const monedaSnap = await getDocs(collection(db, 'catalogo_moneda'));
-        setMonedas(monedaSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      } catch (error) {
-        console.error("Error al cargar catálogos:", error);
-      }
+    const fetchMonedas = async () => {
+      const monedaSnap = await getDocs(collection(db, 'catalogo_moneda'));
+      setMonedas(monedaSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     };
 
-    fetchCatalogos();
+    fetchMonedas();
+
+    return () => {
+      unsubRegimenes();
+      unsubDirecciones();
+    };
   }, []);
-
-  const toggleRequired = (fieldName: string) => {
-    const newRequired = requiredFields.includes(fieldName)
-      ? requiredFields.filter(f => f !== fieldName)
-      : [...requiredFields, fieldName];
-    setRequiredFields(newRequired);
-    localStorage.setItem('formConfig_empresa', JSON.stringify(newRequired));
-  };
-
-  const isRequired = (fieldName: string) => requiredFields.includes(fieldName);
 
   const generarSiguienteNumCliente = () => {
     if (registros.length === 0) return 'EMP-001';
@@ -174,20 +262,11 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validación manual para evitar que el navegador falle al tener inputs ocultos en otra pestaña
-    for (const field of requiredFields) {
-      if (!formData[field as keyof typeof formData]) {
-        const label = configuracionCampos.find(c => c.name === field)?.label || field;
-        alert(`El campo "${label}" es obligatorio.`);
-        
-        // Cambiamos automáticamente a la pestaña donde falta el dato
-        if (['regimenFiscal', 'moneda'].includes(field)) {
-          setActiveTab('fiscal');
-        } else {
-          setActiveTab('general');
-        }
-        return; 
-      }
+    // Validar requeridos visualmente saltando a la pestaña
+    if (!formData.nombre || !formData.rfcTaxId) {
+      alert("Faltan campos obligatorios en Información General.");
+      setActiveTab('general');
+      return;
     }
 
     setCargando(true);
@@ -207,30 +286,16 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     }
   };
 
-  // --- ESTILOS DE LAS PESTAÑAS ---
   const tabStyle = (isActive: boolean) => ({
-    padding: '12px 24px',
-    background: 'none',
-    border: 'none',
+    padding: '12px 20px', background: 'none', border: 'none',
     borderBottom: isActive ? '2px solid #D84315' : '2px solid transparent',
-    color: isActive ? '#f0f6fc' : '#8b949e',
-    cursor: 'pointer',
-    fontWeight: isActive ? '600' : 'normal',
-    fontSize: '0.95rem',
-    transition: 'all 0.2s ease',
-    outline: 'none'
+    color: isActive ? '#f0f6fc' : '#8b949e', cursor: 'pointer',
+    fontWeight: isActive ? '600' : 'normal', fontSize: '0.9rem',
+    transition: 'all 0.2s ease', outline: 'none'
   });
 
   return (
     <>
-      <FieldConfigModal 
-        isOpen={isConfigOpen} 
-        onClose={() => setIsConfigOpen(false)} 
-        fields={configuracionCampos} 
-        requiredFields={requiredFields} 
-        toggleRequired={toggleRequired} 
-      />
-
       <div className={`modal-overlay ${estado === 'minimizado' ? 'minimized' : ''}`}>
         <div className="form-card" style={{ maxWidth: '850px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px' }}>
           
@@ -239,11 +304,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
               {estado === 'minimizado' ? 'Editando...' : (initialData ? `Editar Empresa` : 'Nueva Empresa')}
             </h2>
             <div className="header-actions" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              {estado === 'abierto' && (
-                <button type="button" onClick={() => setIsConfigOpen(true)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer' }} title="Configurar campos obligatorios">
-                  ⚙️
-                </button>
-              )}
               {estado === 'abierto' ? (
                 <button type="button" onClick={onMinimize} className="btn-window">🗕</button>
               ) : (
@@ -255,13 +315,16 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
           <div style={{ display: estado === 'minimizado' ? 'none' : 'block' }}>
             
-            {/* NAVEGACIÓN DE PESTAÑAS */}
+            {/* NAVEGACIÓN DE PESTAÑAS (3 Tabs) */}
             <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
               <button type="button" onClick={() => setActiveTab('general')} style={tabStyle(activeTab === 'general')}>
                 Información General
               </button>
               <button type="button" onClick={() => setActiveTab('fiscal')} style={tabStyle(activeTab === 'fiscal')}>
-                Comercial y Fiscal
+                Comercial / Fiscal
+              </button>
+              <button type="button" onClick={() => setActiveTab('contacto')} style={tabStyle(activeTab === 'contacto')}>
+                Contacto
               </button>
             </div>
 
@@ -276,8 +339,8 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Razón Social {isRequired('nombre') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                    <input type="text" name="nombre" className="form-control" value={formData.nombre} onChange={handleChange} />
+                    <label className="form-label">Razón Social <span style={{ color: '#ff4d4d' }}>*</span></label>
+                    <input type="text" name="nombre" className="form-control" value={formData.nombre} onChange={handleChange} required />
                   </div>
 
                   <div className="form-group">
@@ -294,8 +357,8 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Tipo de Servicios {isRequired('tiposServicio') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                    <select name="tiposServicio" className="form-control" value={formData.tiposServicio} onChange={handleChange}>
+                    <label className="form-label">Tipo de Servicios <span style={{ color: '#ff4d4d' }}>*</span></label>
+                    <select name="tiposServicio" className="form-control" value={formData.tiposServicio} onChange={handleChange} required>
                       <option value="Cliente (Paga)">Cliente (Paga)</option>
                       <option value="Proveedor (Transporte)">Proveedor (Transporte)</option>
                       <option value="Proveedor (Servicios)">Proveedor (Servicios)</option>
@@ -307,23 +370,8 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">RFC / Tax ID {isRequired('rfcTaxId') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                    <input type="text" name="rfcTaxId" className="form-control font-mono" value={formData.rfcTaxId} onChange={handleChange} />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Dirección Completa</label>
-                    <input type="text" name="direccion" className="form-control" value={formData.direccion} onChange={handleChange} />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Teléfono</label>
-                    <input type="tel" name="telefono" className="form-control" value={formData.telefono} onChange={handleChange} />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Correo Electrónico</label>
-                    <input type="email" name="correo" className="form-control" value={formData.correo} onChange={handleChange} />
+                    <label className="form-label">RFC / Tax ID <span style={{ color: '#ff4d4d' }}>*</span></label>
+                    <input type="text" name="rfcTaxId" className="form-control font-mono" value={formData.rfcTaxId} onChange={handleChange} required />
                   </div>
                 </div>
               </div>
@@ -332,20 +380,25 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
               <div style={{ display: activeTab === 'fiscal' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   
-                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                    <label className="form-label">Régimen Fiscal {isRequired('regimenFiscal') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
-                    <select name="regimenFiscal" className="form-control" value={formData.regimenFiscal} onChange={handleChange}>
-                      <option value="">Seleccione Régimen Fiscal...</option>
-                      {regimenesFiscales.map(reg => (
-                        <option key={reg.id} value={`${reg.clave} - ${reg.descripcion}`}>
-                          {reg.clave} - {reg.descripcion}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="form-group" style={{ gridColumn: 'span 2', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
+                    <label className="form-label" style={{ color: '#58a6ff' }}>Régimen Fiscal (Buscar en Catálogo)</label>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <div style={{ flex: 1 }}>
+                        <SearchableSelect 
+                          options={regimenesFiscales}
+                          value={formData.regimenFiscalId}
+                          onChange={(id, label) => setFormData(prev => ({ ...prev, regimenFiscalId: id, regimenFiscalLabel: label }))}
+                          placeholder="Buscar Régimen Fiscal..."
+                        />
+                      </div>
+                      <button type="button" className="btn btn-outline" onClick={() => setModalRegimenAbierto(true)} style={{ height: '38px', whiteSpace: 'nowrap' }}>
+                        + Nuevo
+                      </button>
+                    </div>
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Moneda {isRequired('moneda') && <span style={{ color: '#ff4d4d' }}>*</span>}</label>
+                    <label className="form-label">Moneda</label>
                     <select name="moneda" className="form-control" value={formData.moneda} onChange={handleChange}>
                       <option value="">Seleccione Moneda...</option>
                       {monedas.map(mon => (
@@ -356,14 +409,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
                   <div className="form-group">
                     <label className="form-label">Tipo de Factura</label>
-                    <input 
-                      type="text" 
-                      name="tipoFactura" 
-                      className="form-control" 
-                      value={formData.tipoFactura} 
-                      onChange={handleChange} 
-                      placeholder="Ej. Factura Fiscal | Pesos" 
-                    />
+                    <input type="text" name="tipoFactura" className="form-control" value={formData.tipoFactura} onChange={handleChange} placeholder="Ej. Factura Fiscal | Pesos" />
                   </div>
 
                   <div className="form-group">
@@ -375,34 +421,46 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>
-                      Días de Crédito
-                    </label>
-                    <input 
-                      type="number" 
-                      name="diasCredito" 
-                      className="form-control" 
-                      value={formData.diasCredito} 
-                      onChange={(e) => setFormData(prev => ({ ...prev, diasCredito: parseInt(e.target.value) || 0 }))} 
-                      disabled={formData.condicionPago === 'Contado'}
-                      style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }}
-                    />
+                    <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>Días de Crédito</label>
+                    <input type="number" name="diasCredito" className="form-control" value={formData.diasCredito} onChange={(e) => setFormData(prev => ({ ...prev, diasCredito: parseInt(e.target.value) || 0 }))} disabled={formData.condicionPago === 'Contado'} style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }} />
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>
-                      Límite de Crédito ($)
-                    </label>
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      name="limiteCredito" 
-                      className="form-control" 
-                      value={formData.limiteCredito} 
-                      onChange={(e) => setFormData(prev => ({ ...prev, limiteCredito: parseFloat(e.target.value) || 0 }))} 
-                      disabled={formData.condicionPago === 'Contado'}
-                      style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }}
-                    />
+                    <label className="form-label" style={{ color: formData.condicionPago === 'Contado' ? '#484f58' : '#c9d1d9' }}>Límite de Crédito ($)</label>
+                    <input type="number" step="0.01" name="limiteCredito" className="form-control" value={formData.limiteCredito} onChange={(e) => setFormData(prev => ({ ...prev, limiteCredito: parseFloat(e.target.value) || 0 }))} disabled={formData.condicionPago === 'Contado'} style={{ opacity: formData.condicionPago === 'Contado' ? 0.5 : 1 }} />
+                  </div>
+                </div>
+              </div>
+
+              {/* --- PESTAÑA 3: CONTACTO Y DIRECCIÓN --- */}
+              <div style={{ display: activeTab === 'contacto' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
+                <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                  
+                  <div className="form-group" style={{ gridColumn: 'span 2', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
+                    <label className="form-label" style={{ color: '#58a6ff' }}>Dirección de la Empresa (Buscar en Base de Datos)</label>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <div style={{ flex: 1 }}>
+                        <SearchableSelect 
+                          options={direccionesDB}
+                          value={formData.direccionId}
+                          onChange={(id, label) => setFormData(prev => ({ ...prev, direccionId: id, direccionLabel: label, direccion: label }))} // Guardamos tambien en 'direccion' por retrocompatibilidad
+                          placeholder="Buscar dirección guardada..."
+                        />
+                      </div>
+                      <button type="button" className="btn btn-outline" onClick={() => setModalDireccionAbierto(true)} style={{ height: '38px', whiteSpace: 'nowrap' }}>
+                        + Añadir Nueva
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Teléfono de Contacto</label>
+                    <input type="tel" name="telefono" className="form-control" value={formData.telefono} onChange={handleChange} placeholder="Ej. 555-123-4567" />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Correo Electrónico</label>
+                    <input type="email" name="correo" className="form-control" value={formData.correo} onChange={handleChange} placeholder="contacto@empresa.com" />
                   </div>
 
                 </div>
@@ -420,6 +478,15 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
           </div>
         </div>
       </div>
+
+      {/* RENDERIZADO DE MODALES DE APOYO */}
+      {modalDireccionAbierto && (
+        <div style={{ zIndex: 2000, position: 'relative' }}>
+          <FormularioDireccion estado="abierto" onClose={() => setModalDireccionAbierto(false)} />
+        </div>
+      )}
+      
+      <ModalNuevoRegimen isOpen={modalRegimenAbierto} onClose={() => setModalRegimenAbierto(false)} />
     </>
   );
 };
