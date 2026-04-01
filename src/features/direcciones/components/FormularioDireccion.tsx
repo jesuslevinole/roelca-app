@@ -86,7 +86,8 @@ export const FormularioDireccion: React.FC<FormProps> = ({
 
   // 4. LÓGICA DE FORMATEO CONDICIONAL (ESTILO APPSHEET)
   const construirDireccionCompleta = (data: DireccionRecord) => {
-    const pais = data.paisNombre.toLowerCase();
+    // ¡AQUÍ ESTÁ LA MAGIA DEFENSIVA! Si no hay paisNombre, será un texto vacío.
+    const pais = data.paisNombre?.toLowerCase() || '';
     
     // Variables seguras para evitar "undefined" o "null" en el string
     const numExt = data.numExterior ? ` #${data.numExterior}` : '';
@@ -236,7 +237,7 @@ export const FormularioDireccion: React.FC<FormProps> = ({
               
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>País *</label>
-                <select className="form-control" value={formData.paisId} onChange={handlePaisChange} required style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
+                <select className="form-control" value={formData.paisId || ''} onChange={handlePaisChange} required style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
                   <option value="">Seleccione una opción</option>
                   {paises.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                 </select>
@@ -244,7 +245,7 @@ export const FormularioDireccion: React.FC<FormProps> = ({
 
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Estado *</label>
-                <select className="form-control" value={formData.estadoId} onChange={handleEstadoChange} required disabled={!formData.paisId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
+                <select className="form-control" value={formData.estadoId || ''} onChange={handleEstadoChange} required disabled={!formData.paisId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
                   <option value="">Seleccione una opción</option>
                   {estadosFiltrados.map(e => <option key={e.id} value={e.id}>{e.estado}</option>)}
                 </select>
@@ -252,7 +253,7 @@ export const FormularioDireccion: React.FC<FormProps> = ({
 
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Municipio *</label>
-                <select className="form-control" value={formData.municipioId} onChange={handleMunicipioChange} required disabled={!formData.estadoId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
+                <select className="form-control" value={formData.municipioId || ''} onChange={handleMunicipioChange} required disabled={!formData.estadoId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
                   <option value="">Seleccione una opción</option>
                   {municipiosFiltrados.map(m => <option key={m.id} value={m.id}>{m.municipio}</option>)}
                 </select>
@@ -260,7 +261,7 @@ export const FormularioDireccion: React.FC<FormProps> = ({
 
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Colonia *</label>
-                <select className="form-control" value={formData.coloniaId} onChange={handleColoniaChange} required disabled={!formData.municipioId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
+                <select className="form-control" value={formData.coloniaId || ''} onChange={handleColoniaChange} required disabled={!formData.municipioId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
                   <option value="">Seleccione una opción</option>
                   {coloniasFiltradas.map(c => <option key={c.id} value={c.id}>{c.colonia}</option>)}
                 </select>
@@ -268,7 +269,7 @@ export const FormularioDireccion: React.FC<FormProps> = ({
 
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Código Postal *</label>
-                <select className="form-control" value={formData.cpId} onChange={handleCpChange} required disabled={!formData.coloniaId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
+                <select className="form-control" value={formData.cpId || ''} onChange={handleCpChange} required disabled={!formData.coloniaId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
                   <option value="">Seleccione una opción</option>
                   {cpsFiltrados.map(cp => <option key={cp.id} value={cp.id}>{cp.codigo_postal}</option>)}
                 </select>
@@ -276,7 +277,7 @@ export const FormularioDireccion: React.FC<FormProps> = ({
 
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Calle *</label>
-                <select className="form-control" value={formData.calleId} onChange={handleCalleChange} required disabled={!formData.cpId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
+                <select className="form-control" value={formData.calleId || ''} onChange={handleCalleChange} required disabled={!formData.cpId} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}>
                   <option value="">Seleccione una opción</option>
                   {callesFiltradas.map(c => <option key={c.id} value={c.id}>{c.calle}</option>)}
                 </select>
@@ -284,11 +285,11 @@ export const FormularioDireccion: React.FC<FormProps> = ({
 
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}># Exterior *</label>
-                <input type="text" className="form-control" value={formData.numExterior} onChange={(e) => setFormData({...formData, numExterior: e.target.value})} required style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }} />
+                <input type="text" className="form-control" value={formData.numExterior || ''} onChange={(e) => setFormData({...formData, numExterior: e.target.value})} required style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }} />
               </div>
               <div className="form-group">
                 <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}># Interior</label>
-                <input type="text" className="form-control" value={formData.numInterior} onChange={(e) => setFormData({...formData, numInterior: e.target.value})} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }} />
+                <input type="text" className="form-control" value={formData.numInterior || ''} onChange={(e) => setFormData({...formData, numInterior: e.target.value})} style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }} />
               </div>
 
             </div>
