@@ -1,5 +1,9 @@
 // src/App.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, updateDoc } from 'firebase/firestore';
+import { auth, db } from './config/firebase'; 
+
 import { Login } from './features/auth/components/Login';
 import OperacionesDashboard from './features/operaciones/components/OperacionesDashboard';
 import EmpresasDashboard from './features/empresas/components/EmpresasDashboard';
@@ -12,8 +16,6 @@ import { ConveniosClientesDashboard } from './features/conveniosClientes/compone
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
 import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDashboard';
-
-// IMPORTACIONES: Módulos de Seguridad (Usuarios y Roles)
 import { RolesDashboard } from './usuarios/components/RolesDashboard';
 import { UsuariosDashboard } from './usuarios/components/UsuariosDashboard';
 
@@ -21,20 +23,96 @@ import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
+  const [cargandoAuth, setCargandoAuth] = useState(true); 
   
-  // SE AÑADIÓ 'usuarios' y 'roles' AL ESTADO
   const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles' | 'usuarios'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
   
-  // Estados para abrir/cerrar los submenús
   const [menuBasesDatosAbierto, setMenuBasesDatosAbierto] = useState(false);
   const [menuClientesAbierto, setMenuClientesAbierto] = useState(false);
   const [menuProveedoresAbierto, setMenuProveedoresAbierto] = useState(false);
   const [menuEmpleadosAbierto, setMenuEmpleadosAbierto] = useState(false);
-  const [menuConfiguracionAbierto, setMenuConfiguracionAbierto] = useState(false); // NUEVO ESTADO
+  const [menuConfiguracionAbierto, setMenuConfiguracionAbierto] = useState(false);
 
+  // 1. DETECTAR SESIÓN AL RECARGAR PÁGINA
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setEstaAutenticado(true);
+      } else {
+        setEstaAutenticado(false);
+      }
+      setCargandoAuth(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. FUNCIÓN PARA CERRAR SESIÓN (Manual o Automática)
+  const handleCerrarSesion = async (motivo: 'manual' | 'inactividad' = 'manual') => {
+    if (auth.currentUser) {
+      try {
+        await updateDoc(doc(db, 'usuarios', auth.currentUser.uid), { isOnline: false });
+      } catch (error) {
+        console.warn("No se pudo actualizar estado online al salir", error);
+      }
+      await signOut(auth);
+    }
+    setEstaAutenticado(false);
+    if (motivo === 'inactividad') {
+      alert("Tu sesión se ha cerrado automáticamente por seguridad tras 5 minutos de inactividad.");
+    }
+  };
+
+  // 3. TEMPORIZADOR DE 5 MINUTOS DE INACTIVIDAD
+  useEffect(() => {
+    if (!estaAutenticado) return;
+
+    // SOLUCIÓN AL ERROR DE TYPESCRIPT:
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const resetTimer = () => {
+      clearTimeout(timeoutId);
+      // 300,000 milisegundos = 5 minutos
+      timeoutId = setTimeout(() => {
+        handleCerrarSesion('inactividad');
+      }, 300000); 
+    };
+
+    window.addEventListener('mousemove', resetTimer);
+    window.addEventListener('keydown', resetTimer);
+    window.addEventListener('mousedown', resetTimer);
+    window.addEventListener('touchstart', resetTimer);
+
+    resetTimer(); 
+
+    return () => {
+      clearTimeout(timeoutId);
+      window.removeEventListener('mousemove', resetTimer);
+      window.removeEventListener('keydown', resetTimer);
+      window.removeEventListener('mousedown', resetTimer);
+      window.removeEventListener('touchstart', resetTimer);
+    };
+  }, [estaAutenticado]);
+
+  // 4. REGISTRAR SALIDA SI CIERRAN LA PESTAÑA
+  useEffect(() => {
+    const handleTabClose = () => {
+      if (auth.currentUser) {
+        updateDoc(doc(db, 'usuarios', auth.currentUser.uid), { isOnline: false }).catch(()=>console.log("Cerró muy rápido"));
+      }
+    };
+    window.addEventListener('beforeunload', handleTabClose);
+    return () => window.removeEventListener('beforeunload', handleTabClose);
+  }, []);
+
+  // MIENTRAS CARGA FIREBASE
+  if (cargandoAuth) {
+    return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#010409', color: '#8b949e' }}>Cargando Roelca Inc...</div>;
+  }
+
+  // SI NO ESTÁ AUTENTICADO -> LOGIN
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
@@ -44,7 +122,7 @@ function App() {
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
   const esEmpleadosActivo = moduloActivo === 'colaboradores';
-  const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios'; // NUEVA VALIDACIÓN
+  const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios';
 
   return (
     <div className="app-wrapper">
@@ -207,7 +285,7 @@ function App() {
         )}
 
         <div className="sidebar-footer">
-          <button className="btn-logout-sidebar" onClick={() => setEstaAutenticado(false)}>
+          <button className="btn-logout-sidebar" onClick={() => handleCerrarSesion('manual')}>
             Cerrar Sesión
           </button>
         </div>
@@ -256,7 +334,7 @@ function App() {
                 <div className="profile-actions">
                   <button className="btn-profile">Actualizar Foto de Perfil</button>
                   <button className="btn-profile">Configuración</button>
-                  <button className="btn-profile logout" onClick={() => setEstaAutenticado(false)}>Cerrar Sesión</button>
+                  <button className="btn-profile logout" onClick={() => handleCerrarSesion('manual')}>Cerrar Sesión</button>
                 </div>
               </div>
             )}

@@ -1,7 +1,8 @@
 // src/features/auth/components/Login.tsx
 import { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../../../config/firebase'; 
+import { doc, updateDoc } from 'firebase/firestore';
+import { auth, db } from '../../../config/firebase'; 
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -19,12 +20,23 @@ export const Login = ({ onLoginSuccess }: LoginProps) => {
     setCargando(true);
 
     try {
-      // Intenta iniciar sesión en Firebase con las credenciales ingresadas
-      await signInWithEmailAndPassword(auth, email, password);
-      onLoginSuccess(); // Credenciales correctas -> Entra al Dashboard
+      // 1. Iniciamos sesión con Firebase
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // 2. Registramos la hora de entrada y el estado "En línea" en la Base de Datos
+      try {
+        await updateDoc(doc(db, 'usuarios', user.uid), {
+          isOnline: true,
+          ultimoAcceso: new Date().toISOString()
+        });
+      } catch (err) {
+        console.warn("No se pudo actualizar el estado online. Verifica que el UID coincida con el documento en la colección usuarios.");
+      }
+
+      onLoginSuccess(); // Entra al Dashboard
     } catch (err: any) {
       console.error(err);
-      // Validaciones de error de Firebase
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
         setError('Correo o contraseña incorrectos. Verifica tus datos.');
       } else {
@@ -81,15 +93,12 @@ export const Login = ({ onLoginSuccess }: LoginProps) => {
           
         </form>
 
-        {/* --- BOTÓN DE BYPASS (ADMIN TEMPORAL) --- */}
         <div style={{ marginTop: '32px', borderTop: '1px solid #30363d', paddingTop: '24px', textAlign: 'center' }}>
           <p style={{ color: '#8b949e', fontSize: '0.75rem', marginBottom: '12px', textTransform: 'uppercase' }}>Opciones de Desarrollo</p>
           <button 
             type="button"
             onClick={onLoginSuccess} 
             style={{ background: 'transparent', border: '1px dashed #8b949e', color: '#8b949e', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', transition: 'all 0.2s' }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = '#c9d1d9'; e.currentTarget.style.borderColor = '#c9d1d9'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = '#8b949e'; e.currentTarget.style.borderColor = '#8b949e'; }}
           >
             Entrar como Admin (Bypass)
           </button>
