@@ -1,7 +1,7 @@
 // src/usuarios/components/UsuariosDashboard.tsx
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { db, secondaryAuth } from '../../config/firebase';
 
 export const UsuariosDashboard = () => {
@@ -61,6 +61,7 @@ export const UsuariosDashboard = () => {
     setCargando(true);
     try {
       if (usuarioActual) {
+        // MODO EDICIÓN
         await setDoc(doc(db, 'usuarios', usuarioActual.id), {
           nombre: nombre.toUpperCase(),
           roles: rolesAsignados,
@@ -68,15 +69,18 @@ export const UsuariosDashboard = () => {
         }, { merge: true });
         
       } else {
+        // MODO CREACIÓN
         if (password.length < 6) {
           alert('La contraseña debe tener al menos 6 caracteres.');
           setCargando(false);
           return;
         }
 
+        // 1. Creamos la cuenta en Firebase
         const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
         const newUserId = userCredential.user.uid;
 
+        // 2. Guardamos su perfil
         await setDoc(doc(db, 'usuarios', newUserId), {
           email: email.toLowerCase(),
           nombre: nombre.toUpperCase(),
@@ -87,6 +91,16 @@ export const UsuariosDashboard = () => {
           ultimoAcceso: null
         });
 
+        // 3. ENVIAMOS EL CORREO PARA QUE CAMBIE LA CONTRASEÑA TEMPORAL
+        try {
+          await sendPasswordResetEmail(secondaryAuth, email);
+          alert(`Usuario creado con éxito.\n\nSe ha enviado un correo a ${email} para que el usuario establezca su contraseña definitiva.`);
+        } catch (emailError) {
+          console.error("Error al enviar el correo:", emailError);
+          alert("El usuario fue creado, pero hubo un problema al enviar el correo automático.");
+        }
+
+        // 4. Limpiamos la sesión secundaria
         await signOut(secondaryAuth);
       }
       
@@ -227,7 +241,7 @@ export const UsuariosDashboard = () => {
 
               {!usuarioActual && (
                 <div className="form-group" style={{ marginBottom: '24px' }}>
-                  <label style={{ color: '#8b949e', fontSize: '0.85rem', display: 'block', marginBottom: '8px' }}>Contraseña (Mín. 6 caracteres) *</label>
+                  <label style={{ color: '#8b949e', fontSize: '0.85rem', display: 'block', marginBottom: '8px' }}>Contraseña Temporal (Mín. 6 caracteres) *</label>
                   <input 
                     type="password" 
                     value={password} 
@@ -237,6 +251,9 @@ export const UsuariosDashboard = () => {
                     className="form-control" 
                     style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', width: '100%', padding: '10px', borderRadius: '6px' }}
                   />
+                  <span style={{ fontSize: '0.75rem', color: '#8b949e', display: 'block', marginTop: '4px' }}>
+                    Se enviará un correo automático para que el usuario la cambie.
+                  </span>
                 </div>
               )}
 
