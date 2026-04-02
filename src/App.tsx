@@ -19,13 +19,17 @@ import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDas
 import { RolesDashboard } from './usuarios/components/RolesDashboard';
 import { UsuariosDashboard } from './usuarios/components/UsuariosDashboard';
 
+// NUEVO MÓDULO: Historial de Actividad
+import { LogsDashboard } from './features/configuracion/components/LogsDashboard';
+
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   const [cargandoAuth, setCargandoAuth] = useState(true); 
   
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles' | 'usuarios'>('operaciones');
+  // SE AÑADIÓ 'logs' AL ESTADO
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles' | 'usuarios' | 'logs'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -69,7 +73,6 @@ function App() {
   useEffect(() => {
     if (!estaAutenticado) return;
 
-    // SOLUCIÓN AL ERROR DE TYPESCRIPT:
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const resetTimer = () => {
@@ -122,7 +125,9 @@ function App() {
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
   const esEmpleadosActivo = moduloActivo === 'colaboradores';
-  const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios';
+  
+  // SE AÑADIÓ 'logs' A LA VALIDACIÓN
+  const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios' || moduloActivo === 'logs';
 
   return (
     <div className="app-wrapper">
@@ -258,7 +263,7 @@ function App() {
           Catálogos
         </div>
 
-        {/* ITEM DESPLEGABLE: Configuración (Usuarios y Roles) */}
+        {/* ITEM DESPLEGABLE: Configuración (Usuarios, Roles y Logs) */}
         <div 
           className={`sidebar-item sidebar-item-with-icon ${esConfiguracionActivo && !menuConfiguracionAbierto ? 'active' : ''}`} 
           onClick={() => setMenuConfiguracionAbierto(!menuConfiguracionAbierto)}
@@ -280,6 +285,12 @@ function App() {
               onClick={() => setModuloActivo('roles')}
             >
               Roles y Permisos
+            </div>
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'logs' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('logs')}
+            >
+              Historial de Actividad
             </div>
           </div>
         )}
@@ -357,6 +368,7 @@ function App() {
         {/* RENDERIZADO DE LOS MÓDULOS DE CONFIGURACIÓN */}
         {moduloActivo === 'roles' && <RolesDashboard />}
         {moduloActivo === 'usuarios' && <UsuariosDashboard />}
+        {moduloActivo === 'logs' && <LogsDashboard />}
         
       </div>
     </div>
