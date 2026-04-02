@@ -38,7 +38,7 @@ export const UsuariosDashboard = () => {
       setUsuarioActual(user);
       setNombre(user.nombre || '');
       setEmail(user.email || '');
-      setPassword(''); // No mostramos ni editamos la contraseña aquí por seguridad
+      setPassword(''); 
       setRolesAsignados(user.roles || []);
     } else {
       setUsuarioActual(null);
@@ -61,7 +61,6 @@ export const UsuariosDashboard = () => {
     setCargando(true);
     try {
       if (usuarioActual) {
-        // MODO EDICIÓN (Solo actualizamos Firestore, Auth no permite cambiar emails ajenos desde el cliente)
         await setDoc(doc(db, 'usuarios', usuarioActual.id), {
           nombre: nombre.toUpperCase(),
           roles: rolesAsignados,
@@ -69,27 +68,25 @@ export const UsuariosDashboard = () => {
         }, { merge: true });
         
       } else {
-        // MODO CREACIÓN (Usamos la App Secundaria para no cerrar la sesión del Admin)
         if (password.length < 6) {
           alert('La contraseña debe tener al menos 6 caracteres.');
           setCargando(false);
           return;
         }
 
-        // 1. Crear en Firebase Auth
         const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
         const newUserId = userCredential.user.uid;
 
-        // 2. Guardar el perfil en Firestore vinculándolo con su UID
         await setDoc(doc(db, 'usuarios', newUserId), {
           email: email.toLowerCase(),
           nombre: nombre.toUpperCase(),
           roles: rolesAsignados,
           fechaCreacion: new Date().toISOString(),
-          activo: true
+          activo: true,
+          isOnline: false,
+          ultimoAcceso: null
         });
 
-        // 3. Cerrar sesión en la app secundaria para limpiarla
         await signOut(secondaryAuth);
       }
       
@@ -108,6 +105,19 @@ export const UsuariosDashboard = () => {
     }
   };
 
+  // Función para formatear la fecha en español
+  const formatearFecha = (fechaIso: string) => {
+    if (!fechaIso) return 'Nunca ha ingresado';
+    const fecha = new Date(fechaIso);
+    return fecha.toLocaleString('es-ES', { 
+      day: '2-digit', 
+      month: 'short', 
+      year: 'numeric', 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  };
+
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
@@ -122,14 +132,16 @@ export const UsuariosDashboard = () => {
           <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d' }}>
             <tr>
               <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ACCIONES</th>
+              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ESTADO</th>
               <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>USUARIO</th>
               <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>CORREO</th>
               <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ROLES ASIGNADOS</th>
+              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ÚLTIMO ACCESO</th>
             </tr>
           </thead>
           <tbody>
             {usuarios.length === 0 ? (
-              <tr><td colSpan={4} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>No hay usuarios registrados.</td></tr>
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>No hay usuarios registrados.</td></tr>
             ) : (
               usuarios.map(user => (
                 <tr key={user.id} style={{ borderBottom: '1px solid #21262d' }}>
@@ -139,6 +151,22 @@ export const UsuariosDashboard = () => {
                       <button onClick={() => handleEliminar(user.id)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px' }}>Eliminar</button>
                     </div>
                   </td>
+                  
+                  {/* COLUMNA DE ESTADO ONLINE/OFFLINE */}
+                  <td style={{ padding: '16px', textAlign: 'center' }}>
+                    {user.isOnline ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#10b981', fontSize: '0.85rem', fontWeight: '500', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '4px 8px', borderRadius: '12px' }}>
+                        <span style={{ width: '8px', height: '8px', backgroundColor: '#10b981', borderRadius: '50%', display: 'inline-block', boxShadow: '0 0 8px #10b981' }}></span>
+                        En línea
+                      </span>
+                    ) : (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#8b949e', fontSize: '0.85rem', fontWeight: '500', backgroundColor: 'rgba(139, 148, 158, 0.1)', padding: '4px 8px', borderRadius: '12px' }}>
+                        <span style={{ width: '8px', height: '8px', backgroundColor: '#8b949e', borderRadius: '50%', display: 'inline-block' }}></span>
+                        Desconectado
+                      </span>
+                    )}
+                  </td>
+
                   <td style={{ padding: '16px', color: '#f0f6fc', fontWeight: '600' }}>{user.nombre}</td>
                   <td style={{ padding: '16px', color: '#8b949e' }}>{user.email}</td>
                   <td style={{ padding: '16px', color: '#c9d1d9' }}>
@@ -147,6 +175,11 @@ export const UsuariosDashboard = () => {
                         <span key={r} style={{ backgroundColor: '#21262d', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', border: '1px solid #30363d', color: '#58a6ff' }}>{r}</span>
                       ))}
                     </div>
+                  </td>
+
+                  {/* COLUMNA DE ÚLTIMO ACCESO */}
+                  <td style={{ padding: '16px', color: '#8b949e', fontSize: '0.9rem' }}>
+                    {formatearFecha(user.ultimoAcceso)}
                   </td>
                 </tr>
               ))
@@ -185,14 +218,13 @@ export const UsuariosDashboard = () => {
                     value={email} 
                     onChange={(e) => setEmail(e.target.value)} 
                     required 
-                    disabled={!!usuarioActual} // Deshabilitado si estamos editando
+                    disabled={!!usuarioActual} 
                     className="form-control" 
                     style={{ backgroundColor: !!usuarioActual ? '#161b22' : '#010409', border: '1px solid #30363d', color: !!usuarioActual ? '#8b949e' : '#c9d1d9', width: '100%', padding: '10px', borderRadius: '6px' }}
                   />
                 </div>
               </div>
 
-              {/* Solo pedimos contraseña al crear un usuario nuevo */}
               {!usuarioActual && (
                 <div className="form-group" style={{ marginBottom: '24px' }}>
                   <label style={{ color: '#8b949e', fontSize: '0.85rem', display: 'block', marginBottom: '8px' }}>Contraseña (Mín. 6 caracteres) *</label>
