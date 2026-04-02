@@ -13,16 +13,17 @@ import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/c
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
 import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDashboard';
 
-// NUEVA IMPORTACIÓN: Dashboard de Roles
+// IMPORTACIONES: Módulos de Seguridad (Usuarios y Roles)
 import { RolesDashboard } from './usuarios/components/RolesDashboard';
+import { UsuariosDashboard } from './usuarios/components/UsuariosDashboard';
 
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   
-  // SE AÑADIÓ 'roles' AL ESTADO
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles'>('operaciones');
+  // SE AÑADIÓ 'usuarios' y 'roles' AL ESTADO
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles' | 'usuarios'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -32,6 +33,7 @@ function App() {
   const [menuClientesAbierto, setMenuClientesAbierto] = useState(false);
   const [menuProveedoresAbierto, setMenuProveedoresAbierto] = useState(false);
   const [menuEmpleadosAbierto, setMenuEmpleadosAbierto] = useState(false);
+  const [menuConfiguracionAbierto, setMenuConfiguracionAbierto] = useState(false); // NUEVO ESTADO
 
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
@@ -42,6 +44,7 @@ function App() {
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
   const esEmpleadosActivo = moduloActivo === 'colaboradores';
+  const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios'; // NUEVA VALIDACIÓN
 
   return (
     <div className="app-wrapper">
@@ -177,13 +180,31 @@ function App() {
           Catálogos
         </div>
 
-        {/* NUEVO ITEM: Usuarios y Roles */}
+        {/* ITEM DESPLEGABLE: Configuración (Usuarios y Roles) */}
         <div 
-          className={`sidebar-item ${moduloActivo === 'roles' ? 'active' : ''}`} 
-          onClick={() => setModuloActivo('roles')}
+          className={`sidebar-item sidebar-item-with-icon ${esConfiguracionActivo && !menuConfiguracionAbierto ? 'active' : ''}`} 
+          onClick={() => setMenuConfiguracionAbierto(!menuConfiguracionAbierto)}
         >
-          Usuarios y Roles
+          <span>Configuración</span>
+          <span style={{ fontSize: '0.7rem' }}>{menuConfiguracionAbierto ? '▼' : '▶'}</span>
         </div>
+
+        {menuConfiguracionAbierto && (
+          <div className="sidebar-submenu">
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'usuarios' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('usuarios')}
+            >
+              Usuarios
+            </div>
+            <div 
+              className={`sidebar-subitem ${moduloActivo === 'roles' ? 'active' : ''}`} 
+              onClick={() => setModuloActivo('roles')}
+            >
+              Roles y Permisos
+            </div>
+          </div>
+        )}
 
         <div className="sidebar-footer">
           <button className="btn-logout-sidebar" onClick={() => setEstaAutenticado(false)}>
@@ -255,8 +276,9 @@ function App() {
         {moduloActivo === 'catalogos' && <CatalogosDashboard />}
         {moduloActivo === 'colaboradores' && <EmpleadosDashboard />}
         
-        {/* RENDERIZADO DEL NUEVO MÓDULO DE ROLES */}
+        {/* RENDERIZADO DE LOS MÓDULOS DE CONFIGURACIÓN */}
         {moduloActivo === 'roles' && <RolesDashboard />}
+        {moduloActivo === 'usuarios' && <UsuariosDashboard />}
         
       </div>
     </div>
