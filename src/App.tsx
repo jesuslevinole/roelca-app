@@ -11,17 +11,18 @@ import { UnidadesProveedorDashboard } from './features/unidadesProveedor/compone
 import { ConveniosClientesDashboard } from './features/conveniosClientes/components/ConveniosClientesDashboard';
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
-
-// NUEVA IMPORTACIÓN: Dashboard de Empleados
 import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDashboard';
+
+// NUEVA IMPORTACIÓN: Dashboard de Roles
+import { RolesDashboard } from './usuarios/components/RolesDashboard';
 
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   
-  // SE AÑADIÓ 'colaboradores' AL ESTADO
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores'>('operaciones');
+  // SE AÑADIÓ 'roles' AL ESTADO
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -30,8 +31,6 @@ function App() {
   const [menuBasesDatosAbierto, setMenuBasesDatosAbierto] = useState(false);
   const [menuClientesAbierto, setMenuClientesAbierto] = useState(false);
   const [menuProveedoresAbierto, setMenuProveedoresAbierto] = useState(false);
-  
-  // NUEVO ESTADO: Para el menú de Empleados
   const [menuEmpleadosAbierto, setMenuEmpleadosAbierto] = useState(false);
 
   if (!estaAutenticado) {
@@ -42,8 +41,6 @@ function App() {
   const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'direcciones';
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
-  
-  // NUEVA VALIDACIÓN: Empleados
   const esEmpleadosActivo = moduloActivo === 'colaboradores';
 
   return (
@@ -102,7 +99,7 @@ function App() {
           </div>
         )}
 
-        {/* NUEVO ITEM DESPLEGABLE: EMPLEADOS */}
+        {/* ITEM DESPLEGABLE: EMPLEADOS */}
         <div 
           className={`sidebar-item sidebar-item-with-icon ${esEmpleadosActivo && !menuEmpleadosAbierto ? 'active' : ''}`} 
           onClick={() => setMenuEmpleadosAbierto(!menuEmpleadosAbierto)}
@@ -180,6 +177,14 @@ function App() {
           Catálogos
         </div>
 
+        {/* NUEVO ITEM: Usuarios y Roles */}
+        <div 
+          className={`sidebar-item ${moduloActivo === 'roles' ? 'active' : ''}`} 
+          onClick={() => setModuloActivo('roles')}
+        >
+          Usuarios y Roles
+        </div>
+
         <div className="sidebar-footer">
           <button className="btn-logout-sidebar" onClick={() => setEstaAutenticado(false)}>
             Cerrar Sesión
@@ -248,9 +253,10 @@ function App() {
         {moduloActivo === 'conveniosClientes' && <ConveniosClientesDashboard />}
         {moduloActivo === 'conveniosProveedores' && <ConveniosProveedoresDashboard />}
         {moduloActivo === 'catalogos' && <CatalogosDashboard />}
-        
-        {/* RENDERIZADO DEL NUEVO MÓDULO */}
         {moduloActivo === 'colaboradores' && <EmpleadosDashboard />}
+        
+        {/* RENDERIZADO DEL NUEVO MÓDULO DE ROLES */}
+        {moduloActivo === 'roles' && <RolesDashboard />}
         
       </div>
     </div>

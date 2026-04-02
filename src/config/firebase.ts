@@ -31,3 +31,11 @@ export const actualizarRegistro = async (nombreColeccion: string, id: string, da
 export const eliminarRegistro = async (nombreColeccion: string, id: string) => {
   return await deleteDoc(doc(db, nombreColeccion, id));
 };
+
+// Agrega esto en tus importaciones al inicio si no lo tienes:
+// import { getAuth } from 'firebase/auth';
+
+// --- TRUCO PARA CREAR USUARIOS SIN CERRAR SESIÓN DEL ADMIN ---
+// Inicializamos una app secundaria con la misma configuración
+const secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
+export const secondaryAuth = getAuth(secondaryApp);
