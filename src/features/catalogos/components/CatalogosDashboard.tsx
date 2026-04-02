@@ -269,7 +269,6 @@ const CatalogosDashboard = () => {
             <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
           </div>
           
-          {/* Espaciador invisible para balancear visualmente si es necesario, o lo dejas vacío */}
           <div style={{ width: '100px' }}></div> 
         </div>
       </div>
@@ -277,19 +276,19 @@ const CatalogosDashboard = () => {
       {/* CUERPO DE LA TABLA CON SCROLL */}
       <div className="content-body" style={{ display: 'block' }}>
         <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
-          {/* Contenedor interno para manejar el scroll horizontal y vertical */}
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}> 
             <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '800px' }}>
               <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
+                  {/* ACCIONES AL INICIO DEL ENCABEZADO */}
+                  <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d' }}>
+                    Acciones
+                  </th>
                   {catalogoSeleccionado.fields.map((f: CatalogField) => (
                     <th key={f.name} style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
                       {f.label}
                     </th>
                   ))}
-                  <th style={{ padding: '16px', width: '100px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', right: 0, backgroundColor: '#161b22', zIndex: 11 }}>
-                    Acciones
-                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -308,6 +307,31 @@ const CatalogosDashboard = () => {
                       onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} 
                       onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
+                      {/* ACCIONES AL INICIO DEL CUERPO DE LA TABLA */}
+                      <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
+                        <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                          <button 
+                            className="btn-small" 
+                            onClick={() => { setRegistroActual(reg); setFormData(reg); setModalEstado('formulario'); }}
+                            style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            Editar
+                          </button>
+                          <button 
+                            className="btn-small" 
+                            onClick={async () => { if (window.confirm('¿Desea eliminar permanentemente este registro?')) await eliminarRegistro(`catalogo_${catalogoSeleccionado!.id}`, reg.id); }}
+                            style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* DATOS DINÁMICOS */}
                       {catalogoSeleccionado.fields.map((f: CatalogField) => {
                         const dOpt = f.dynamicOptions;
                         return (
@@ -318,25 +342,6 @@ const CatalogosDashboard = () => {
                           </td>
                         );
                       })}
-                      {/* Celda de acciones sticky para que siempre se vea aunque haya scroll horizontal */}
-                      <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', right: 0, backgroundColor: 'inherit', zIndex: 5 }} onClick={(e: any) => e.stopPropagation()}>
-                        <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                          <button 
-                            className="btn-small btn-edit" 
-                            onClick={() => { setRegistroActual(reg); setFormData(reg); setModalEstado('formulario'); }}
-                            style={{ background: 'transparent', border: '1px solid #30363d', borderRadius: '4px', color: '#c9d1d9', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem' }}
-                          >
-                            Editar
-                          </button>
-                          <button 
-                            className="btn-small btn-danger" 
-                            onClick={async () => { if (window.confirm('¿Desea eliminar permanentemente este registro?')) await eliminarRegistro(`catalogo_${catalogoSeleccionado!.id}`, reg.id); }}
-                            style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem' }}
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </td>
                     </tr>
                   ))
                 )}
