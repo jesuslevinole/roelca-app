@@ -63,15 +63,15 @@ export const DireccionesDashboard = () => {
         <table className="data-table" style={{ width: '100%', minWidth: '800px', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead>
             <tr>
-              {/* Se agregó position: sticky y backgroundColor para que no se traslape el texto al hacer scroll hacia abajo */}
+              {/* Acciones ahora está en la primera columna */}
+              <th style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: '#161b22', borderBottom: '1px solid #30363d', padding: '16px', width: '180px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
+                Acciones
+              </th>
               <th style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: '#161b22', borderBottom: '1px solid #30363d', padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
                 País
               </th>
               <th style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: '#161b22', borderBottom: '1px solid #30363d', padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
                 Dirección Completa
-              </th>
-              <th style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: '#161b22', borderBottom: '1px solid #30363d', padding: '16px', width: '180px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
-                Acciones
               </th>
             </tr>
           </thead>
@@ -81,12 +81,7 @@ export const DireccionesDashboard = () => {
             ) : (
               registros.map(reg => (
                 <tr key={reg.id} style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                  <td style={{ padding: '16px', color: '#f0f6fc', fontSize: '0.95rem', fontWeight: '600', whiteSpace: 'nowrap' }}>
-                    {reg.paisNombre}
-                  </td>
-                  <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', lineHeight: '1.4' }}>
-                    {reg.direccionCompleta}
-                  </td>
+                  {/* Celda de Acciones al principio */}
                   <td style={{ padding: '16px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                       <button 
@@ -106,6 +101,12 @@ export const DireccionesDashboard = () => {
                         Eliminar
                       </button>
                     </div>
+                  </td>
+                  <td style={{ padding: '16px', color: '#f0f6fc', fontSize: '0.95rem', fontWeight: '600', whiteSpace: 'nowrap' }}>
+                    {reg.paisNombre}
+                  </td>
+                  <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', lineHeight: '1.4' }}>
+                    {reg.direccionCompleta}
                   </td>
                 </tr>
               ))
