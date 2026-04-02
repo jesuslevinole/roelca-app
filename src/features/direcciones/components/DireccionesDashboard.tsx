@@ -39,7 +39,7 @@ export const DireccionesDashboard = () => {
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
       
-      {/* CABECERA AL ESTILO "TIPO DE CAMBIO" */}
+      {/* CABECERA */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <h2 style={{ fontSize: '1.25rem', color: '#8b949e', margin: 0, fontWeight: '400' }}>
           Bases de Datos {'>'} <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Direcciones ({registros.length})</span>
@@ -49,14 +49,30 @@ export const DireccionesDashboard = () => {
         </button>
       </div>
 
-      {/* ÁREA PRINCIPAL (TABLA COMPLETA) */}
-      <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
-        <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-          <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d' }}>
+      {/* ÁREA PRINCIPAL (TABLA COMPLETA CON SCROLL) */}
+      <div 
+        className="table-container" 
+        style={{ 
+          border: '1px solid #30363d', 
+          borderRadius: '8px', 
+          overflowX: 'auto', // Scroll Horizontal
+          overflowY: 'auto', // Scroll Vertical
+          maxHeight: 'calc(100vh - 200px)' // Altura dinámica para no desbordar la pantalla
+        }}
+      >
+        <table className="data-table" style={{ width: '100%', minWidth: '800px', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <thead>
             <tr>
-              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>País</th>
-              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>Dirección Completa</th>
-              <th style={{ padding: '16px', width: '150px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>Acciones</th>
+              {/* Se agregó position: sticky y backgroundColor para que no se traslape el texto al hacer scroll hacia abajo */}
+              <th style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: '#161b22', borderBottom: '1px solid #30363d', padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
+                País
+              </th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: '#161b22', borderBottom: '1px solid #30363d', padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
+                Dirección Completa
+              </th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 1, backgroundColor: '#161b22', borderBottom: '1px solid #30363d', padding: '16px', width: '180px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase' }}>
+                Acciones
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -65,19 +81,27 @@ export const DireccionesDashboard = () => {
             ) : (
               registros.map(reg => (
                 <tr key={reg.id} style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                  <td style={{ padding: '16px', color: '#f0f6fc', fontSize: '0.95rem', fontWeight: '600' }}>{reg.paisNombre}</td>
-                  <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', lineHeight: '1.4' }}>{reg.direccionCompleta}</td>
-                  <td style={{ padding: '16px', textAlign: 'center' }}>
+                  <td style={{ padding: '16px', color: '#f0f6fc', fontSize: '0.95rem', fontWeight: '600', whiteSpace: 'nowrap' }}>
+                    {reg.paisNombre}
+                  </td>
+                  <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', lineHeight: '1.4' }}>
+                    {reg.direccionCompleta}
+                  </td>
+                  <td style={{ padding: '16px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                       <button 
                         onClick={() => handleEditarRegistro(reg)} 
-                        style={{ background: 'transparent', border: '1px solid #30363d', borderRadius: '4px', color: '#c9d1d9', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                        style={{ background: 'transparent', border: '1px solid #30363d', borderRadius: '4px', color: '#c9d1d9', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                        onMouseEnter={(e) => e.currentTarget.style.borderColor = '#8b949e'}
+                        onMouseLeave={(e) => e.currentTarget.style.borderColor = '#30363d'}
                       >
                         Editar
                       </button>
                       <button 
                         onClick={() => handleEliminar(reg.id!)} 
-                        style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                        style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
                         Eliminar
                       </button>
