@@ -1,7 +1,7 @@
 // src/features/auth/components/Login.tsx
 import React, { useState } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { doc, updateDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../../../config/firebase';
 import { registrarLog } from '../../../utils/logger';
 
@@ -21,9 +21,57 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     setLoading(true);
 
     try {
+      // 1. Validar correo y contraseña en Firebase Auth
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
+      // 2. Traer el perfil del usuario para ver qué roles tiene asignados
+      const userDoc = await getDoc(doc(db, 'usuarios', user.uid));
+      if (!userDoc.exists()) throw new Error("Perfil de usuario no encontrado.");
+      const userData = userDoc.data();
+
+      // 3. Traer la configuración de seguridad global (La IP de la Oficina)
+      const configDoc = await getDoc(doc(db, 'configuracion', 'seguridad'));
+      const ipOficina = configDoc.exists() ? configDoc.data().ipOficina : '';
+
+      // 4. Verificar si alguno de sus roles requiere estar en la oficina
+      let requiereEstarEnOficina = false;
+      if (userData.roles && userData.roles.length > 0) {
+        const rolesQuery = query(collection(db, 'catalogo_roles'), where('nombre', 'in', userData.roles));
+        const rolesSnap = await getDocs(rolesQuery);
+        
+        rolesSnap.forEach((rolDoc) => {
+          if (rolDoc.data().requiereIPOficina) {
+            requiereEstarEnOficina = true;
+          }
+        });
+      }
+
+      // 5. EL CENTINELA: Si su rol exige oficina, comprobamos su IP actual
+      if (requiereEstarEnOficina) {
+        try {
+          const ipRes = await fetch('https://api.ipify.org?format=json');
+          const ipData = await ipRes.json();
+          const userIPActual = ipData.ip;
+
+          if (userIPActual !== ipOficina) {
+            // ¡INTRUSO BLOQUEADO!
+            await signOut(auth); // Cerramos la sesión que Firebase acababa de abrir
+            await registrarLog('Seguridad', 'Bloqueo de Red', `Intento de acceso denegado para ${email}. IP detectada: ${userIPActual}`);
+            setError('ACCESO DENEGADO. Por medidas de seguridad, tu rol solo permite iniciar sesión desde la red WiFi de la oficina de Roelca Inc.');
+            setLoading(false);
+            return; // Cortamos la ejecución aquí
+          }
+        } catch (fetchError) {
+          // Si por alguna razón el bloqueador de anuncios del usuario bloquea la comprobación de IP
+          await signOut(auth);
+          setError('No pudimos verificar la seguridad de tu red. Desactiva tu bloqueador de anuncios (AdBlock) e intenta de nuevo.');
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 6. SI PASÓ TODAS LAS PRUEBAS: Lo dejamos entrar al sistema
       await updateDoc(doc(db, 'usuarios', user.uid), {
         isOnline: true,
         ultimoAcceso: new Date().toISOString()
@@ -34,14 +82,17 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       onLoginSuccess();
     } catch (err: any) {
       console.error(err);
-      setError('Correo o contraseña incorrectos. Por favor, verifica tus datos.');
+      if (err.message && err.message.includes("ACCESO DENEGADO")) {
+        setError(err.message);
+      } else {
+        setError('Correo o contraseña incorrectos. Por favor, verifica tus datos.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    // CONTENEDOR CORREGIDO: position: fixed y 100vw garantizan el centrado absoluto
     <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', display: 'flex', backgroundColor: '#010409', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
       <div className="form-card" style={{ maxWidth: '400px', width: '100%', padding: '40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
         
@@ -52,7 +103,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         </div>
 
         {error && (
-          <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#ef4444', padding: '12px', borderRadius: '6px', marginBottom: '20px', fontSize: '0.85rem', textAlign: 'center' }}>
+          <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#ef4444', padding: '16px', borderRadius: '6px', marginBottom: '20px', fontSize: '0.85rem', textAlign: 'center', lineHeight: '1.5', fontWeight: '500' }}>
             {error}
           </div>
         )}
@@ -89,7 +140,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             disabled={loading}
             style={{ width: '100%', padding: '12px', backgroundColor: '#D84315', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '1rem', fontWeight: '500', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1 }}
           >
-            {loading ? 'Verificando...' : 'Iniciar Sesión'}
+            {loading ? 'Verificando red y accesos...' : 'Iniciar Sesión'}
           </button>
         </form>
 
