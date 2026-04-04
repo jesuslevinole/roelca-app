@@ -7,7 +7,8 @@ import { auth, db } from './config/firebase';
 import { Login } from './features/auth/components/Login';
 import OperacionesDashboard from './features/operaciones/components/OperacionesDashboard';
 import EmpresasDashboard from './features/empresas/components/EmpresasDashboard';
-import TipoCambioDashboard from './features/tipoCambio/components/TipoCambioDashboard';
+// CORRECCIÓN 1: Agregamos las llaves { }
+import { TipoCambioDashboard } from './features/tipoCambio/components/TipoCambioDashboard';
 import CatalogosDashboard from './features/catalogos/components/CatalogosDashboard';
 import { CombustibleDashboard } from './features/combustible/components/CombustibleDashboard';
 import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
@@ -18,8 +19,6 @@ import { DireccionesDashboard } from './features/direcciones/components/Direccio
 import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDashboard';
 import { RolesDashboard } from './usuarios/components/RolesDashboard';
 import { UsuariosDashboard } from './usuarios/components/UsuariosDashboard';
-
-// NUEVO MÓDULO: Historial de Actividad
 import { LogsDashboard } from './features/configuracion/components/LogsDashboard';
 
 import './App.css';
@@ -28,7 +27,6 @@ function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   const [cargandoAuth, setCargandoAuth] = useState(true); 
   
-  // SE AÑADIÓ 'logs' AL ESTADO
   const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles' | 'usuarios' | 'logs'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
@@ -73,6 +71,7 @@ function App() {
   useEffect(() => {
     if (!estaAutenticado) return;
 
+    // CORRECCIÓN 2: ReturnType<typeof setTimeout> en lugar de NodeJS.Timeout
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const resetTimer = () => {
@@ -125,8 +124,6 @@ function App() {
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
   const esEmpleadosActivo = moduloActivo === 'colaboradores';
-  
-  // SE AÑADIÓ 'logs' A LA VALIDACIÓN
   const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios' || moduloActivo === 'logs';
 
   return (

@@ -1,7 +1,7 @@
 // src/features/tipoCambio/components/FormularioTipoCambio.tsx
 import React, { useState, useEffect } from 'react';
 import { agregarRegistro, actualizarRegistro } from '../../../config/firebase';
-import { registrarLog } from '../../../utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
+import { registrarLog } from '../../../utils/logger';
 
 interface FormProps {
   estado: 'abierto' | 'minimizado';
@@ -28,7 +28,6 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  // --- FUNCIÓN PARA CONSULTAR BANXICO (VERSIÓN SIN BLOQUEO CORS) ---
   const obtenerTipoCambioBanxico = async () => {
     const token = import.meta.env.VITE_BANXICO_TOKEN;
     if (!token) {
@@ -38,20 +37,15 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
 
     setCargandoApi(true);
     try {
-      // TRUCO: Pasamos el token directamente en la URL con "?token=" en lugar de los Headers
       const url = `https://www.banxico.org.mx/SieAPIRest/service/v1/series/SF43718/datos/oportuno?token=${token}`;
-      
       const response = await fetch(url);
       
-      if (!response.ok) {
-        throw new Error('Error en la respuesta de Banxico');
-      }
+      if (!response.ok) throw new Error('Error en la respuesta de Banxico');
 
       const data = await response.json();
       
       if (data.bmx && data.bmx.series && data.bmx.series[0].datos) {
         const valorActual = data.bmx.series[0].datos[0].dato;
-        // Actualizamos el estado con el valor exacto de la API
         setFormData(prev => ({ ...prev, tcDof: valorActual }));
       } else {
         alert('Banxico no devolvió un tipo de cambio válido para hoy.');
@@ -64,22 +58,18 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
     }
   };
 
-  // Cargar datos iniciales o llamar a Banxico si es nuevo
   useEffect(() => {
     if (initialData) {
       setFormData(prev => ({ ...prev, ...initialData }));
     } else {
-      // Si es un registro nuevo, intentamos traer el dato de Banxico automáticamente
       obtenerTipoCambioBanxico();
     }
   }, [initialData]);
 
-  // --- CEREBRO AUTOMÁTICO (FÓRMULAS) ---
   useEffect(() => {
     const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     let nuevoDia = '';
     if (formData.fecha) {
-      // Forzamos la zona horaria añadiendo hora para evitar desfases
       const fechaObj = new Date(formData.fecha + 'T12:00:00'); 
       nuevoDia = diasSemana[fechaObj.getDay()];
     }
@@ -114,22 +104,17 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
     }
   }, [formData.fecha, formData.tcDof, registros, initialData]);
 
-  // --- FUNCIÓN DE GUARDADO CON AUDITORÍA (LOGGER) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       if (initialData && initialData.id) {
-        // MODO EDICIÓN
+        // 1. MODO EDICIÓN
         await actualizarRegistro('tipo_cambio', initialData.id, formData);
-        
-        // ¡USO DEL LOGGER!
-        await registrarLog('Tipo de Cambio', 'Edición', `Editó el registro del día: ${formData.fecha}`);
+        await registrarLog('Tipo de Cambio', 'Edición', `Actualizó el T.C. del día ${formData.fecha} a ${formData.tcDof}`);
       } else {
-        // MODO CREACIÓN
+        // 2. MODO CREACIÓN
         await agregarRegistro('tipo_cambio', formData);
-        
-        // ¡USO DEL LOGGER!
-        await registrarLog('Tipo de Cambio', 'Creación', `Agregó un nuevo registro para el día: ${formData.fecha}`);
+        await registrarLog('Tipo de Cambio', 'Creación', `Agregó el T.C. del día ${formData.fecha} (${formData.tcDof})`);
       }
       onClose();
     } catch (error) {
