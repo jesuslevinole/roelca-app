@@ -1,106 +1,109 @@
 // src/features/auth/components/Login.tsx
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../../../config/firebase'; 
+import { auth, db } from '../../../config/firebase';
+import { registrarLog } from '../../../utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
 
 interface LoginProps {
   onLoginSuccess: () => void;
 }
 
-export const Login = ({ onLoginSuccess }: LoginProps) => {
+export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const [cargando, setCargando] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setCargando(true);
+    setLoading(true);
 
     try {
-      // 1. Iniciamos sesión con Firebase
+      // 1. Autenticamos con Firebase
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // 2. Registramos la hora de entrada y el estado "En línea" en la Base de Datos
-      try {
-        await updateDoc(doc(db, 'usuarios', user.uid), {
-          isOnline: true,
-          ultimoAcceso: new Date().toISOString()
-        });
-      } catch (err) {
-        console.warn("No se pudo actualizar el estado online. Verifica que el UID coincida con el documento en la colección usuarios.");
-      }
+      // 2. Actualizamos su estado a "En línea" y guardamos la fecha
+      await updateDoc(doc(db, 'usuarios', user.uid), {
+        isOnline: true,
+        ultimoAcceso: new Date().toISOString()
+      });
 
-      onLoginSuccess(); // Entra al Dashboard
+      // 3. ¡NUEVO! Registramos la entrada en el Historial de Actividad
+      await registrarLog('Sesión', 'Inicio de Sesión', 'El usuario ingresó exitosamente al sistema.');
+
+      // 4. Damos acceso a la app
+      onLoginSuccess();
     } catch (err: any) {
       console.error(err);
-      if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-        setError('Correo o contraseña incorrectos. Verifica tus datos.');
-      } else {
-        setError('Ocurrió un error al intentar iniciar sesión.');
-      }
+      setError('Correo o contraseña incorrectos. Por favor, verifica tus datos.');
     } finally {
-      setCargando(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="login-wrapper">
-      <div className="login-card">
-        <div className="login-logo">
-          <span style={{ color: '#D84315', marginRight: '8px' }}>■</span> 
-          Roelca Inc.
-        </div>
+    <div style={{ display: 'flex', height: '100vh', backgroundColor: '#010409', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="form-card" style={{ maxWidth: '400px', width: '100%', padding: '40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
         
-        <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          
-          <div className="form-group">
-            <label className="form-label">Correo Electrónico</label>
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <div style={{ fontSize: '2.5rem', color: '#D84315', marginBottom: '16px' }}>■</div>
+          <h1 style={{ color: '#f0f6fc', fontSize: '1.5rem', margin: '0 0 8px 0', fontWeight: '500' }}>Roelca Inc.</h1>
+          <p style={{ color: '#8b949e', margin: 0, fontSize: '0.9rem' }}>Ingresa tus credenciales para acceder al sistema</p>
+        </div>
+
+        {error && (
+          <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#ef4444', padding: '12px', borderRadius: '6px', marginBottom: '20px', fontSize: '0.85rem', textAlign: 'center' }}>
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit}>
+          <div className="form-group" style={{ marginBottom: '20px' }}>
+            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.85rem', marginBottom: '8px' }}>Correo Electrónico</label>
             <input 
               type="email" 
-              className="form-control" 
-              placeholder="usuario@roelca.com" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              className="form-control" 
+              placeholder="tu@correo.com"
               required 
+              style={{ width: '100%', padding: '12px', backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px' }}
             />
           </div>
-          
-          <div className="form-group">
-            <label className="form-label">Contraseña</label>
+
+          <div className="form-group" style={{ marginBottom: '32px' }}>
+            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.85rem', marginBottom: '8px' }}>Contraseña</label>
             <input 
               type="password" 
-              className="form-control" 
-              placeholder="••••••••" 
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              className="form-control" 
+              placeholder="••••••••"
               required 
+              style={{ width: '100%', padding: '12px', backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px' }}
             />
           </div>
 
-          {error && (
-            <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid #ef4444', color: '#ef4444', padding: '10px', borderRadius: '6px', fontSize: '0.85rem', textAlign: 'center' }}>
-              {error}
-            </div>
-          )}
-
-          <button type="submit" disabled={cargando} className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: '10px', padding: '12px', cursor: cargando ? 'not-allowed' : 'pointer' }}>
-            {cargando ? 'Iniciando sesión...' : 'Iniciar Sesión'}
+          <button 
+            type="submit" 
+            disabled={loading}
+            style={{ width: '100%', padding: '12px', backgroundColor: '#D84315', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '1rem', fontWeight: '500', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1 }}
+          >
+            {loading ? 'Verificando...' : 'Iniciar Sesión'}
           </button>
-          
         </form>
 
-        <div style={{ marginTop: '32px', borderTop: '1px solid #30363d', paddingTop: '24px', textAlign: 'center' }}>
-          <p style={{ color: '#8b949e', fontSize: '0.75rem', marginBottom: '12px', textTransform: 'uppercase' }}>Opciones de Desarrollo</p>
+        {/* BOTÓN BYPASS (SOLO PARA DESARROLLO) */}
+        <div style={{ marginTop: '24px', textAlign: 'center', borderTop: '1px solid #30363d', paddingTop: '24px' }}>
           <button 
-            type="button"
-            onClick={onLoginSuccess} 
-            style={{ background: 'transparent', border: '1px dashed #8b949e', color: '#8b949e', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', transition: 'all 0.2s' }}
+            type="button" 
+            onClick={onLoginSuccess}
+            style={{ background: 'none', border: 'none', color: '#58a6ff', fontSize: '0.85rem', cursor: 'pointer', textDecoration: 'underline' }}
           >
-            Entrar como Admin (Bypass)
+            Entrar como Admin (Bypass para pruebas)
           </button>
         </div>
 

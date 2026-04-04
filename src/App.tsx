@@ -3,11 +3,11 @@ import { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
 import { auth, db } from './config/firebase'; 
+import { registrarLog } from './utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
 
 import { Login } from './features/auth/components/Login';
 import OperacionesDashboard from './features/operaciones/components/OperacionesDashboard';
 import EmpresasDashboard from './features/empresas/components/EmpresasDashboard';
-// CORRECCIÓN 1: Agregamos las llaves { }
 import { TipoCambioDashboard } from './features/tipoCambio/components/TipoCambioDashboard';
 import CatalogosDashboard from './features/catalogos/components/CatalogosDashboard';
 import { CombustibleDashboard } from './features/combustible/components/CombustibleDashboard';
@@ -51,13 +51,18 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. FUNCIÓN PARA CERRAR SESIÓN (Manual o Automática)
+  // 2. FUNCIÓN PARA CERRAR SESIÓN (Manual o Automática) CON AUDITORÍA
   const handleCerrarSesion = async (motivo: 'manual' | 'inactividad' = 'manual') => {
     if (auth.currentUser) {
       try {
+        // Registramos la salida en el Log ANTES de cerrar sesión para tener sus datos
+        const detalle = motivo === 'inactividad' ? 'Cierre de sesión automático por inactividad (5 min)' : 'Cierre de sesión manual voluntario';
+        await registrarLog('Sesión', 'Cierre de Sesión', detalle);
+
+        // Actualizamos su estado a offline
         await updateDoc(doc(db, 'usuarios', auth.currentUser.uid), { isOnline: false });
       } catch (error) {
-        console.warn("No se pudo actualizar estado online al salir", error);
+        console.warn("No se pudo actualizar estado online o log al salir", error);
       }
       await signOut(auth);
     }
@@ -71,12 +76,10 @@ function App() {
   useEffect(() => {
     if (!estaAutenticado) return;
 
-    // CORRECCIÓN 2: ReturnType<typeof setTimeout> en lugar de NodeJS.Timeout
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const resetTimer = () => {
       clearTimeout(timeoutId);
-      // 300,000 milisegundos = 5 minutos
       timeoutId = setTimeout(() => {
         handleCerrarSesion('inactividad');
       }, 300000); 
@@ -109,17 +112,14 @@ function App() {
     return () => window.removeEventListener('beforeunload', handleTabClose);
   }, []);
 
-  // MIENTRAS CARGA FIREBASE
   if (cargandoAuth) {
     return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#010409', color: '#8b949e' }}>Cargando Roelca Inc...</div>;
   }
 
-  // SI NO ESTÁ AUTENTICADO -> LOGIN
   if (!estaAutenticado) {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
 
-  // Validaciones para mantener activos los menús padres
   const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'direcciones';
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
@@ -135,185 +135,83 @@ function App() {
           <span style={{ color: '#D84315', marginRight: '8px' }}>■</span> Roelca Inc.
         </div>
 
-        <div 
-          className={`sidebar-item ${moduloActivo === 'operaciones' ? 'active' : ''}`} 
-          onClick={() => setModuloActivo('operaciones')}
-        >
+        <div className={`sidebar-item ${moduloActivo === 'operaciones' ? 'active' : ''}`} onClick={() => setModuloActivo('operaciones')}>
           Operaciones
         </div>
 
-        {/* ITEM DESPLEGABLE: CLIENTES */}
-        <div 
-          className={`sidebar-item sidebar-item-with-icon ${esClientesActivo && !menuClientesAbierto ? 'active' : ''}`} 
-          onClick={() => setMenuClientesAbierto(!menuClientesAbierto)}
-        >
+        <div className={`sidebar-item sidebar-item-with-icon ${esClientesActivo && !menuClientesAbierto ? 'active' : ''}`} onClick={() => setMenuClientesAbierto(!menuClientesAbierto)}>
           <span>Clientes</span>
           <span style={{ fontSize: '0.7rem' }}>{menuClientesAbierto ? '▼' : '▶'}</span>
         </div>
-
         {menuClientesAbierto && (
           <div className="sidebar-submenu">
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'conveniosClientes' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('conveniosClientes')}
-            >
-              Convenio de Clientes
-            </div>
+            <div className={`sidebar-subitem ${moduloActivo === 'conveniosClientes' ? 'active' : ''}`} onClick={() => setModuloActivo('conveniosClientes')}>Convenio de Clientes</div>
           </div>
         )}
 
-        {/* ITEM DESPLEGABLE: PROVEEDORES */}
-        <div 
-          className={`sidebar-item sidebar-item-with-icon ${esProveedoresActivo && !menuProveedoresAbierto ? 'active' : ''}`} 
-          onClick={() => setMenuProveedoresAbierto(!menuProveedoresAbierto)}
-        >
+        <div className={`sidebar-item sidebar-item-with-icon ${esProveedoresActivo && !menuProveedoresAbierto ? 'active' : ''}`} onClick={() => setMenuProveedoresAbierto(!menuProveedoresAbierto)}>
           <span>Proveedores</span>
           <span style={{ fontSize: '0.7rem' }}>{menuProveedoresAbierto ? '▼' : '▶'}</span>
         </div>
-
         {menuProveedoresAbierto && (
           <div className="sidebar-submenu">
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'conveniosProveedores' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('conveniosProveedores')}
-            >
-              Convenio de Proveedores
-            </div>
+            <div className={`sidebar-subitem ${moduloActivo === 'conveniosProveedores' ? 'active' : ''}`} onClick={() => setModuloActivo('conveniosProveedores')}>Convenio de Proveedores</div>
           </div>
         )}
 
-        {/* ITEM DESPLEGABLE: EMPLEADOS */}
-        <div 
-          className={`sidebar-item sidebar-item-with-icon ${esEmpleadosActivo && !menuEmpleadosAbierto ? 'active' : ''}`} 
-          onClick={() => setMenuEmpleadosAbierto(!menuEmpleadosAbierto)}
-        >
+        <div className={`sidebar-item sidebar-item-with-icon ${esEmpleadosActivo && !menuEmpleadosAbierto ? 'active' : ''}`} onClick={() => setMenuEmpleadosAbierto(!menuEmpleadosAbierto)}>
           <span>Empleados</span>
           <span style={{ fontSize: '0.7rem' }}>{menuEmpleadosAbierto ? '▼' : '▶'}</span>
         </div>
-
         {menuEmpleadosAbierto && (
           <div className="sidebar-submenu">
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'colaboradores' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('colaboradores')}
-            >
-              Colaboradores
-            </div>
+            <div className={`sidebar-subitem ${moduloActivo === 'colaboradores' ? 'active' : ''}`} onClick={() => setModuloActivo('colaboradores')}>Colaboradores</div>
           </div>
         )}
 
-        {/* ITEM DESPLEGABLE: Bases de Datos */}
-        <div 
-          className={`sidebar-item sidebar-item-with-icon ${esBaseDeDatosActiva && !menuBasesDatosAbierto ? 'active' : ''}`} 
-          onClick={() => setMenuBasesDatosAbierto(!menuBasesDatosAbierto)}
-        >
+        <div className={`sidebar-item sidebar-item-with-icon ${esBaseDeDatosActiva && !menuBasesDatosAbierto ? 'active' : ''}`} onClick={() => setMenuBasesDatosAbierto(!menuBasesDatosAbierto)}>
           <span>Bases de Datos</span>
           <span style={{ fontSize: '0.7rem' }}>{menuBasesDatosAbierto ? '▼' : '▶'}</span>
         </div>
-
         {menuBasesDatosAbierto && (
           <div className="sidebar-submenu">
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'empresas' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('empresas')}
-            >
-              Empresas
-            </div>
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'direcciones' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('direcciones')}
-            >
-              Direcciones
-            </div>
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'tipoCambio' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('tipoCambio')}
-            >
-              Tipo de Cambio
-            </div>
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'combustible' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('combustible')}
-            >
-              Combustible
-            </div>
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'proveedoresUnidad' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('proveedoresUnidad')}
-            >
-              Proveedores de Unidad
-            </div>
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'unidadesProveedor' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('unidadesProveedor')}
-            >
-              Unidades del Proveedor
-            </div>
+            <div className={`sidebar-subitem ${moduloActivo === 'empresas' ? 'active' : ''}`} onClick={() => setModuloActivo('empresas')}>Empresas</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'direcciones' ? 'active' : ''}`} onClick={() => setModuloActivo('direcciones')}>Direcciones</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'tipoCambio' ? 'active' : ''}`} onClick={() => setModuloActivo('tipoCambio')}>Tipo de Cambio</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'combustible' ? 'active' : ''}`} onClick={() => setModuloActivo('combustible')}>Combustible</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'proveedoresUnidad' ? 'active' : ''}`} onClick={() => setModuloActivo('proveedoresUnidad')}>Proveedores de Unidad</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'unidadesProveedor' ? 'active' : ''}`} onClick={() => setModuloActivo('unidadesProveedor')}>Unidades del Proveedor</div>
           </div>
         )}
 
-        {/* ITEM: Catálogos */}
-        <div 
-          className={`sidebar-item ${moduloActivo === 'catalogos' ? 'active' : ''}`} 
-          onClick={() => setModuloActivo('catalogos')}
-        >
+        <div className={`sidebar-item ${moduloActivo === 'catalogos' ? 'active' : ''}`} onClick={() => setModuloActivo('catalogos')}>
           Catálogos
         </div>
 
-        {/* ITEM DESPLEGABLE: Configuración (Usuarios, Roles y Logs) */}
-        <div 
-          className={`sidebar-item sidebar-item-with-icon ${esConfiguracionActivo && !menuConfiguracionAbierto ? 'active' : ''}`} 
-          onClick={() => setMenuConfiguracionAbierto(!menuConfiguracionAbierto)}
-        >
+        <div className={`sidebar-item sidebar-item-with-icon ${esConfiguracionActivo && !menuConfiguracionAbierto ? 'active' : ''}`} onClick={() => setMenuConfiguracionAbierto(!menuConfiguracionAbierto)}>
           <span>Configuración</span>
           <span style={{ fontSize: '0.7rem' }}>{menuConfiguracionAbierto ? '▼' : '▶'}</span>
         </div>
-
         {menuConfiguracionAbierto && (
           <div className="sidebar-submenu">
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'usuarios' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('usuarios')}
-            >
-              Usuarios
-            </div>
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'roles' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('roles')}
-            >
-              Roles y Permisos
-            </div>
-            <div 
-              className={`sidebar-subitem ${moduloActivo === 'logs' ? 'active' : ''}`} 
-              onClick={() => setModuloActivo('logs')}
-            >
-              Historial de Actividad
-            </div>
+            <div className={`sidebar-subitem ${moduloActivo === 'usuarios' ? 'active' : ''}`} onClick={() => setModuloActivo('usuarios')}>Usuarios</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'roles' ? 'active' : ''}`} onClick={() => setModuloActivo('roles')}>Roles y Permisos</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'logs' ? 'active' : ''}`} onClick={() => setModuloActivo('logs')}>Historial de Actividad</div>
           </div>
         )}
 
         <div className="sidebar-footer">
-          <button className="btn-logout-sidebar" onClick={() => handleCerrarSesion('manual')}>
-            Cerrar Sesión
-          </button>
+          <button className="btn-logout-sidebar" onClick={() => handleCerrarSesion('manual')}>Cerrar Sesión</button>
         </div>
       </div>
 
       {/* --- ÁREA PRINCIPAL --- */}
       <div className="main-area">
-        
-        {/* --- BARRA SUPERIOR (TOPBAR) --- */}
         <div className="topbar">
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            <button className="menu-toggle-btn" onClick={() => setMenuAbierto(!menuAbierto)} title="Ocultar/Mostrar Menú">
-              ☰
-            </button>
+            <button className="menu-toggle-btn" onClick={() => setMenuAbierto(!menuAbierto)} title="Ocultar/Mostrar Menú">☰</button>
             <div className="search-container">
-              <input 
-                type="text" 
-                className="search-input" 
-                placeholder="Buscar..." 
-              />
+              <input type="text" className="search-input" placeholder="Buscar..." />
             </div>
           </div>
           
@@ -361,8 +259,6 @@ function App() {
         {moduloActivo === 'conveniosProveedores' && <ConveniosProveedoresDashboard />}
         {moduloActivo === 'catalogos' && <CatalogosDashboard />}
         {moduloActivo === 'colaboradores' && <EmpleadosDashboard />}
-        
-        {/* RENDERIZADO DE LOS MÓDULOS DE CONFIGURACIÓN */}
         {moduloActivo === 'roles' && <RolesDashboard />}
         {moduloActivo === 'usuarios' && <UsuariosDashboard />}
         {moduloActivo === 'logs' && <LogsDashboard />}

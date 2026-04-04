@@ -1,9 +1,9 @@
 // src/usuarios/components/UsuariosDashboard.tsx
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { db, secondaryAuth } from '../../config/firebase';
-import { registrarLog } from '../../utils/logger'; // <-- IMPORTAMOS EL LOGGER
+import { registrarLog } from '../../utils/logger'; 
 
 export const UsuariosDashboard = () => {
   const [usuarios, setUsuarios] = useState<any[]>([]);
@@ -16,6 +16,12 @@ export const UsuariosDashboard = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rolesAsignados, setRolesAsignados] = useState<string[]>([]);
+
+  // NUEVOS ESTADOS PARA EL HISTORIAL DE SESIONES
+  const [historialAbierto, setHistorialAbierto] = useState(false);
+  const [usuarioHistorial, setUsuarioHistorial] = useState<any | null>(null);
+  const [logsSesion, setLogsSesion] = useState<any[]>([]);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
 
   useEffect(() => {
     const unsubUsuarios = onSnapshot(collection(db, 'usuarios'), (snapshot) => {
@@ -32,6 +38,29 @@ export const UsuariosDashboard = () => {
     };
   }, []);
 
+  // EFECTO PARA BUSCAR EL HISTORIAL CUANDO SE ABRE EL MODAL
+  useEffect(() => {
+    if (!historialAbierto || !usuarioHistorial) return;
+    
+    setCargandoHistorial(true);
+    const q = query(
+      collection(db, 'historial_actividad'),
+      where('usuario', '==', usuarioHistorial.email),
+      where('modulo', '==', 'Sesión') // Filtramos solo lo que sea inicio/cierre de sesión
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Ordenamos por fecha (el más reciente primero) usando JavaScript
+      logs.sort((a: any, b: any) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+      
+      setLogsSesion(logs);
+      setCargandoHistorial(false);
+    });
+
+    return () => unsubscribe();
+  }, [historialAbierto, usuarioHistorial]);
+
   const handleAbrirModal = (user?: any) => {
     if (user) {
       setUsuarioActual(user);
@@ -47,6 +76,11 @@ export const UsuariosDashboard = () => {
       setRolesAsignados([]);
     }
     setModalAbierto(true);
+  };
+
+  const handleAbrirHistorial = (user: any) => {
+    setUsuarioHistorial(user);
+    setHistorialAbierto(true);
   };
 
   const handleToggleRol = (rolNombre: string) => {
@@ -66,7 +100,6 @@ export const UsuariosDashboard = () => {
           fechaActualizacion: new Date().toISOString()
         }, { merge: true });
         
-        // LOG DE EDICIÓN
         await registrarLog('Usuarios', 'Edición', `Actualizó los roles/datos del usuario: ${email}`);
         
       } else {
@@ -89,7 +122,6 @@ export const UsuariosDashboard = () => {
           ultimoAcceso: null
         });
 
-        // LOG DE CREACIÓN
         await registrarLog('Usuarios', 'Creación', `Creó el acceso para el usuario: ${email}`);
 
         try {
@@ -112,12 +144,9 @@ export const UsuariosDashboard = () => {
     }
   };
 
-  // Se actualizó para recibir el objeto completo y registrar el correo exacto
   const handleEliminar = async (user: any) => {
     if (window.confirm(`¿Eliminar el acceso del usuario ${user.email}?\n\nNota: Por seguridad, esto elimina sus permisos, pero su cuenta seguirá existiendo en la base de datos de Auth.`)) {
       await deleteDoc(doc(db, 'usuarios', user.id));
-      
-      // LOG DE ELIMINACIÓN
       await registrarLog('Usuarios', 'Eliminación', `Revocó el acceso y eliminó al usuario: ${user.email}`);
     }
   };
@@ -126,11 +155,8 @@ export const UsuariosDashboard = () => {
     if (!fechaIso) return 'Nunca ha ingresado';
     const fecha = new Date(fechaIso);
     return fecha.toLocaleString('es-ES', { 
-      day: '2-digit', 
-      month: 'short', 
-      year: 'numeric', 
-      hour: '2-digit', 
-      minute: '2-digit' 
+      day: '2-digit', month: 'short', year: 'numeric', 
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
     });
   };
 
@@ -147,7 +173,7 @@ export const UsuariosDashboard = () => {
         <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d' }}>
             <tr>
-              <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ACCIONES</th>
+              <th style={{ padding: '16px', width: '220px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ACCIONES</th>
               <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ESTADO</th>
               <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>USUARIO</th>
               <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>CORREO</th>
@@ -162,9 +188,11 @@ export const UsuariosDashboard = () => {
               usuarios.map(user => (
                 <tr key={user.id} style={{ borderBottom: '1px solid #21262d' }}>
                   <td style={{ padding: '16px', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                      <button onClick={() => handleAbrirModal(user)} style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px' }}>Editar</button>
-                      <button onClick={() => handleEliminar(user)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px' }}>Eliminar</button>
+                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                      <button onClick={() => handleAbrirModal(user)} style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 10px', fontSize: '0.8rem' }}>Editar</button>
+                      {/* BOTÓN NUEVO PARA VER SESIONES */}
+                      <button onClick={() => handleAbrirHistorial(user)} style={{ background: 'transparent', border: '1px solid #10b981', borderRadius: '4px', color: '#10b981', cursor: 'pointer', padding: '6px 10px', fontSize: '0.8rem' }}>Sesiones</button>
+                      <button onClick={() => handleEliminar(user)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 10px', fontSize: '0.8rem' }}>Eliminar</button>
                     </div>
                   </td>
                   
@@ -202,6 +230,7 @@ export const UsuariosDashboard = () => {
         </table>
       </div>
 
+      {/* --- MODAL PARA EDITAR/CREAR USUARIO --- */}
       {modalAbierto && (
         <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)' }}>
           <div className="form-card" style={{ maxWidth: '600px', width: '100%', borderRadius: '12px', border: '1px solid #444', backgroundColor: '#0d1117' }}>
@@ -250,30 +279,23 @@ export const UsuariosDashboard = () => {
                     className="form-control" 
                     style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', width: '100%', padding: '10px', borderRadius: '6px' }}
                   />
-                  <span style={{ fontSize: '0.75rem', color: '#8b949e', display: 'block', marginTop: '4px' }}>
-                    Se enviará un correo automático para que el usuario la cambie.
-                  </span>
                 </div>
               )}
 
               <div className="form-group">
-                <label style={{ color: '#8b949e', fontSize: '0.85rem', display: 'block', marginBottom: '12px' }}>Roles del Usuario (Puedes elegir varios):</label>
+                <label style={{ color: '#8b949e', fontSize: '0.85rem', display: 'block', marginBottom: '12px' }}>Roles del Usuario:</label>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
-                  {rolesDisponibles.length === 0 ? (
-                    <span style={{ color: '#8b949e', fontSize: '0.85rem' }}>No hay roles creados. Ve al menú de Roles primero.</span>
-                  ) : (
-                    rolesDisponibles.map(rol => (
-                      <label key={rol.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#c9d1d9', cursor: 'pointer', fontSize: '0.9rem' }}>
-                        <input 
-                          type="checkbox" 
-                          checked={rolesAsignados.includes(rol.nombre)} 
-                          onChange={() => handleToggleRol(rol.nombre)} 
-                          style={{ accentColor: '#D84315', width: '16px', height: '16px', cursor: 'pointer' }}
-                        />
-                        {rol.nombre}
-                      </label>
-                    ))
-                  )}
+                  {rolesDisponibles.map(rol => (
+                    <label key={rol.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#c9d1d9', cursor: 'pointer', fontSize: '0.9rem' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={rolesAsignados.includes(rol.nombre)} 
+                        onChange={() => handleToggleRol(rol.nombre)} 
+                        style={{ accentColor: '#D84315', width: '16px', height: '16px', cursor: 'pointer' }}
+                      />
+                      {rol.nombre}
+                    </label>
+                  ))}
                 </div>
               </div>
 
@@ -284,6 +306,60 @@ export const UsuariosDashboard = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL PARA VER EL HISTORIAL DE SESIONES --- */}
+      {historialAbierto && (
+        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 1000 }}>
+          <div className="form-card" style={{ maxWidth: '650px', width: '100%', borderRadius: '12px', border: '1px solid #444', backgroundColor: '#0d1117', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="form-header" style={{ padding: '24px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h2 style={{ fontSize: '1.25rem', color: '#f0f6fc', margin: 0, fontWeight: '500' }}>Registro de Sesiones</h2>
+                <span style={{ color: '#8b949e', fontSize: '0.85rem' }}>{usuarioHistorial?.nombre} ({usuarioHistorial?.email})</span>
+              </div>
+              <button onClick={() => setHistorialAbierto(false)} style={{ background: 'none', border: 'none', color: '#8b949e', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
+            </div>
+            
+            <div style={{ padding: '24px', overflowY: 'auto', flex: 1 }}>
+              {cargandoHistorial ? (
+                <div style={{ textAlign: 'center', color: '#8b949e', padding: '40px' }}>Consultando registros encriptados...</div>
+              ) : logsSesion.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#8b949e', padding: '40px' }}>Este usuario aún no tiene registros de inicio o cierre de sesión.</div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #30363d' }}>
+                      <th style={{ padding: '12px 8px', color: '#8b949e', fontSize: '0.75rem', fontWeight: '600' }}>FECHA Y HORA</th>
+                      <th style={{ padding: '12px 8px', color: '#8b949e', fontSize: '0.75rem', fontWeight: '600' }}>ACCIÓN</th>
+                      <th style={{ padding: '12px 8px', color: '#8b949e', fontSize: '0.75rem', fontWeight: '600' }}>DETALLE</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logsSesion.map(log => (
+                      <tr key={log.id} style={{ borderBottom: '1px solid #21262d' }}>
+                        <td style={{ padding: '12px 8px', color: '#c9d1d9', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                          {formatearFecha(log.fecha)}
+                        </td>
+                        <td style={{ padding: '12px 8px' }}>
+                          <span style={{ 
+                            backgroundColor: log.accion === 'Inicio de Sesión' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', 
+                            color: log.accion === 'Inicio de Sesión' ? '#10b981' : '#ef4444', 
+                            padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', border: '1px solid transparent' 
+                          }}>
+                            {log.accion}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 8px', color: '#8b949e', fontSize: '0.85rem' }}>
+                          {log.detalle}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
       )}
