@@ -41,8 +41,8 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    // SE AGREGÓ width: '100%' AQUÍ PARA CENTRAR EL MODAL
-    <div style={{ display: 'flex', height: '100vh', width: '100%', backgroundColor: '#010409', alignItems: 'center', justifyContent: 'center' }}>
+    // CONTENEDOR CORREGIDO: position: fixed y 100vw garantizan el centrado absoluto
+    <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', display: 'flex', backgroundColor: '#010409', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
       <div className="form-card" style={{ maxWidth: '400px', width: '100%', padding: '40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
         
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
