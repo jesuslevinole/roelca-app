@@ -4,11 +4,8 @@ import { db, auth } from '../config/firebase';
 
 export const registrarLog = async (modulo: string, accion: string, detalle: string) => {
   try {
-    // Obtenemos el usuario actual que está haciendo la acción
     const usuarioActual = auth.currentUser;
     const correo = usuarioActual?.email || 'Sistema';
-    // Nota: idealmente pasarías el nombre real del usuario desde tu estado global, 
-    // pero el correo siempre está disponible y es único.
 
     await addDoc(collection(db, 'historial_actividad'), {
       usuario: correo,

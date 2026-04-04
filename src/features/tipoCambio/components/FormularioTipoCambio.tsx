@@ -1,6 +1,7 @@
 // src/features/tipoCambio/components/FormularioTipoCambio.tsx
 import React, { useState, useEffect } from 'react';
 import { agregarRegistro, actualizarRegistro } from '../../../config/firebase';
+import { registrarLog } from '../../../utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
 
 interface FormProps {
   estado: 'abierto' | 'minimizado';
@@ -37,8 +38,7 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
 
     setCargandoApi(true);
     try {
-      // TRUCO: Pasamos el token directamente en la URL con "?token=" en lugar de los 
-      // fdsfdsfdsf
+      // TRUCO: Pasamos el token directamente en la URL con "?token=" en lugar de los Headers
       const url = `https://www.banxico.org.mx/SieAPIRest/service/v1/series/SF43718/datos/oportuno?token=${token}`;
       
       const response = await fetch(url);
@@ -79,6 +79,7 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
     const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     let nuevoDia = '';
     if (formData.fecha) {
+      // Forzamos la zona horaria añadiendo hora para evitar desfases
       const fechaObj = new Date(formData.fecha + 'T12:00:00'); 
       nuevoDia = diasSemana[fechaObj.getDay()];
     }
@@ -113,13 +114,22 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
     }
   }, [formData.fecha, formData.tcDof, registros, initialData]);
 
+  // --- FUNCIÓN DE GUARDADO CON AUDITORÍA (LOGGER) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       if (initialData && initialData.id) {
+        // MODO EDICIÓN
         await actualizarRegistro('tipo_cambio', initialData.id, formData);
+        
+        // ¡USO DEL LOGGER!
+        await registrarLog('Tipo de Cambio', 'Edición', `Editó el registro del día: ${formData.fecha}`);
       } else {
+        // MODO CREACIÓN
         await agregarRegistro('tipo_cambio', formData);
+        
+        // ¡USO DEL LOGGER!
+        await registrarLog('Tipo de Cambio', 'Creación', `Agregó un nuevo registro para el día: ${formData.fecha}`);
       }
       onClose();
     } catch (error) {
@@ -171,8 +181,6 @@ export const FormularioTipoCambio = ({ estado, initialData, registros, onClose, 
                   <option value="igual">Sin cambio</option>
                 </select>
               </div>
-
-              
 
               <div className="form-group">
                 <label className="form-label">Descripción Tendencia (Fórmula)</label>

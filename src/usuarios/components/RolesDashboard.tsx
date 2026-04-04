@@ -2,8 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, deleteDoc, setDoc, addDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
+import { registrarLog } from '../../utils/logger'; // <-- IMPORTAMOS EL LOGGER
 
-// Esta es la lista maestra de tus módulos en el sistema
 const MODULOS_SISTEMA = [
   'Operaciones',
   'Clientes',
@@ -12,7 +12,8 @@ const MODULOS_SISTEMA = [
   'Empresas (Bases de Datos)',
   'Direcciones (Bases de Datos)',
   'Catálogos',
-  'Usuarios y Roles'
+  'Usuarios y Roles',
+  'Historial de Actividad'
 ];
 
 export const RolesDashboard = () => {
@@ -21,7 +22,6 @@ export const RolesDashboard = () => {
   const [rolActual, setRolActual] = useState<any | null>(null);
   const [cargando, setCargando] = useState(false);
 
-  // Estado del formulario
   const [nombre, setNombre] = useState('');
   const [modulosPermitidos, setModulosPermitidos] = useState<string[]>([]);
 
@@ -63,8 +63,12 @@ export const RolesDashboard = () => {
 
       if (rolActual) {
         await setDoc(doc(db, 'catalogo_roles', rolActual.id), data, { merge: true });
+        // LOG DE EDICIÓN
+        await registrarLog('Roles y Permisos', 'Edición', `Editó los permisos del rol: ${data.nombre}`);
       } else {
         await addDoc(collection(db, 'catalogo_roles'), data);
+        // LOG DE CREACIÓN
+        await registrarLog('Roles y Permisos', 'Creación', `Creó un nuevo rol: ${data.nombre}`);
       }
       setModalAbierto(false);
     } catch (error) {
@@ -74,9 +78,12 @@ export const RolesDashboard = () => {
     }
   };
 
-  const handleEliminar = async (id: string) => {
-    if (window.confirm('¿Eliminar este rol de forma permanente?')) {
-      await deleteDoc(doc(db, 'catalogo_roles', id));
+  // Se actualizó para recibir el objeto completo y saber qué nombre de rol se borra
+  const handleEliminar = async (rol: any) => {
+    if (window.confirm(`¿Eliminar el rol "${rol.nombre}" de forma permanente?`)) {
+      await deleteDoc(doc(db, 'catalogo_roles', rol.id));
+      // LOG DE ELIMINACIÓN
+      await registrarLog('Roles y Permisos', 'Eliminación', `Eliminó el rol: ${rol.nombre}`);
     }
   };
 
@@ -107,7 +114,7 @@ export const RolesDashboard = () => {
                   <td style={{ padding: '16px', textAlign: 'center' }}>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                       <button onClick={() => handleAbrirModal(rol)} style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px' }}>Editar</button>
-                      <button onClick={() => handleEliminar(rol.id)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px' }}>Eliminar</button>
+                      <button onClick={() => handleEliminar(rol)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px' }}>Eliminar</button>
                     </div>
                   </td>
                   <td style={{ padding: '16px', color: '#f0f6fc', fontWeight: '600' }}>{rol.nombre}</td>
@@ -125,7 +132,6 @@ export const RolesDashboard = () => {
         </table>
       </div>
 
-      {/* MODAL DE EDICIÓN DE ROL */}
       {modalAbierto && (
         <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)' }}>
           <div className="form-card" style={{ maxWidth: '500px', width: '100%', borderRadius: '12px', border: '1px solid #444', backgroundColor: '#0d1117' }}>

@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { db, secondaryAuth } from '../../config/firebase';
+import { registrarLog } from '../../utils/logger'; // <-- IMPORTAMOS EL LOGGER
 
 export const UsuariosDashboard = () => {
   const [usuarios, setUsuarios] = useState<any[]>([]);
@@ -11,13 +12,11 @@ export const UsuariosDashboard = () => {
   const [usuarioActual, setUsuarioActual] = useState<any | null>(null);
   const [cargando, setCargando] = useState(false);
 
-  // Estado del formulario
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rolesAsignados, setRolesAsignados] = useState<string[]>([]);
 
-  // 1. Cargar Usuarios y Roles
   useEffect(() => {
     const unsubUsuarios = onSnapshot(collection(db, 'usuarios'), (snapshot) => {
       setUsuarios(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -61,26 +60,25 @@ export const UsuariosDashboard = () => {
     setCargando(true);
     try {
       if (usuarioActual) {
-        // MODO EDICIÓN
         await setDoc(doc(db, 'usuarios', usuarioActual.id), {
           nombre: nombre.toUpperCase(),
           roles: rolesAsignados,
           fechaActualizacion: new Date().toISOString()
         }, { merge: true });
         
+        // LOG DE EDICIÓN
+        await registrarLog('Usuarios', 'Edición', `Actualizó los roles/datos del usuario: ${email}`);
+        
       } else {
-        // MODO CREACIÓN
         if (password.length < 6) {
           alert('La contraseña debe tener al menos 6 caracteres.');
           setCargando(false);
           return;
         }
 
-        // 1. Creamos la cuenta en Firebase
         const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
         const newUserId = userCredential.user.uid;
 
-        // 2. Guardamos su perfil
         await setDoc(doc(db, 'usuarios', newUserId), {
           email: email.toLowerCase(),
           nombre: nombre.toUpperCase(),
@@ -91,7 +89,9 @@ export const UsuariosDashboard = () => {
           ultimoAcceso: null
         });
 
-        // 3. ENVIAMOS EL CORREO PARA QUE CAMBIE LA CONTRASEÑA TEMPORAL
+        // LOG DE CREACIÓN
+        await registrarLog('Usuarios', 'Creación', `Creó el acceso para el usuario: ${email}`);
+
         try {
           await sendPasswordResetEmail(secondaryAuth, email);
           alert(`Usuario creado con éxito.\n\nSe ha enviado un correo a ${email} para que el usuario establezca su contraseña definitiva.`);
@@ -100,7 +100,6 @@ export const UsuariosDashboard = () => {
           alert("El usuario fue creado, pero hubo un problema al enviar el correo automático.");
         }
 
-        // 4. Limpiamos la sesión secundaria
         await signOut(secondaryAuth);
       }
       
@@ -113,13 +112,16 @@ export const UsuariosDashboard = () => {
     }
   };
 
-  const handleEliminar = async (id: string) => {
-    if (window.confirm('¿Eliminar el perfil de este usuario?\n\nNota: Por seguridad, esto elimina sus permisos, pero su cuenta de correo seguirá existiendo en la base de datos de Auth.')) {
-      await deleteDoc(doc(db, 'usuarios', id));
+  // Se actualizó para recibir el objeto completo y registrar el correo exacto
+  const handleEliminar = async (user: any) => {
+    if (window.confirm(`¿Eliminar el acceso del usuario ${user.email}?\n\nNota: Por seguridad, esto elimina sus permisos, pero su cuenta seguirá existiendo en la base de datos de Auth.`)) {
+      await deleteDoc(doc(db, 'usuarios', user.id));
+      
+      // LOG DE ELIMINACIÓN
+      await registrarLog('Usuarios', 'Eliminación', `Revocó el acceso y eliminó al usuario: ${user.email}`);
     }
   };
 
-  // Función para formatear la fecha en español
   const formatearFecha = (fechaIso: string) => {
     if (!fechaIso) return 'Nunca ha ingresado';
     const fecha = new Date(fechaIso);
@@ -162,11 +164,10 @@ export const UsuariosDashboard = () => {
                   <td style={{ padding: '16px', textAlign: 'center' }}>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                       <button onClick={() => handleAbrirModal(user)} style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px' }}>Editar</button>
-                      <button onClick={() => handleEliminar(user.id)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px' }}>Eliminar</button>
+                      <button onClick={() => handleEliminar(user)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px' }}>Eliminar</button>
                     </div>
                   </td>
                   
-                  {/* COLUMNA DE ESTADO ONLINE/OFFLINE */}
                   <td style={{ padding: '16px', textAlign: 'center' }}>
                     {user.isOnline ? (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#10b981', fontSize: '0.85rem', fontWeight: '500', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '4px 8px', borderRadius: '12px' }}>
@@ -191,7 +192,6 @@ export const UsuariosDashboard = () => {
                     </div>
                   </td>
 
-                  {/* COLUMNA DE ÚLTIMO ACCESO */}
                   <td style={{ padding: '16px', color: '#8b949e', fontSize: '0.9rem' }}>
                     {formatearFecha(user.ultimoAcceso)}
                   </td>
@@ -202,7 +202,6 @@ export const UsuariosDashboard = () => {
         </table>
       </div>
 
-      {/* MODAL DE EDICIÓN / CREACIÓN */}
       {modalAbierto && (
         <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)' }}>
           <div className="form-card" style={{ maxWidth: '600px', width: '100%', borderRadius: '12px', border: '1px solid #444', backgroundColor: '#0d1117' }}>
