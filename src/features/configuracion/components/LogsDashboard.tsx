@@ -8,7 +8,7 @@ interface LogRecord {
   usuario: string;
   modulo: string;
   accion: string;
-  detalle: string;
+  detalle: string; 
   fecha: string;
 }
 

@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, getDocs, onSnapshot, addDoc } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro } from '../../../config/firebase';
 import { FormularioDireccion } from '../../direcciones/components/FormularioDireccion'; 
+import { registrarLog } from '../../../utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
 
 // =========================================
 // SUB-COMPONENTE: SELECTOR CON BUSCADOR ESTRICTO
@@ -108,6 +109,8 @@ const ModalNuevoRegimen: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
     setGuardando(true);
     try {
       await addDoc(collection(db, 'catalogo_regimen_fiscal'), { clave, descripcion });
+      // REGISTRO EN EL LOG CUANDO SE CREA UN RÉGIMEN
+      await registrarLog('Catálogos', 'Creación', `Se agregó el régimen fiscal: ${clave} - ${descripcion}`);
       onClose();
     } catch (error) {
       alert("Error al guardar el régimen fiscal.");
@@ -164,7 +167,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
   const [regimenesFiscales, setRegimenesFiscales] = useState<{id: string, label: string}[]>([]);
   const [direccionesDB, setDireccionesDB] = useState<{id: string, label: string}[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
-  const [tiposFacturas, setTiposFacturas] = useState<any[]>([]); // <-- NUEVO ESTADO PARA TIPOS DE FACTURA
+  const [tiposFacturas, setTiposFacturas] = useState<any[]>([]);
   
   const [modalDireccionAbierto, setModalDireccionAbierto] = useState(false);
   const [modalRegimenAbierto, setModalRegimenAbierto] = useState(false);
@@ -288,9 +291,13 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     try {
       if (initialData && initialData.id) {
         await actualizarRegistro('empresas', initialData.id, formData);
+        // INTEGRACIÓN DEL LOG: EDICIÓN
+        await registrarLog('Empresas', 'Edición', `Actualizó los datos de la empresa: ${formData.nombre}`);
       } else {
         const correlativoFinal = generarSiguienteNumCliente();
         await agregarRegistro('empresas', { ...formData, numCliente: correlativoFinal });
+        // INTEGRACIÓN DEL LOG: CREACIÓN
+        await registrarLog('Empresas', 'Creación', `Agregó la nueva empresa: ${formData.nombre} (${correlativoFinal})`);
       }
       onClose();
     } catch (error) {
