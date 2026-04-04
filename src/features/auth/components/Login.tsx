@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../../../config/firebase';
-import { registrarLog } from '../../../utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
+import { registrarLog } from '../../../utils/logger';
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -21,20 +21,16 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     setLoading(true);
 
     try {
-      // 1. Autenticamos con Firebase
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // 2. Actualizamos su estado a "En línea" y guardamos la fecha
       await updateDoc(doc(db, 'usuarios', user.uid), {
         isOnline: true,
         ultimoAcceso: new Date().toISOString()
       });
 
-      // 3. ¡NUEVO! Registramos la entrada en el Historial de Actividad
       await registrarLog('Sesión', 'Inicio de Sesión', 'El usuario ingresó exitosamente al sistema.');
 
-      // 4. Damos acceso a la app
       onLoginSuccess();
     } catch (err: any) {
       console.error(err);
@@ -45,7 +41,8 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100vh', backgroundColor: '#010409', alignItems: 'center', justifyContent: 'center' }}>
+    // SE AGREGÓ width: '100%' AQUÍ PARA CENTRAR EL MODAL
+    <div style={{ display: 'flex', height: '100vh', width: '100%', backgroundColor: '#010409', alignItems: 'center', justifyContent: 'center' }}>
       <div className="form-card" style={{ maxWidth: '400px', width: '100%', padding: '40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
         
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
@@ -96,7 +93,6 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           </button>
         </form>
 
-        {/* BOTÓN BYPASS (SOLO PARA DESARROLLO) */}
         <div style={{ marginTop: '24px', textAlign: 'center', borderTop: '1px solid #30363d', paddingTop: '24px' }}>
           <button 
             type="button" 
