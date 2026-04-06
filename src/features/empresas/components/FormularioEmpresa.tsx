@@ -3,8 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, getDocs, onSnapshot, addDoc } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro } from '../../../config/firebase';
 import { FormularioDireccion } from '../../direcciones/components/FormularioDireccion'; 
-import { registrarLog } from '../../../utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
-
+import { registrarLog } from '../../../utils/logger'; 
 
 // =========================================
 // SUB-COMPONENTE: SELECTOR CON BUSCADOR ESTRICTO
@@ -110,7 +109,6 @@ const ModalNuevoRegimen: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
     setGuardando(true);
     try {
       await addDoc(collection(db, 'catalogo_regimen_fiscal'), { clave, descripcion });
-      // REGISTRO EN EL LOG CUANDO SE CREA UN RÉGIMEN
       await registrarLog('Catálogos', 'Creación', `Se agregó el régimen fiscal: ${clave} - ${descripcion}`);
       onClose();
     } catch (error) {
@@ -146,7 +144,6 @@ const ModalNuevoRegimen: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
   );
 };
 
-
 // =========================================
 // COMPONENTE PRINCIPAL
 // =========================================
@@ -164,7 +161,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
   
   const [activeTab, setActiveTab] = useState<'general' | 'fiscal' | 'contacto'>('general');
   
-  // ESTADOS DE LOS CATÁLOGOS
   const [regimenesFiscales, setRegimenesFiscales] = useState<{id: string, label: string}[]>([]);
   const [direccionesDB, setDireccionesDB] = useState<{id: string, label: string}[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
@@ -178,7 +174,11 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     nombre: '',
     nombreCorto: '',
     status: 'Activa',
+    fechaBaja: '', // NUEVO
+    observacionesBaja: '', // NUEVO
     tiposServicio: 'Cliente (Paga)',
+    clienteRelacionadoId: '', // NUEVO
+    clienteRelacionadoNombre: '', // NUEVO
     rfcTaxId: '',
     fechaUltimoServicio: '',
     
@@ -194,11 +194,11 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     // --- CONTACTO ---
     direccionId: '',
     direccionLabel: '',
+    maps: '', // NUEVO
     telefono: '',
     correo: ''
   });
 
-  // --- Cargar Catálogos de Firebase en Tiempo Real ---
   useEffect(() => {
     const unsubRegimenes = onSnapshot(collection(db, 'catalogo_regimen_fiscal'), (snap) => {
       setRegimenesFiscales(snap.docs.map(doc => {
@@ -214,7 +214,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       }));
     });
 
-    // Cargar Catálogo de Tipos de Factura
     const unsubFacturas = onSnapshot(collection(db, 'catalogo_tipo_factura'), (snap) => {
       setTiposFacturas(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
@@ -252,17 +251,24 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     }
   }, [initialData, registros]);
 
-  // Manejador genérico modificado para vigilar la moneda
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     
     setFormData(prev => {
       const newData = { ...prev, [name]: value };
       
-      // Lógica de seguridad: Si cambiamos la moneda, borramos el Tipo de Factura anterior
-      // porque ya no coincidirá con la nueva moneda seleccionada.
-      if (name === 'moneda') {
-        newData.tipoFactura = '';
+      if (name === 'moneda') newData.tipoFactura = '';
+      
+      // Si cambia de Mercancía a otra cosa, limpiar el cliente relacionado
+      if (name === 'tiposServicio' && value !== 'Cliente (Mercancía)') {
+        newData.clienteRelacionadoId = '';
+        newData.clienteRelacionadoNombre = '';
+      }
+
+      // Si cambia de Baja a Activa, limpiar datos de baja
+      if (name === 'status' && value !== 'Baja') {
+        newData.fechaBaja = '';
+        newData.observacionesBaja = '';
       }
       
       return newData;
@@ -288,16 +294,20 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       return;
     }
 
+    if (formData.status === 'Baja' && (!formData.fechaBaja || !formData.observacionesBaja)) {
+      alert("Si la empresa está dada de Baja, debes especificar la fecha y las observaciones.");
+      setActiveTab('general');
+      return;
+    }
+
     setCargando(true);
     try {
       if (initialData && initialData.id) {
         await actualizarRegistro('empresas', initialData.id, formData);
-        // INTEGRACIÓN DEL LOG: EDICIÓN
         await registrarLog('Empresas', 'Edición', `Actualizó los datos de la empresa: ${formData.nombre}`);
       } else {
         const correlativoFinal = generarSiguienteNumCliente();
         await agregarRegistro('empresas', { ...formData, numCliente: correlativoFinal });
-        // INTEGRACIÓN DEL LOG: CREACIÓN
         await registrarLog('Empresas', 'Creación', `Agregó la nueva empresa: ${formData.nombre} (${correlativoFinal})`);
       }
       onClose();
@@ -317,9 +327,11 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     transition: 'all 0.2s ease', outline: 'none'
   });
 
-  // --- FILTRO DINÁMICO ---
-  // Filtramos la lista de facturas para que SOLO muestre las que su moneda coincide con la que el usuario seleccionó.
   const tiposFacturasFiltrados = tiposFacturas.filter(tf => tf.moneda === formData.moneda);
+  
+  // Lista de clientes para la relación
+  const clientesPaga = registros.filter(r => r.tiposServicio === 'Cliente (Paga)');
+  const opcionesClientesPaga = clientesPaga.map(c => ({ id: c.id, label: c.nombre }));
 
   return (
     <>
@@ -342,17 +354,10 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
           <div style={{ display: estado === 'minimizado' ? 'none' : 'block' }}>
             
-            {/* NAVEGACIÓN DE PESTAÑAS */}
             <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
-              <button type="button" onClick={() => setActiveTab('general')} style={tabStyle(activeTab === 'general')}>
-                Información General
-              </button>
-              <button type="button" onClick={() => setActiveTab('fiscal')} style={tabStyle(activeTab === 'fiscal')}>
-                Comercial / Fiscal
-              </button>
-              <button type="button" onClick={() => setActiveTab('contacto')} style={tabStyle(activeTab === 'contacto')}>
-                Contacto
-              </button>
+              <button type="button" onClick={() => setActiveTab('general')} style={tabStyle(activeTab === 'general')}>Información General</button>
+              <button type="button" onClick={() => setActiveTab('fiscal')} style={tabStyle(activeTab === 'fiscal')}>Comercial / Fiscal</button>
+              <button type="button" onClick={() => setActiveTab('contacto')} style={tabStyle(activeTab === 'contacto')}>Contacto</button>
             </div>
 
             <form onSubmit={handleSubmit} style={{ padding: '24px', maxHeight: '65vh', overflowY: 'auto' }}>
@@ -380,8 +385,22 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     <select name="status" className="form-control" value={formData.status} onChange={handleChange}>
                       <option value="Activa">Activa</option>
                       <option value="Inactiva">Inactiva</option>
+                      <option value="Baja">Baja</option>
                     </select>
                   </div>
+
+                  {formData.status === 'Baja' && (
+                    <div style={{ gridColumn: 'span 2', backgroundColor: 'rgba(239, 68, 68, 0.05)', padding: '16px', borderRadius: '8px', border: '1px dashed #ef4444', display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px' }}>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ color: '#ef4444' }}>Fecha de Baja *</label>
+                        <input type="date" name="fechaBaja" className="form-control" value={formData.fechaBaja} onChange={handleChange} required />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ color: '#ef4444' }}>Observaciones de Baja *</label>
+                        <input type="text" name="observacionesBaja" className="form-control" value={formData.observacionesBaja} onChange={handleChange} placeholder="Motivo de la baja..." required />
+                      </div>
+                    </div>
+                  )}
 
                   <div className="form-group">
                     <label className="form-label">Tipo de Servicios <span style={{ color: '#ff4d4d' }}>*</span></label>
@@ -395,6 +414,20 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                       <option value="Empresas Roelca">Empresas Roelca</option>
                     </select>
                   </div>
+
+                  {/* LÓGICA DE CLIENTE RELACIONADO (Aparece si es Cliente Mercancía) */}
+                  {formData.tiposServicio === 'Cliente (Mercancía)' && (
+                    <div className="form-group" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                      <label className="form-label" style={{ color: '#58a6ff' }}>Cliente que Paga (Relacionado) *</label>
+                      <SearchableSelect 
+                        options={opcionesClientesPaga}
+                        value={formData.clienteRelacionadoId}
+                        onChange={(id, label) => setFormData(prev => ({ ...prev, clienteRelacionadoId: id, clienteRelacionadoNombre: label }))}
+                        placeholder="Buscar cliente principal..."
+                        required={true}
+                      />
+                    </div>
+                  )}
 
                   <div className="form-group">
                     <label className="form-label">RFC / Tax ID <span style={{ color: '#ff4d4d' }}>*</span></label>
@@ -424,7 +457,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     </div>
                   </div>
 
-                  {/* SELECTOR DE MONEDA */}
                   <div className="form-group">
                     <label className="form-label">Moneda</label>
                     <select name="moneda" className="form-control" value={formData.moneda} onChange={handleChange}>
@@ -435,7 +467,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     </select>
                   </div>
 
-                  {/* SELECTOR DE TIPO DE FACTURA (AHORA ES UN SELECT DINÁMICO) */}
                   <div className="form-group">
                     <label className="form-label">Tipo de Factura</label>
                     <select 
@@ -452,9 +483,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     >
                       <option value="">{formData.moneda ? 'Seleccione Tipo de Factura...' : 'Primero seleccione Moneda'}</option>
                       {tiposFacturasFiltrados.map(tf => (
-                        <option key={tf.id} value={tf.nombre}>
-                          {tf.nombre}
-                        </option>
+                        <option key={tf.id} value={tf.nombre}>{tf.nombre}</option>
                       ))}
                     </select>
                   </div>
@@ -500,6 +529,19 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     </div>
                   </div>
 
+                  {/* NUEVO CAMPO: GOOGLE MAPS */}
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <label className="form-label">Google Maps (URL)</label>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <input type="url" name="maps" className="form-control" value={formData.maps} onChange={handleChange} placeholder="https://maps.app.goo.gl/..." style={{ flex: 1 }} />
+                      {formData.maps && (
+                        <a href={formData.maps} target="_blank" rel="noopener noreferrer" className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', textDecoration: 'none' }}>
+                          Abrir Mapa
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
                   <div className="form-group">
                     <label className="form-label">Teléfono de Contacto</label>
                     <input type="tel" name="telefono" className="form-control" value={formData.telefono} onChange={handleChange} placeholder="Ej. 555-123-4567" />
@@ -526,7 +568,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
         </div>
       </div>
 
-      {/* RENDERIZADO DE MODALES DE APOYO */}
       {modalDireccionAbierto && (
         <div style={{ zIndex: 2000, position: 'relative' }}>
           <FormularioDireccion estado="abierto" onClose={() => setModalDireccionAbierto(false)} />
