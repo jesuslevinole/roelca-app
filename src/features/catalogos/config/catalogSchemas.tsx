@@ -212,6 +212,14 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'obligatorio', label: 'Obligatorio', type: 'select', options: ['Sí', 'No'] }
     ]
   },
+  // NUEVO CATÁLOGO: Tipo de Empresa
+  tipo_empresa: {
+    id: 'tipo_empresa', titulo: 'Tipo de Empresa',
+    icono: <path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm10 12h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V5h2v2zm4 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/>,
+    fields: [
+      { name: 'tipo', label: 'Tipo', type: 'text', required: true }
+    ]
+  },
   tipo_remolque: {
     id: 'tipo_remolque', titulo: 'Tipo de Remolque',
     icono: <path d="M23 18h-2v-2h2v2zm-4-4h-2v2h2v-2zm-4-4h-2v2h2v-2zM1 18v-2h2v2H1zm4-4v-2h2v2H5zm4-4V8h2v2H9zm8 10H7v-2h10v2zm4-12v2h-2V8h2zm-4 4v2h-2v-2h2zm-4 4v2h-2v-2h2zM12 2L2 7l10 5 10-5-10-5z" />,
