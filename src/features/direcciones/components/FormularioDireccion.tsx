@@ -33,7 +33,6 @@ export const FormularioDireccion: React.FC<FormProps> = ({
   const [formData, setFormData] = useState<DireccionRecord>(estadoInicial);
   const [cargando, setCargando] = useState(false);
 
-  // Estados de los catálogos en memoria
   const [paises, setPaises] = useState<any[]>([]);
   const [estadosDB, setEstadosDB] = useState<any[]>([]);
   const [municipios, setMunicipios] = useState<any[]>([]);
@@ -41,17 +40,14 @@ export const FormularioDireccion: React.FC<FormProps> = ({
   const [cps, setCps] = useState<any[]>([]);
   const [calles, setCalles] = useState<any[]>([]);
 
-  // 1. Inicializar datos
   useEffect(() => {
     if (initialData) {
       setFormData(initialData);
     } else {
       setFormData(estadoInicial);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialData]);
 
-  // 2. Cargar todos los catálogos geográficos al montar el formulario
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
@@ -77,19 +73,15 @@ export const FormularioDireccion: React.FC<FormProps> = ({
     cargarCatalogos();
   }, []);
 
-  // 3. Filtros en cascada
   const estadosFiltrados = estadosDB.filter(e => e.pais === formData.paisId);
   const municipiosFiltrados = municipios.filter(m => m.estado === formData.estadoId);
   const coloniasFiltradas = colonias.filter(c => c.municipio === formData.municipioId);
   const cpsFiltrados = cps.filter(cp => cp.colonia === formData.coloniaId);
   const callesFiltradas = calles.filter(c => c.codigo_postal === formData.cpId);
 
-  // 4. LÓGICA DE FORMATEO CONDICIONAL (ESTILO APPSHEET)
   const construirDireccionCompleta = (data: DireccionRecord) => {
-    // ¡AQUÍ ESTÁ LA MAGIA DEFENSIVA! Si no hay paisNombre, será un texto vacío.
     const pais = data.paisNombre?.toLowerCase() || '';
     
-    // Variables seguras para evitar "undefined" o "null" en el string
     const numExt = data.numExterior ? ` #${data.numExterior}` : '';
     const numInt = data.numInterior ? ` ${data.numInterior}` : '';
     const col = data.coloniaNombre ? `, Col. ${data.coloniaNombre}` : '';
@@ -99,38 +91,29 @@ export const FormularioDireccion: React.FC<FormProps> = ({
     const namePais = data.paisNombre ? `, ${data.paisNombre}` : '';
     const calle = data.calleNombre || '';
 
-    // FORMATO MÉXICO
     if (pais.includes('méxico') || pais.includes('mexico')) {
       return `${calle}${numExt}${numInt}${col}${cp}${mun}${est}${namePais}`;
-    } 
-    
-    // FORMATO ESTADOS UNIDOS
-    else if (pais.includes('estados unidos') || pais.includes('usa') || pais.includes('us')) {
+    } else if (pais.includes('estados unidos') || pais.includes('usa') || pais.includes('us')) {
       const extUS = data.numExterior ? `${data.numExterior} ` : '';
       const intUS = data.numInterior ? `, ${data.numInterior}` : '';
       const colUS = data.coloniaNombre ? `, ${data.coloniaNombre}` : '';
       const cpUS = data.cpNombre ? `, ${data.cpNombre}` : '';
-      
       return `${extUS}${calle}${intUS}${colUS}${cpUS}${mun}${est}${namePais}`;
     }
 
-    // FORMATO POR DEFECTO / "Corregir"
     if (!calle && !data.numExterior && !data.estadoNombre) return '';
     return `${calle}${numExt}${col}${mun}${est}${namePais}`;
   };
 
-  // Mantener la "Fórmula" actualizada en vivo
   useEffect(() => {
     const dirCompleta = construirDireccionCompleta(formData);
     setFormData(prev => ({ ...prev, direccionCompleta: dirCompleta }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     formData.paisNombre, formData.estadoNombre, formData.municipioNombre, 
     formData.coloniaNombre, formData.cpNombre, formData.calleNombre, 
     formData.numExterior, formData.numInterior
   ]);
 
-  // 5. Manejadores de cambio
   const handlePaisChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     const nombre = paises.find(p => p.id === id)?.nombre || '';
@@ -183,12 +166,11 @@ export const FormularioDireccion: React.FC<FormProps> = ({
     setFormData(prev => ({ ...prev, calleId: id, calleNombre: nombre }));
   };
 
-  // 6. Guardado
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setCargando(true);
     try {
-      const dataToSave = { ...formData }; // La dirección ya está formateada por el useEffect
+      const dataToSave = { ...formData };
 
       if (formData.id) {
         await updateDoc(doc(db, 'direcciones', formData.id), dataToSave);
@@ -224,7 +206,6 @@ export const FormularioDireccion: React.FC<FormProps> = ({
         <div style={{ display: estado === 'minimizado' ? 'none' : 'block' }}>
           <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
             
-            {/* VISTA PREVIA DE LA DIRECCIÓN FORMATEADA */}
             <div style={{ marginBottom: '24px', padding: '16px', backgroundColor: '#161b22', border: '1px dashed #30363d', borderRadius: '8px' }}>
               <span style={{ display: 'block', fontSize: '0.75rem', color: '#8b949e', textTransform: 'uppercase', marginBottom: '8px' }}>Vista Previa de la Dirección:</span>
               <span style={{ fontSize: '1.1rem', color: '#58a6ff', fontWeight: '500' }}>
@@ -232,7 +213,6 @@ export const FormularioDireccion: React.FC<FormProps> = ({
               </span>
             </div>
 
-            {/* FORMULARIO A DOS COLUMNAS */}
             <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
               
               <div className="form-group">
