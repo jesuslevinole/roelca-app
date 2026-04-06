@@ -23,7 +23,6 @@ const EmpresasDashboard = () => {
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
   const [busqueda, setBusqueda] = useState('');
 
-  // ESTADOS PARA EL MODAL DE DAR DE BAJA
   const [modalBajaAbierto, setModalBajaAbierto] = useState(false);
   const [empresaParaBaja, setEmpresaParaBaja] = useState<any | null>(null);
   const [fechaBaja, setFechaBaja] = useState(new Date().toISOString().split('T')[0]);
@@ -85,7 +84,6 @@ const EmpresasDashboard = () => {
       });
       await registrarLog('Empresas', 'Edición', `Dio de baja a la empresa: ${empresaParaBaja.nombre}`);
       
-      // Actualizar vista actual si está abierta
       if (empresaViendo && empresaViendo.id === empresaParaBaja.id) {
         setEmpresaViendo({ ...empresaViendo, status: 'Baja', fechaBaja, observacionesBaja });
       }
@@ -179,134 +177,10 @@ const EmpresasDashboard = () => {
         />
       )}
 
-      {/* MODAL DETALLES */}
-      {empresaViendo && (
-        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 1000 }}>
-          <div className="form-card detail-card" style={{ maxWidth: '650px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px', overflow: 'hidden' }}>
-            
-            <div className="form-header" style={{ borderBottom: '1px solid #30363d', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.25rem' }}>Detalle de Empresa <span style={{ color: '#D84315' }}>{empresaViendo.numCliente}</span></h2>
-                {empresaViendo.status === 'Baja' && (
-                  <span style={{ display: 'inline-block', marginTop: '8px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-                    EMPRESA DADA DE BAJA EL {empresaViendo.fechaBaja}
-                  </span>
-                )}
-              </div>
-              <button onClick={() => setEmpresaViendo(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
-            </div>
-            
-            <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
-              <button type="button" onClick={() => setActiveTabDetalle('general')} style={tabStyle(activeTabDetalle === 'general')}>General</button>
-              <button type="button" onClick={() => setActiveTabDetalle('fiscal')} style={tabStyle(activeTabDetalle === 'fiscal')}>Comercial / Fiscal</button>
-              <button type="button" onClick={() => setActiveTabDetalle('contacto')} style={tabStyle(activeTabDetalle === 'contacto')}>Contacto</button>
-            </div>
-
-            <div className="detail-content" style={{ padding: '24px', minHeight: '300px' }}>
-              
-              {activeTabDetalle === 'general' && (
-                <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Razón Social</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '1rem', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.nombre)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Nombre Corto</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.nombreCorto)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Status</span><span className="detail-value" style={{ color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: '8px' }}><span className={`dot ${empresaViendo.status === 'Activa' ? 'dot-green' : empresaViendo.status === 'Baja' ? 'dot-red' : 'dot-gray'}`}></span>{mostrarDato(empresaViendo.status)}</span></div>
-                  
-                  {empresaViendo.status === 'Baja' && (
-                    <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.05)', padding: '12px', borderRadius: '8px', border: '1px dashed #ef4444' }}>
-                      <div className="detail-item" style={{ marginBottom: '8px' }}><span className="detail-label" style={{ color: '#ef4444', fontSize: '0.8rem' }}>Fecha de Baja</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaBaja)}</span></div>
-                      <div className="detail-item"><span className="detail-label" style={{ color: '#ef4444', fontSize: '0.8rem' }}>Observaciones de Baja</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.observacionesBaja)}</span></div>
-                    </div>
-                  )}
-
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Servicios</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tiposServicio)}</span></div>
-                  
-                  {empresaViendo.tiposServicio === 'Cliente (Mercancía)' && (
-                    <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Cliente Paga (Relacionado)</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: '500' }}>{mostrarDato(empresaViendo.clienteRelacionadoNombre)}</span></div>
-                  )}
-
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
-                </div>
-              )}
-
-              {activeTabDetalle === 'fiscal' && (
-                <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo.regimenFiscalLabel || empresaViendo.regimenFiscal)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Moneda</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.moneda)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Factura</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tipoFactura)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Condición de Pago</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.condicionPago)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Días de Crédito</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.diasCredito)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Límite de Crédito</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>${Number(empresaViendo.limiteCredito || 0).toFixed(2)}</span></div>
-                </div>
-              )}
-
-              {activeTabDetalle === 'contacto' && (
-                <div className="detail-grid" style={{ gridTemplateColumns: '1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección de la Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.direccionLabel || empresaViendo.direccion)}</span></div>
-                  <div className="detail-item">
-                    <span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Google Maps (Ubicación)</span>
-                    {empresaViendo.maps ? (
-                      <a href={empresaViendo.maps} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#10b981', textDecoration: 'none', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '6px 12px', borderRadius: '6px', fontSize: '0.85rem', marginTop: '4px' }}>
-                        📍 Abrir en Google Maps
-                      </a>
-                    ) : (
-                      <span className="detail-value" style={{ color: '#c9d1d9' }}>-</span>
-                    )}
-                  </div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Teléfono</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.telefono)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Correo Electrónico</span><span className="detail-value" style={{ color: '#58a6ff' }}>{mostrarDato(empresaViendo.correo)}</span></div>
-                </div>
-              )}
-
-            </div>
-
-            <div className="form-actions detail-actions" style={{ padding: '24px', justifyContent: 'space-between', borderTop: '1px solid #30363d', backgroundColor: '#161b22', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={() => eliminarEmpresa(empresaViendo.id)} className="btn btn-danger-solid" style={{ backgroundColor: '#da3633', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Eliminar</button>
-                {empresaViendo.status !== 'Baja' && (
-                  <button onClick={() => abrirModalBaja(empresaViendo)} className="btn btn-outline" style={{ border: '1px solid #eab308', color: '#eab308', backgroundColor: 'transparent', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dar de Baja</button>
-                )}
-                <button onClick={() => editarEmpresa(empresaViendo)} className="btn btn-primary" style={{ backgroundColor: '#2ea043', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Editar</button>
-              </div>
-              <button onClick={() => setEmpresaViendo(null)} className="btn btn-outline" style={{ border: '1px solid #30363d', color: '#c9d1d9', backgroundColor: 'transparent', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Cerrar</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL PARA CONFIRMAR BAJA */}
-      {modalBajaAbierto && empresaParaBaja && (
-        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 2000 }}>
-          <div className="form-card" style={{ maxWidth: '400px', backgroundColor: '#0d1117', border: '1px solid #eab308', borderRadius: '12px' }}>
-            <div className="form-header" style={{ padding: '20px', borderBottom: '1px solid #30363d', backgroundColor: 'rgba(234, 179, 8, 0.1)' }}>
-              <h3 style={{ margin: 0, color: '#eab308', fontSize: '1.1rem' }}>⚠️ Dar de Baja Cliente</h3>
-            </div>
-            <form onSubmit={confirmarBaja} style={{ padding: '20px' }}>
-              <p style={{ color: '#c9d1d9', fontSize: '0.9rem', marginBottom: '20px' }}>Estás a punto de dar de baja a <strong>{empresaParaBaja.nombre}</strong>.</p>
-              
-              <div className="form-group" style={{ marginBottom: '16px' }}>
-                <label className="form-label" style={{ color: '#8b949e' }}>Fecha de Baja *</label>
-                <input type="date" className="form-control" value={fechaBaja} onChange={e => setFechaBaja(e.target.value)} required style={{ backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d' }} />
-              </div>
-              <div className="form-group" style={{ marginBottom: '24px' }}>
-                <label className="form-label" style={{ color: '#8b949e' }}>Observaciones *</label>
-                <textarea className="form-control" value={observacionesBaja} onChange={e => setObservacionesBaja(e.target.value)} required rows={3} placeholder="Motivo de la baja..." style={{ backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d', resize: 'none' }}></textarea>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button type="button" onClick={() => setModalBajaAbierto(false)} className="btn btn-outline">Cancelar</button>
-                <button type="submit" className="btn" disabled={guardandoBaja} style={{ backgroundColor: '#eab308', color: '#000', border: 'none', padding: '10px 20px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
-                  {guardandoBaja ? 'Guardando...' : 'Confirmar Baja'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* --- HEADER DEL MÓDULO --- */}
+      {/* --- HEADER DEL MÓDULO (CON SINTAXIS HTML CORREGIDA) --- */}
       <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '24px' }}>
         <h1 className="module-title" style={{ fontSize: '1.25rem', color: '#8b949e', margin: 0, fontWeight: '400' }}>
-          Bases de Datos &gt; <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Empresas</span>
+          Bases de Datos {'>'} <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Empresas</span>
         </h1>
         <div className="action-buttons" style={{ display: 'flex', gap: '12px' }}>
           <button className="btn btn-outline" onClick={exportarExcel} disabled={empresasFiltradas.length === 0} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -362,13 +236,13 @@ const EmpresasDashboard = () => {
             <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '900px' }}>
               <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
+                  <th style={{ padding: '16px', width: '120px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 11, borderRight: '1px solid #30363d' }}>Acciones</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}># de Cliente</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Empresa</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Nombre Corto</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Tipo de Servicios</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>RFC / Tax Id</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Fecha Serv.</th>
-                  <th style={{ padding: '16px', width: '120px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', right: 0, backgroundColor: '#161b22', zIndex: 11 }}>Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -387,6 +261,29 @@ const EmpresasDashboard = () => {
                       onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} 
                       onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
+                      <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
+                        <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                          <button 
+                            className="btn-small btn-edit" 
+                            onClick={() => editarEmpresa(emp)}
+                            style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            Editar
+                          </button>
+                          <button 
+                            className="btn-small btn-danger" 
+                            onClick={() => eliminarEmpresa(emp.id)}
+                            style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+
                       <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>
                         {emp.status === 'Baja' ? <span style={{ color: '#ef4444', textDecoration: 'line-through' }}>{emp.numCliente}</span> : emp.numCliente}
                       </td>
@@ -397,25 +294,6 @@ const EmpresasDashboard = () => {
                       <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{emp.tiposServicio}</td>
                       <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{mostrarDato(emp.rfcTaxId)}</td>
                       <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{mostrarDato(emp.fechaUltimoServicio)}</td>
-                      
-                      <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', right: 0, backgroundColor: 'inherit', zIndex: 5 }} onClick={(e: any) => e.stopPropagation()}>
-                        <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                          <button 
-                            className="btn-small btn-edit" 
-                            onClick={() => editarEmpresa(emp)}
-                            style={{ background: 'transparent', border: '1px solid #30363d', borderRadius: '4px', color: '#c9d1d9', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem' }}
-                          >
-                            Editar
-                          </button>
-                          <button 
-                            className="btn-small btn-danger" 
-                            onClick={() => eliminarEmpresa(emp.id)}
-                            style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 12px', fontSize: '0.85rem' }}
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </td>
                     </tr>
                   ))
                 )}
@@ -425,6 +303,135 @@ const EmpresasDashboard = () => {
 
         </div>
       </div>
+
+      {/* MODAL DETALLES MOVIDO AL FINAL POR ORDEN */}
+      {empresaViendo && (
+        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 1000 }}>
+          <div className="form-card detail-card" style={{ maxWidth: '850px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px', overflow: 'hidden' }}>
+            
+            <div className="form-header" style={{ borderBottom: '1px solid #30363d', padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.25rem' }}>Detalle de Empresa <span style={{ color: '#D84315' }}>{empresaViendo.numCliente}</span></h2>
+                {empresaViendo.status === 'Baja' && (
+                  <span style={{ display: 'inline-block', marginTop: '8px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                    EMPRESA DADA DE BAJA EL {empresaViendo.fechaBaja}
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setEmpresaViendo(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            
+            <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px' }}>
+              <button type="button" onClick={() => setActiveTabDetalle('general')} style={tabStyle(activeTabDetalle === 'general')}>General</button>
+              <button type="button" onClick={() => setActiveTabDetalle('fiscal')} style={tabStyle(activeTabDetalle === 'fiscal')}>Comercial / Fiscal</button>
+              <button type="button" onClick={() => setActiveTabDetalle('contacto')} style={tabStyle(activeTabDetalle === 'contacto')}>Contacto</button>
+            </div>
+
+            <div className="detail-content" style={{ padding: '24px', minHeight: '300px' }}>
+              
+              {activeTabDetalle === 'general' && (
+                <div className="detail-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Razón Social</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '1rem', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.nombre)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Nombre Corto</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.nombreCorto)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Status</span><span className="detail-value" style={{ color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: '8px' }}><span className={`dot ${empresaViendo.status === 'Activa' ? 'dot-green' : empresaViendo.status === 'Baja' ? 'dot-red' : 'dot-gray'}`}></span>{mostrarDato(empresaViendo.status)}</span></div>
+                  
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Servicios</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tiposServicio)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
+                  
+                  {empresaViendo.tiposServicio === 'Cliente (Mercancía)' && (
+                    <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Cliente Paga (Relacionado)</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: '500' }}>{mostrarDato(empresaViendo.clienteRelacionadoNombre)}</span></div>
+                  )}
+
+                  {empresaViendo.status === 'Baja' && (
+                    <div style={{ gridColumn: 'span 3', backgroundColor: 'rgba(239, 68, 68, 0.05)', padding: '16px', borderRadius: '8px', border: '1px dashed #ef4444', display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px' }}>
+                      <div className="detail-item" style={{ marginBottom: '0' }}><span className="detail-label" style={{ color: '#ef4444', fontSize: '0.8rem' }}>Fecha de Baja</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaBaja)}</span></div>
+                      <div className="detail-item"><span className="detail-label" style={{ color: '#ef4444', fontSize: '0.8rem' }}>Observaciones de Baja</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.observacionesBaja)}</span></div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTabDetalle === 'fiscal' && (
+                <div className="detail-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo.regimenFiscalLabel || empresaViendo.regimenFiscal)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Moneda</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.moneda)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Factura</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tipoFactura)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Condición de Pago</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.condicionPago)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Días de Crédito</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.diasCredito)}</span></div>
+                  <div className="detail-item" style={{ gridColumn: 'span 2' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Límite de Crédito</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>${Number(empresaViendo.limiteCredito || 0).toFixed(2)}</span></div>
+                </div>
+              )}
+
+              {activeTabDetalle === 'contacto' && (
+                <div className="detail-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección de la Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.direccionLabel || empresaViendo.direccion)}</span></div>
+                  <div className="detail-item">
+                    <span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Teléfono</span>
+                    <span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.telefono)}</span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Correo Electrónico</span>
+                    <span className="detail-value" style={{ color: '#58a6ff' }}>{mostrarDato(empresaViendo.correo)}</span>
+                  </div>
+                  <div className="detail-item">
+                    <span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Google Maps (Ubicación)</span>
+                    {empresaViendo.maps ? (
+                      <a href={empresaViendo.maps} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#10b981', textDecoration: 'none', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '6px 12px', borderRadius: '6px', fontSize: '0.85rem', marginTop: '4px' }}>
+                        📍 Abrir en Google Maps
+                      </a>
+                    ) : (
+                      <span className="detail-value" style={{ color: '#c9d1d9' }}>-</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            </div>
+
+            <div className="form-actions detail-actions" style={{ padding: '24px', justifyContent: 'space-between', borderTop: '1px solid #30363d', backgroundColor: '#161b22', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button onClick={() => eliminarEmpresa(empresaViendo.id)} className="btn btn-danger-solid" style={{ backgroundColor: '#da3633', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Eliminar</button>
+                {empresaViendo.status !== 'Baja' && (
+                  <button onClick={() => abrirModalBaja(empresaViendo)} className="btn btn-outline" style={{ border: '1px solid #eab308', color: '#eab308', backgroundColor: 'transparent', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dar de Baja</button>
+                )}
+                <button onClick={() => editarEmpresa(empresaViendo)} className="btn btn-primary" style={{ backgroundColor: '#2ea043', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Editar</button>
+              </div>
+              <button onClick={() => setEmpresaViendo(null)} className="btn btn-outline" style={{ border: '1px solid #30363d', color: '#c9d1d9', backgroundColor: 'transparent', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PARA CONFIRMAR BAJA */}
+      {modalBajaAbierto && empresaParaBaja && (
+        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 2000 }}>
+          <div className="form-card" style={{ maxWidth: '400px', backgroundColor: '#0d1117', border: '1px solid #eab308', borderRadius: '12px' }}>
+            <div className="form-header" style={{ padding: '20px', borderBottom: '1px solid #30363d', backgroundColor: 'rgba(234, 179, 8, 0.1)' }}>
+              <h3 style={{ margin: 0, color: '#eab308', fontSize: '1.1rem' }}>⚠️ Dar de Baja Cliente</h3>
+            </div>
+            <form onSubmit={confirmarBaja} style={{ padding: '20px' }}>
+              <p style={{ color: '#c9d1d9', fontSize: '0.9rem', marginBottom: '20px' }}>Estás a punto de dar de baja a <strong>{empresaParaBaja.nombre}</strong>.</p>
+              
+              <div className="form-group" style={{ marginBottom: '16px' }}>
+                <label className="form-label" style={{ color: '#8b949e' }}>Fecha de Baja *</label>
+                <input type="date" className="form-control" value={fechaBaja} onChange={e => setFechaBaja(e.target.value)} required style={{ backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d' }} />
+              </div>
+              <div className="form-group" style={{ marginBottom: '24px' }}>
+                <label className="form-label" style={{ color: '#8b949e' }}>Observaciones *</label>
+                <textarea className="form-control" value={observacionesBaja} onChange={e => setObservacionesBaja(e.target.value)} required rows={3} placeholder="Motivo de la baja..." style={{ backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d', resize: 'none' }}></textarea>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button type="button" onClick={() => setModalBajaAbierto(false)} className="btn btn-outline">Cancelar</button>
+                <button type="submit" className="btn" disabled={guardandoBaja} style={{ backgroundColor: '#eab308', color: '#000', border: 'none', padding: '10px 20px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>
+                  {guardandoBaja ? 'Guardando...' : 'Confirmar Baja'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
