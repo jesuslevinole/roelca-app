@@ -13,7 +13,10 @@ interface Props {
 export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }) => {
   const [tiempoActual, setTiempoActual] = useState(new Date());
   const [tipoRegistro, setTipoRegistro] = useState('');
-  const [ubicacion, setUbicacion] = useState('');
+  
+  // Novedad: Separamos la vista de la base de datos
+  const [coordenadasVisuales, setCoordenadasVisuales] = useState(''); // Lo que ve el usuario (Lat/Long)
+  const [ubicacionBD, setUbicacionBD] = useState(''); // Lo que va a Firebase (URL del mapa)
   
   const [obteniendoGps, setObteniendoGps] = useState(false);
   const [cargando, setCargando] = useState(false);
@@ -46,13 +49,11 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
         let accesoPermitido = true;
 
         if (!rolesExentos.includes(usuario.rol)) {
-          // Obtener la IP Oficial de Firebase
           const configRef = doc(db, 'configuracion', 'seguridad');
           const configSnap = await getDoc(configRef);
           const ipOficial = configSnap.exists() ? configSnap.data().ipOficial : null;
 
           if (ipOficial) {
-            // Obtener la IP pública actual del dispositivo
             const response = await fetch('https://api.ipify.org?format=json');
             const data = await response.json();
             const ipActual = data.ip;
@@ -66,7 +67,6 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
 
         setIpValida(accesoPermitido);
 
-        // Si el acceso no está permitido, no cargamos el historial para ahorrar peticiones
         if (!accesoPermitido) {
           setCargandoDatos(false);
           return;
@@ -118,8 +118,14 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
-        const mapsLink = `http://googleusercontent.com/maps.google.com/?q=${latitude},${longitude}`;
-        setUbicacion(mapsLink);
+        
+        // Formateamos visualmente para el usuario
+        setCoordenadasVisuales(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
+        
+        // Guardamos el link oficial para Firebase
+        const mapsLink = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        setUbicacionBD(mapsLink);
+        
         setObteniendoGps(false);
       },
       (error) => {
@@ -130,10 +136,17 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
     );
   };
 
+  // Por si falla el GPS y necesitan escribir a mano (Fallback)
+  const handleIngresoManualGPS = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const texto = e.target.value;
+    setCoordenadasVisuales(texto);
+    setUbicacionBD(texto); // Si lo escriben manual, se va tal cual a la BD
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ubicacion) {
-      alert("La ubicación es obligatoria para poder checar.");
+    if (!ubicacionBD) {
+      alert("La ubicación es obligatoria para poder checar. Por favor presiona el botón GPS.");
       return;
     }
     if (!tipoRegistro) {
@@ -152,7 +165,7 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
         fecha: fechaLocal,
         hora: horaLocal,
         tipoRegistro: tipoRegistro,
-        ubicacion: ubicacion,
+        ubicacion: ubicacionBD, // Enviamos el Link del Mapa a Firestore
         ipRegistro: ipActualUsuario || 'Exento',
         timestamp: tiempoActual.getTime() 
       });
@@ -252,16 +265,17 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label" style={{ color: '#8b949e' }}>Ubicación *</label>
+                  <label className="form-label" style={{ color: '#8b949e' }}>Ubicación (Lat, Lng) *</label>
                   <div style={{ display: 'flex', gap: '10px' }}>
                     <input 
                       type="text" 
-                      className="form-control" 
-                      value={ubicacion} 
-                      onChange={(e) => setUbicacion(e.target.value)} 
-                      placeholder="Presiona el botón o escribe tu ubicación..." 
+                      className="form-control font-mono" 
+                      value={coordenadasVisuales} 
+                      onChange={handleIngresoManualGPS} 
+                      placeholder="Presiona el botón de GPS..." 
                       required 
-                      style={{ flex: 1, backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d' }}
+                      readOnly={obteniendoGps}
+                      style={{ flex: 1, backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d', fontSize: '0.9rem' }}
                     />
                     <button type="button" onClick={obtenerUbicacion} disabled={obteniendoGps} className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
                       {obteniendoGps ? 'Buscando...' : '📍 GPS'}
