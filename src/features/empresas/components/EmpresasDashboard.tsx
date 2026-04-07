@@ -95,6 +95,16 @@ const EmpresasDashboard = () => {
     }
   };
 
+  // Función de ayuda para renderizar arrays (Tipos de Empresa, Tipos de Servicio)
+  const renderArrayValues = (values: any) => {
+    if (!values) return '-';
+    if (Array.isArray(values)) {
+      if (values.length === 0) return '-';
+      return values.join(', ');
+    }
+    return values; // Por si es un string heredado (retrocompatibilidad)
+  };
+
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
 
   const empresasFiltradas = useMemo(() => {
@@ -102,7 +112,14 @@ const EmpresasDashboard = () => {
       let pasaFiltro = true;
       if (filtroActivo === 'Empresa Inactiva') pasaFiltro = emp.status === 'Inactiva';
       else if (filtroActivo === 'Baja') pasaFiltro = emp.status === 'Baja';
-      else if (filtroActivo !== 'Todo') pasaFiltro = emp.tiposServicio === filtroActivo;
+      else if (filtroActivo !== 'Todo') {
+        // La validación ahora debe buscar dentro del array de tiposEmpresa
+        if (Array.isArray(emp.tiposEmpresa)) {
+          pasaFiltro = emp.tiposEmpresa.includes(filtroActivo);
+        } else {
+          pasaFiltro = emp.tiposServicio === filtroActivo || emp.tiposEmpresa === filtroActivo;
+        }
+      }
 
       if (!pasaFiltro) return false;
       if (!busqueda.trim()) return true;
@@ -124,7 +141,8 @@ const EmpresasDashboard = () => {
       'Razón Social': emp.nombre || '',
       'Nombre Corto': emp.nombreCorto || '',
       'Status': emp.status || '',
-      'Tipo de Servicios': emp.tiposServicio || '',
+      'Tipo(s) de Empresa': renderArrayValues(emp.tiposEmpresa),
+      'Servicios Ofrecidos': renderArrayValues(emp.tiposServicio),
       'Cliente Relacionado': emp.clienteRelacionadoNombre || '',
       'RFC/Tax ID': emp.rfcTaxId || '',
       'Último Servicio': emp.fechaUltimoServicio || '',
@@ -145,10 +163,10 @@ const EmpresasDashboard = () => {
     const worksheet = XLSX.utils.json_to_sheet(datosExcel);
 
     const columnWidths = [
-      { wch: 15 }, { wch: 40 }, { wch: 20 }, { wch: 15 }, { wch: 25 }, { wch: 30 }, 
-      { wch: 20 }, { wch: 15 }, { wch: 45 }, { wch: 15 }, { wch: 25 }, { wch: 15 }, 
-      { wch: 15 }, { wch: 15 }, { wch: 50 }, { wch: 30 }, { wch: 20 }, { wch: 30 },
-      { wch: 15 }, { wch: 40 }
+      { wch: 15 }, { wch: 40 }, { wch: 20 }, { wch: 15 }, { wch: 35 }, { wch: 35 }, 
+      { wch: 30 }, { wch: 20 }, { wch: 15 }, { wch: 45 }, { wch: 15 }, { wch: 25 }, 
+      { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 50 }, { wch: 30 }, { wch: 20 }, 
+      { wch: 30 }, { wch: 15 }, { wch: 40 }
     ];
     worksheet['!cols'] = columnWidths;
 
@@ -177,7 +195,7 @@ const EmpresasDashboard = () => {
         />
       )}
 
-      {/* --- HEADER DEL MÓDULO (CON SINTAXIS HTML CORREGIDA) --- */}
+      {/* --- HEADER DEL MÓDULO --- */}
       <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '24px' }}>
         <h1 className="module-title" style={{ fontSize: '1.25rem', color: '#8b949e', margin: 0, fontWeight: '400' }}>
           Bases de Datos {'>'} <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Empresas</span>
@@ -233,14 +251,15 @@ const EmpresasDashboard = () => {
         <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
           
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}> 
-            <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '900px' }}>
+            <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '1000px' }}>
               <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
                   <th style={{ padding: '16px', width: '120px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 11, borderRight: '1px solid #30363d' }}>Acciones</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}># de Cliente</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Empresa</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Nombre Corto</th>
-                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Tipo de Servicios</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Tipo de Empresa</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Servicios</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>RFC / Tax Id</th>
                   <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Fecha Serv.</th>
                 </tr>
@@ -248,7 +267,7 @@ const EmpresasDashboard = () => {
               <tbody>
                 {empresasFiltradas.length === 0 ? (
                   <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+                    <td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
                       {busqueda ? 'No se encontraron coincidencias.' : 'Aún no hay empresas registradas o ninguna coincide con el filtro.'}
                     </td>
                   </tr>
@@ -291,7 +310,14 @@ const EmpresasDashboard = () => {
                         {emp.nombre} {emp.status === 'Baja' && <span style={{ fontSize: '0.7rem', border: '1px solid #ef4444', padding: '2px 4px', borderRadius: '4px', marginLeft: '6px' }}>BAJA</span>}
                       </td>
                       <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{mostrarDato(emp.nombreCorto)}</td>
-                      <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{emp.tiposServicio}</td>
+                      
+                      <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.85rem', maxWidth: '200px', whiteSpace: 'normal' }}>
+                        {renderArrayValues(emp.tiposEmpresa)}
+                      </td>
+                      <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.85rem', maxWidth: '200px', whiteSpace: 'normal' }}>
+                        {renderArrayValues(emp.tiposServicio)}
+                      </td>
+                      
                       <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{mostrarDato(emp.rfcTaxId)}</td>
                       <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{mostrarDato(emp.fechaUltimoServicio)}</td>
                     </tr>
@@ -304,7 +330,7 @@ const EmpresasDashboard = () => {
         </div>
       </div>
 
-      {/* MODAL DETALLES MOVIDO AL FINAL POR ORDEN */}
+      {/* MODAL DETALLES */}
       {empresaViendo && (
         <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 1000 }}>
           <div className="form-card detail-card" style={{ maxWidth: '850px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px', overflow: 'hidden' }}>
@@ -335,11 +361,13 @@ const EmpresasDashboard = () => {
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Nombre Corto</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.nombreCorto)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Status</span><span className="detail-value" style={{ color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: '8px' }}><span className={`dot ${empresaViendo.status === 'Activa' ? 'dot-green' : empresaViendo.status === 'Baja' ? 'dot-red' : 'dot-gray'}`}></span>{mostrarDato(empresaViendo.status)}</span></div>
                   
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Servicios</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tiposServicio)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo(s) de Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{renderArrayValues(empresaViendo.tiposEmpresa)}</span></div>
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Servicios Ofrecidos</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{renderArrayValues(empresaViendo.tiposServicio)}</span></div>
                   
-                  {empresaViendo.tiposServicio === 'Cliente (Mercancía)' && (
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
+                  <div className="detail-item" style={{ gridColumn: 'span 2' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
+                  
+                  {Array.isArray(empresaViendo.tiposEmpresa) && empresaViendo.tiposEmpresa.includes('Cliente (Mercancía)') && (
                     <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Cliente Paga (Relacionado)</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: '500' }}>{mostrarDato(empresaViendo.clienteRelacionadoNombre)}</span></div>
                   )}
 

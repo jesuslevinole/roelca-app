@@ -1,9 +1,91 @@
 // src/features/empresas/components/FormularioEmpresa.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs, onSnapshot, addDoc } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro } from '../../../config/firebase';
 import { FormularioDireccion } from '../../direcciones/components/FormularioDireccion'; 
 import { registrarLog } from '../../../utils/logger'; 
+
+// =========================================
+// SUB-COMPONENTE: SELECTOR MULTIPLE CON CHECKBOXES
+// =========================================
+const MultiSelectCheckbox: React.FC<{
+  options: string[];
+  selectedValues: string[];
+  onChange: (newValues: string[]) => void;
+  placeholder?: string;
+}> = ({ options, selectedValues, onChange, placeholder = "Seleccionar..." }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Cerrar el menú al hacer clic fuera
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleToggle = (option: string) => {
+    if (selectedValues.includes(option)) {
+      onChange(selectedValues.filter(v => v !== option));
+    } else {
+      onChange([...selectedValues, option]);
+    }
+  };
+
+  const displayText = selectedValues.length > 0 
+    ? `${selectedValues.length} seleccionado(s)` 
+    : placeholder;
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        className="form-control"
+        style={{
+          cursor: 'pointer', border: isOpen ? '1px solid #3b82f6' : '1px solid #30363d',
+          backgroundColor: '#010409', color: selectedValues.length > 0 ? '#c9d1d9' : '#8b949e',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none'
+        }}
+      >
+        <span>{displayText}</span>
+        <span style={{ fontSize: '0.8rem' }}>{isOpen ? '▲' : '▼'}</span>
+      </div>
+      
+      {isOpen && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '250px', overflowY: 'auto',
+          backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '4px', marginTop: '4px',
+          padding: '8px 0', zIndex: 1000, boxShadow: '0 4px 12px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column'
+        }}>
+          {options.map(opt => (
+            <label 
+              key={opt} 
+              style={{ 
+                padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '10px', 
+                cursor: 'pointer', color: '#c9d1d9', fontSize: '0.9rem' 
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+            >
+              <input 
+                type="checkbox" 
+                checked={selectedValues.includes(opt)}
+                onChange={() => handleToggle(opt)}
+                style={{ accentColor: '#D84315', width: '16px', height: '16px', cursor: 'pointer' }}
+              />
+              {opt}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 // =========================================
 // SUB-COMPONENTE: SELECTOR CON BUSCADOR ESTRICTO
@@ -54,10 +136,8 @@ const SearchableSelect: React.FC<{
         }}
         required={required && !value} 
         style={{
-          cursor: 'text',
-          border: isOpen ? '1px solid #3b82f6' : '1px solid #30363d',
-          backgroundColor: '#010409',
-          color: '#c9d1d9'
+          cursor: 'text', border: isOpen ? '1px solid #3b82f6' : '1px solid #30363d',
+          backgroundColor: '#010409', color: '#c9d1d9'
         }}
       />
       
@@ -158,14 +238,18 @@ interface FormProps {
 
 export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, registros, onClose, onMinimize, onRestore }) => {
   const [cargando, setCargando] = useState(false);
-  
   const [activeTab, setActiveTab] = useState<'general' | 'fiscal' | 'contacto'>('general');
   
+  // CATÁLOGOS BASE DE DATOS
   const [regimenesFiscales, setRegimenesFiscales] = useState<{id: string, label: string}[]>([]);
   const [direccionesDB, setDireccionesDB] = useState<{id: string, label: string}[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
   const [tiposFacturas, setTiposFacturas] = useState<any[]>([]);
   
+  // NUEVOS CATÁLOGOS PARA LISTAS
+  const [catalogoTiposEmpresa, setCatalogoTiposEmpresa] = useState<string[]>([]);
+  const [catalogoTiposServicio, setCatalogoTiposServicio] = useState<string[]>([]);
+
   const [modalDireccionAbierto, setModalDireccionAbierto] = useState(false);
   const [modalRegimenAbierto, setModalRegimenAbierto] = useState(false);
 
@@ -174,15 +258,15 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     nombre: '',
     nombreCorto: '',
     status: 'Activa',
-    fechaBaja: '', // NUEVO
-    observacionesBaja: '', // NUEVO
-    tiposServicio: 'Cliente (Paga)',
-    clienteRelacionadoId: '', // NUEVO
-    clienteRelacionadoNombre: '', // NUEVO
+    fechaBaja: '', 
+    observacionesBaja: '', 
+    tiposEmpresa: [] as string[], // AHORA ES UN ARRAY DE STRINGS
+    tiposServicio: [] as string[], // AHORA ES UN ARRAY DE STRINGS
+    clienteRelacionadoId: '', 
+    clienteRelacionadoNombre: '', 
     rfcTaxId: '',
     fechaUltimoServicio: '',
     
-    // --- FISCAL ---
     regimenFiscalId: '',
     regimenFiscalLabel: '',
     moneda: '',
@@ -191,15 +275,15 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     diasCredito: 30,
     limiteCredito: 0.00,
 
-    // --- CONTACTO ---
     direccionId: '',
     direccionLabel: '',
-    maps: '', // NUEVO
+    maps: '', 
     telefono: '',
     correo: ''
   });
 
   useEffect(() => {
+    // Suscripciones a Firebase
     const unsubRegimenes = onSnapshot(collection(db, 'catalogo_regimen_fiscal'), (snap) => {
       setRegimenesFiscales(snap.docs.map(doc => {
         const d = doc.data();
@@ -218,12 +302,23 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       setTiposFacturas(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    const fetchMonedas = async () => {
-      const monedaSnap = await getDocs(collection(db, 'catalogo_moneda'));
-      setMonedas(monedaSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    // Cargar los catálogos nuevos
+    const fetchTiposLists = async () => {
+      try {
+        const tEmpresas = await getDocs(collection(db, 'catalogo_tipo_empresa'));
+        setCatalogoTiposEmpresa(tEmpresas.docs.map(doc => doc.data().tipo).filter(Boolean));
+
+        const tServicios = await getDocs(collection(db, 'catalogo_tipo_servicio'));
+        setCatalogoTiposServicio(tServicios.docs.map(doc => doc.data().nombre).filter(Boolean));
+
+        const monedaSnap = await getDocs(collection(db, 'catalogo_moneda'));
+        setMonedas(monedaSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      } catch (error) {
+        console.error("Error cargando catálogos secundarios", error);
+      }
     };
 
-    fetchMonedas();
+    fetchTiposLists();
 
     return () => {
       unsubRegimenes();
@@ -245,7 +340,28 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
   useEffect(() => {
     if (initialData) {
-      setFormData(initialData);
+      // Normalizar datos legacy (por si antes eran strings y ahora son arrays)
+      const data = { ...initialData };
+      if (data.tiposEmpresa && !Array.isArray(data.tiposEmpresa)) {
+        data.tiposEmpresa = [data.tiposEmpresa];
+      } else if (!data.tiposEmpresa) {
+        data.tiposEmpresa = [];
+      }
+      
+      // Adaptación especial para el cambio de nombre de tiposServicio a array
+      if (data.tiposServicio && !Array.isArray(data.tiposServicio)) {
+         // Si era un string antiguo y es un cliente mercancía, lo pasamos al array de Empresas por coherencia
+         if(data.tiposServicio === 'Cliente (Mercancía)' || data.tiposServicio === 'Cliente (Paga)') {
+           if(!data.tiposEmpresa.includes(data.tiposServicio)){
+              data.tiposEmpresa = [...data.tiposEmpresa, data.tiposServicio];
+           }
+         }
+         data.tiposServicio = []; // Lo vaciamos porque ahora servicios es otra cosa
+      } else if (!data.tiposServicio) {
+        data.tiposServicio = [];
+      }
+
+      setFormData(data as any);
     } else {
       setFormData(prev => ({ ...prev, numCliente: generarSiguienteNumCliente() }));
     }
@@ -258,14 +374,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       const newData = { ...prev, [name]: value };
       
       if (name === 'moneda') newData.tipoFactura = '';
-      
-      // Si cambia de Mercancía a otra cosa, limpiar el cliente relacionado
-      if (name === 'tiposServicio' && value !== 'Cliente (Mercancía)') {
-        newData.clienteRelacionadoId = '';
-        newData.clienteRelacionadoNombre = '';
-      }
 
-      // Si cambia de Baja a Activa, limpiar datos de baja
       if (name === 'status' && value !== 'Baja') {
         newData.fechaBaja = '';
         newData.observacionesBaja = '';
@@ -273,6 +382,30 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       
       return newData;
     });
+  };
+
+  // Manejadores específicos para los Multi Selects
+  const handleTiposEmpresaChange = (nuevosValores: string[]) => {
+    setFormData(prev => {
+      const newData = { ...prev, tiposEmpresa: nuevosValores };
+      
+      // Lógica 1: Si deja de ser Cliente Mercancía, borrar cliente relacionado
+      if (!nuevosValores.includes('Cliente (Mercancía)')) {
+        newData.clienteRelacionadoId = '';
+        newData.clienteRelacionadoNombre = '';
+      }
+
+      // Lógica 2: Si deja de ser Proveedor (Servicios), borrar los servicios seleccionados
+      if (!nuevosValores.includes('Proveedor (Servicios)')) {
+        newData.tiposServicio = [];
+      }
+
+      return newData;
+    });
+  };
+
+  const handleTiposServicioChange = (nuevosValores: string[]) => {
+    setFormData(prev => ({ ...prev, tiposServicio: nuevosValores }));
   };
 
   const handleCondicionPagoChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -290,6 +423,12 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
     if (!formData.nombre || !formData.rfcTaxId) {
       alert("Faltan campos obligatorios en Información General.");
+      setActiveTab('general');
+      return;
+    }
+
+    if (formData.tiposEmpresa.length === 0) {
+      alert("Debes seleccionar al menos un Tipo de Empresa.");
       setActiveTab('general');
       return;
     }
@@ -329,8 +468,8 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
   const tiposFacturasFiltrados = tiposFacturas.filter(tf => tf.moneda === formData.moneda);
   
-  // Lista de clientes para la relación
-  const clientesPaga = registros.filter(r => r.tiposServicio === 'Cliente (Paga)');
+  // Buscar a los clientes que SI tengan 'Cliente (Paga)' dentro de su array de tiposEmpresa
+  const clientesPaga = registros.filter(r => Array.isArray(r.tiposEmpresa) && r.tiposEmpresa.includes('Cliente (Paga)'));
   const opcionesClientesPaga = clientesPaga.map(c => ({ id: c.id, label: c.nombre }));
 
   return (
@@ -362,7 +501,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
             <form onSubmit={handleSubmit} style={{ padding: '24px', maxHeight: '65vh', overflowY: 'auto' }}>
               
-              {/* --- PESTAÑA 1: INFORMACIÓN GENERAL --- */}
               <div style={{ display: activeTab === 'general' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   <div className="form-group" style={{ gridColumn: 'span 2' }}>
@@ -378,6 +516,46 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                   <div className="form-group">
                     <label className="form-label">Nombre Corto / Alias</label>
                     <input type="text" name="nombreCorto" className="form-control" value={formData.nombreCorto} onChange={handleChange} />
+                  </div>
+
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <label className="form-label">Tipo(s) de Empresa <span style={{ color: '#ff4d4d' }}>*</span></label>
+                    <MultiSelectCheckbox 
+                      options={catalogoTiposEmpresa} 
+                      selectedValues={formData.tiposEmpresa} 
+                      onChange={handleTiposEmpresaChange} 
+                      placeholder="Seleccionar tipos..."
+                    />
+                  </div>
+
+                  {formData.tiposEmpresa.includes('Proveedor (Servicios)') && (
+                    <div className="form-group" style={{ gridColumn: 'span 2', backgroundColor: 'rgba(216, 67, 21, 0.05)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(216, 67, 21, 0.2)' }}>
+                      <label className="form-label" style={{ color: '#D84315' }}>Servicios que Ofrece (Solo para Proveedores de Servicios)</label>
+                      <MultiSelectCheckbox 
+                        options={catalogoTiposServicio} 
+                        selectedValues={formData.tiposServicio} 
+                        onChange={handleTiposServicioChange} 
+                        placeholder="Seleccionar servicios..."
+                      />
+                    </div>
+                  )}
+
+                  {formData.tiposEmpresa.includes('Cliente (Mercancía)') && (
+                    <div className="form-group" style={{ gridColumn: 'span 2', backgroundColor: 'rgba(59, 130, 246, 0.1)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+                      <label className="form-label" style={{ color: '#58a6ff' }}>Cliente que Paga (Relacionado) *</label>
+                      <SearchableSelect 
+                        options={opcionesClientesPaga}
+                        value={formData.clienteRelacionadoId}
+                        onChange={(id, label) => setFormData(prev => ({ ...prev, clienteRelacionadoId: id, clienteRelacionadoNombre: label }))}
+                        placeholder="Buscar cliente principal (Cliente Paga)..."
+                        required={true}
+                      />
+                    </div>
+                  )}
+
+                  <div className="form-group">
+                    <label className="form-label">RFC / Tax ID <span style={{ color: '#ff4d4d' }}>*</span></label>
+                    <input type="text" name="rfcTaxId" className="form-control font-mono" value={formData.rfcTaxId} onChange={handleChange} required />
                   </div>
 
                   <div className="form-group">
@@ -401,42 +579,9 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                       </div>
                     </div>
                   )}
-
-                  <div className="form-group">
-                    <label className="form-label">Tipo de Servicios <span style={{ color: '#ff4d4d' }}>*</span></label>
-                    <select name="tiposServicio" className="form-control" value={formData.tiposServicio} onChange={handleChange} required>
-                      <option value="Cliente (Paga)">Cliente (Paga)</option>
-                      <option value="Proveedor (Transporte)">Proveedor (Transporte)</option>
-                      <option value="Proveedor (Servicios)">Proveedor (Servicios)</option>
-                      <option value="Cliente (Mercancía)">Cliente (Mercancía)</option>
-                      <option value="Propietario (Remolques)">Propietario (Remolques)</option>
-                      <option value="Bodega">Bodega</option>
-                      <option value="Empresas Roelca">Empresas Roelca</option>
-                    </select>
-                  </div>
-
-                  {/* LÓGICA DE CLIENTE RELACIONADO (Aparece si es Cliente Mercancía) */}
-                  {formData.tiposServicio === 'Cliente (Mercancía)' && (
-                    <div className="form-group" style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', padding: '16px', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
-                      <label className="form-label" style={{ color: '#58a6ff' }}>Cliente que Paga (Relacionado) *</label>
-                      <SearchableSelect 
-                        options={opcionesClientesPaga}
-                        value={formData.clienteRelacionadoId}
-                        onChange={(id, label) => setFormData(prev => ({ ...prev, clienteRelacionadoId: id, clienteRelacionadoNombre: label }))}
-                        placeholder="Buscar cliente principal..."
-                        required={true}
-                      />
-                    </div>
-                  )}
-
-                  <div className="form-group">
-                    <label className="form-label">RFC / Tax ID <span style={{ color: '#ff4d4d' }}>*</span></label>
-                    <input type="text" name="rfcTaxId" className="form-control font-mono" value={formData.rfcTaxId} onChange={handleChange} required />
-                  </div>
                 </div>
               </div>
 
-              {/* --- PESTAÑA 2: INFORMACIÓN FISCAL Y COMERCIAL --- */}
               <div style={{ display: activeTab === 'fiscal' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   
@@ -508,7 +653,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                 </div>
               </div>
 
-              {/* --- PESTAÑA 3: CONTACTO Y DIRECCIÓN --- */}
               <div style={{ display: activeTab === 'contacto' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   
@@ -529,7 +673,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     </div>
                   </div>
 
-                  {/* NUEVO CAMPO: GOOGLE MAPS */}
                   <div className="form-group" style={{ gridColumn: 'span 2' }}>
                     <label className="form-label">Google Maps (URL)</label>
                     <div style={{ display: 'flex', gap: '12px' }}>
@@ -555,7 +698,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                 </div>
               </div>
 
-              {/* --- ACCIONES --- */}
               <div className="form-actions" style={{ marginTop: '32px', display: 'flex', justifyContent: 'flex-end', gap: '16px', borderTop: '1px solid #30363d', paddingTop: '24px' }}>
                 <button type="button" onClick={onClose} className="btn btn-outline">Cancelar</button>
                 <button type="submit" className="btn btn-primary" disabled={cargando}>
