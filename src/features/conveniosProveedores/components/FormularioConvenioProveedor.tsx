@@ -123,7 +123,7 @@ const FieldConfigModal: React.FC<{
           <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem', margin: 0, color: '#f0f6fc' }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
             </svg>
             Campos Obligatorios
           </h3>
@@ -155,6 +155,9 @@ const FieldConfigModal: React.FC<{
   );
 };
 
+// =========================================
+// COMPONENTE PRINCIPAL: FORMULARIO
+// =========================================
 interface FormProps {
   estado: 'abierto' | 'minimizado';
   initialData?: ConvenioProveedorRecord | null;
@@ -238,35 +241,21 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
-        // 1. Buscamos TODOS los posibles IDs que signifiquen "Proveedor (Transporte)"
-        const catEmpresasSnap = await getDocs(collection(db, 'catalogo_tipo_empresa'));
-        const idsValidosProveedor: string[] = ['11894dfd']; // El ID base migrado
-        
-        catEmpresasSnap.forEach(doc => {
-          const data = doc.data();
-          if (data.tipo && data.tipo.toLowerCase().includes('proveedor (transporte)')) {
-            if (!idsValidosProveedor.includes(doc.id)) {
-              idsValidosProveedor.push(doc.id);
-            }
-          }
-        });
-
-        // 2. Descargamos las empresas
         const empSnapshot = await getDocs(collection(db, 'empresas'));
         const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // 3. Filtramos A PRUEBA DE BALAS: Comprobamos si tiene el Texto Literal o el ID migrado
+        // ¡MODIFICACIÓN! Busca explícitamente el ID '11894dfd' (Proveedor)
+        const ID_PROVEEDOR = '11894dfd';
+        
         const proveedoresFiltrados = todasEmpresas.filter((emp: any) => {
-          // Si tiene el formato nuevo de Array
           if (Array.isArray(emp.tiposEmpresa)) {
-            return emp.tiposEmpresa.some((valor: string) => 
-              valor.toLowerCase().includes('proveedor (transporte)') || idsValidosProveedor.includes(valor)
+            return emp.tiposEmpresa.some((tipo: string) => 
+              tipo === 'Proveedor (Transporte)' || (ID_PROVEEDOR && tipo === ID_PROVEEDOR)
             );
           }
-          
-          // Respaldo agresivo por si el valor viene como un String viejo o de otra columna heredada
+          // Fallback robusto
           const stringData = JSON.stringify(emp).toLowerCase();
-          return stringData.includes('proveedor (transporte)') || idsValidosProveedor.some(id => stringData.includes(id.toLowerCase()));
+          return stringData.includes(ID_PROVEEDOR.toLowerCase()) || stringData.includes('proveedor (transporte)');
         });
         
         setProveedores(proveedoresFiltrados);
@@ -380,14 +369,10 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
     }
   };
 
-  const opcionesProveedores = proveedores.map(prov => {
-    const keys = Object.keys(prov);
-    const nombreKey = keys.find(k => k.toLowerCase().includes('empresa') || k.toLowerCase().includes('nombre'));
-    return {
-      id: prov.id,
-      label: nombreKey ? prov[nombreKey] : `Proveedor ID: ${prov.id.slice(0,4)}`
-    };
-  });
+  const opcionesProveedores = proveedores.map(prov => ({
+    id: prov.id,
+    label: prov.nombre || prov.nombreCorto || `Proveedor ID: ${prov.id.slice(0,4)}`
+  }));
 
   return (
     <>
@@ -470,6 +455,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
                 </div>
               </div>
 
+              {/* LISTA DE DETALLES */}
               <div style={{ marginTop: '32px', border: '1px solid #30363d', borderRadius: '8px', padding: '24px', backgroundColor: '#0d1117' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 style={{ fontSize: '1rem', color: '#f0f6fc', margin: 0, fontWeight: '600' }}>Lista de Detalles</h3>
