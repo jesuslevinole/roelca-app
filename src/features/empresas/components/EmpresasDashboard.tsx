@@ -1,6 +1,6 @@
 // src/features/empresas/components/EmpresasDashboard.tsx
 import { useState, useEffect, useMemo } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, getDocs } from 'firebase/firestore';
 import { db, eliminarRegistro, actualizarRegistro } from '../../../config/firebase';
 import { FormularioEmpresa } from './FormularioEmpresa';
 import { registrarLog } from '../../../utils/logger';
@@ -29,7 +29,11 @@ const EmpresasDashboard = () => {
   const [observacionesBaja, setObservacionesBaja] = useState('');
   const [guardandoBaja, setGuardandoBaja] = useState(false);
 
+  // --- NUEVO: MOTOR DE DICCIONARIOS PARA TRADUCCIÓN DE IDs ---
+  const [diccionarios, setDiccionarios] = useState<any>({});
+
   useEffect(() => {
+    // 1. Descargamos las empresas en tiempo real
     const unsubscribe = onSnapshot(collection(db, 'empresas'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       data.sort((a: any, b: any) => {
@@ -38,6 +42,31 @@ const EmpresasDashboard = () => {
       });
       setEmpresas(data);
     });
+
+    // 2. Descargamos los catálogos para traducir los IDs
+    const fetchDiccionarios = async () => {
+      try {
+        const getDict = async (col: string, labelField: string, formatFn?: Function) => {
+          const snap = await getDocs(collection(db, col));
+          const dict: any = {};
+          snap.forEach(doc => dict[doc.id] = formatFn ? formatFn(doc.data()) : doc.data()[labelField]);
+          return dict;
+        };
+
+        const [reg, mon, fac, dir] = await Promise.all([
+          getDict('catalogo_regimen_fiscal', '', (d: any) => `${d.clave} - ${d.descripcion}`),
+          getDict('catalogo_moneda', 'moneda'),
+          getDict('catalogo_tipo_factura', 'nombre'),
+          getDict('direcciones', 'direccionCompleta')
+        ]);
+
+        setDiccionarios({ regimenes: reg, monedas: mon, facturas: fac, direcciones: dir });
+      } catch (error) {
+        console.error("Error cargando diccionarios de traducción:", error);
+      }
+    };
+
+    fetchDiccionarios();
     return () => unsubscribe();
   }, []);
 
@@ -95,25 +124,57 @@ const EmpresasDashboard = () => {
     }
   };
 
-  // Función de ayuda para renderizar arrays (Tipos de Empresa, Tipos de Servicio)
   const renderArrayValues = (values: any) => {
     if (!values) return '-';
     if (Array.isArray(values)) {
       if (values.length === 0) return '-';
       return values.join(', ');
     }
-    return values; // Por si es un string heredado (retrocompatibilidad)
+    return values; 
   };
 
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
 
-  const empresasFiltradas = useMemo(() => {
-    return empresas.filter(emp => {
+  // Funciones de ayuda para traducir el ID a su texto correspondiente usando los diccionarios
+  const getLabel = (idOrRaw: string, dictName: string) => {
+    if (!idOrRaw) return '-';
+    const dict = diccionarios[dictName];
+    if (dict && dict[idOrRaw]) return dict[idOrRaw];
+    return idOrRaw; // Fallback: Si no es un ID o no lo encuentra, asume que ya era el texto
+  };
+
+  const getLabelExt = (labelField: string, idField: string, dictName: string) => {
+    if (labelField && labelField !== '-') return labelField;
+    if (!idField) return '-';
+    const dict = diccionarios[dictName];
+    if (dict && dict[idField]) return dict[idField];
+    return idField;
+  };
+
+  // --- TRADUCCIÓN Y FILTRADO MAESTRO ---
+  const empresasEnriquecidas = useMemo(() => {
+    return empresas.map(emp => {
+      // Búsqueda especial para el Cliente Relacionado dentro de la misma colección
+      let clienteRelName = emp.clienteRelacionadoNombre;
+      if (!clienteRelName && emp.clienteRelacionadoId) {
+        const match = empresas.find(e => e.id === emp.clienteRelacionadoId);
+        clienteRelName = match ? match.nombre : emp.clienteRelacionadoId;
+      }
+
+      // Inyectamos las variables "Limpias" (Traducidas) al objeto para usarlas en la UI y Excel
+      return {
+        ...emp,
+        _regimenLabel: getLabelExt(emp.regimenFiscalLabel, emp.regimenFiscalId || emp.regimenFiscal, 'regimenes'),
+        _monedaLabel: getLabel(emp.moneda, 'monedas'),
+        _facturaLabel: getLabel(emp.tipoFactura, 'facturas'),
+        _direccionLabel: getLabelExt(emp.direccionLabel, emp.direccionId || emp.direccion, 'direcciones'),
+        _clienteRelLabel: clienteRelName || '-'
+      };
+    }).filter(emp => {
       let pasaFiltro = true;
       if (filtroActivo === 'Empresa Inactiva') pasaFiltro = emp.status === 'Inactiva';
       else if (filtroActivo === 'Baja') pasaFiltro = emp.status === 'Baja';
       else if (filtroActivo !== 'Todo') {
-        // La validación ahora debe buscar dentro del array de tiposEmpresa
         if (Array.isArray(emp.tiposEmpresa)) {
           pasaFiltro = emp.tiposEmpresa.includes(filtroActivo);
         } else {
@@ -131,28 +192,29 @@ const EmpresasDashboard = () => {
         (emp.rfcTaxId || '').toLowerCase().includes(term)
       );
     });
-  }, [empresas, filtroActivo, busqueda]);
+  }, [empresas, diccionarios, filtroActivo, busqueda]);
 
   const exportarExcel = () => {
-    if (empresasFiltradas.length === 0) return;
+    if (empresasEnriquecidas.length === 0) return;
 
-    const datosExcel = empresasFiltradas.map(emp => ({
+    // Utilizamos los campos traducidos (_) en el Excel en lugar de los IDs brutos
+    const datosExcel = empresasEnriquecidas.map(emp => ({
       '# de Cliente': emp.numCliente || '',
       'Razón Social': emp.nombre || '',
       'Nombre Corto': emp.nombreCorto || '',
       'Status': emp.status || '',
       'Tipo(s) de Empresa': renderArrayValues(emp.tiposEmpresa),
       'Servicios Ofrecidos': renderArrayValues(emp.tiposServicio),
-      'Cliente Relacionado': emp.clienteRelacionadoNombre || '',
+      'Cliente Relacionado': emp._clienteRelLabel !== '-' ? emp._clienteRelLabel : '',
       'RFC/Tax ID': emp.rfcTaxId || '',
       'Último Servicio': emp.fechaUltimoServicio || '',
-      'Régimen Fiscal': emp.regimenFiscalLabel || emp.regimenFiscal || '',
-      'Moneda': emp.moneda || '',
-      'Tipo de Factura': emp.tipoFactura || '',
+      'Régimen Fiscal': emp._regimenLabel !== '-' ? emp._regimenLabel : '',
+      'Moneda': emp._monedaLabel !== '-' ? emp._monedaLabel : '',
+      'Tipo de Factura': emp._facturaLabel !== '-' ? emp._facturaLabel : '',
       'Condición de Pago': emp.condicionPago || '',
       'Días de Crédito': emp.diasCredito || 0,
       'Límite de Crédito': emp.limiteCredito || 0,
-      'Dirección': emp.direccionLabel || emp.direccion || '',
+      'Dirección': emp._direccionLabel !== '-' ? emp._direccionLabel : '',
       'Maps': emp.maps || '',
       'Teléfono': emp.telefono || '',
       'Correo': emp.correo || '',
@@ -201,7 +263,7 @@ const EmpresasDashboard = () => {
           Bases de Datos {'>'} <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Empresas</span>
         </h1>
         <div className="action-buttons" style={{ display: 'flex', gap: '12px' }}>
-          <button className="btn btn-outline" onClick={exportarExcel} disabled={empresasFiltradas.length === 0} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button className="btn btn-outline" onClick={exportarExcel} disabled={empresasEnriquecidas.length === 0} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
             Exportar Excel
           </button>
@@ -265,14 +327,14 @@ const EmpresasDashboard = () => {
                 </tr>
               </thead>
               <tbody>
-                {empresasFiltradas.length === 0 ? (
+                {empresasEnriquecidas.length === 0 ? (
                   <tr>
                     <td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
                       {busqueda ? 'No se encontraron coincidencias.' : 'Aún no hay empresas registradas o ninguna coincide con el filtro.'}
                     </td>
                   </tr>
                 ) : (
-                  empresasFiltradas.map((emp) => (
+                  empresasEnriquecidas.map((emp) => (
                     <tr 
                       key={emp.id} 
                       onClick={() => verDetalle(emp)} 
@@ -368,7 +430,7 @@ const EmpresasDashboard = () => {
                   <div className="detail-item" style={{ gridColumn: 'span 2' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
                   
                   {Array.isArray(empresaViendo.tiposEmpresa) && empresaViendo.tiposEmpresa.includes('Cliente (Mercancía)') && (
-                    <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Cliente Paga (Relacionado)</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: '500' }}>{mostrarDato(empresaViendo.clienteRelacionadoNombre)}</span></div>
+                    <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Cliente Paga (Relacionado)</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: '500' }}>{mostrarDato(empresaViendo._clienteRelLabel)}</span></div>
                   )}
 
                   {empresaViendo.status === 'Baja' && (
@@ -382,9 +444,10 @@ const EmpresasDashboard = () => {
 
               {activeTabDetalle === 'fiscal' && (
                 <div className="detail-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
-                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo.regimenFiscalLabel || empresaViendo.regimenFiscal)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Moneda</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.moneda)}</span></div>
-                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Factura</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.tipoFactura)}</span></div>
+                  {/* AQUÍ SE IMPRIMEN LAS VARIABLES TRADUCIDAS '_' DEL MOTOR */}
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo._regimenLabel)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Moneda</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo._monedaLabel)}</span></div>
+                  <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Factura</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo._facturaLabel)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Condición de Pago</span><span className="detail-value" style={{ color: '#58a6ff', fontWeight: 'bold' }}>{mostrarDato(empresaViendo.condicionPago)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Días de Crédito</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.diasCredito)}</span></div>
                   <div className="detail-item" style={{ gridColumn: 'span 2' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Límite de Crédito</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>${Number(empresaViendo.limiteCredito || 0).toFixed(2)}</span></div>
@@ -393,7 +456,7 @@ const EmpresasDashboard = () => {
 
               {activeTabDetalle === 'contacto' && (
                 <div className="detail-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
-                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección de la Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.direccionLabel || empresaViendo.direccion)}</span></div>
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Dirección de la Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo._direccionLabel)}</span></div>
                   <div className="detail-item">
                     <span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Teléfono</span>
                     <span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.telefono)}</span>
