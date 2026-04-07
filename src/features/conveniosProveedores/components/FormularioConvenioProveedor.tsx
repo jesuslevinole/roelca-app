@@ -123,7 +123,7 @@ const FieldConfigModal: React.FC<{
           <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.1rem', margin: 0, color: '#f0f6fc' }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
             </svg>
             Campos Obligatorios
           </h3>
@@ -238,12 +238,35 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
+        // 1. Buscamos TODOS los posibles IDs que signifiquen "Proveedor (Transporte)"
+        const catEmpresasSnap = await getDocs(collection(db, 'catalogo_tipo_empresa'));
+        const idsValidosProveedor: string[] = ['11894dfd']; // El ID base migrado
+        
+        catEmpresasSnap.forEach(doc => {
+          const data = doc.data();
+          if (data.tipo && data.tipo.toLowerCase().includes('proveedor (transporte)')) {
+            if (!idsValidosProveedor.includes(doc.id)) {
+              idsValidosProveedor.push(doc.id);
+            }
+          }
+        });
+
+        // 2. Descargamos las empresas
         const empSnapshot = await getDocs(collection(db, 'empresas'));
         const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
+        // 3. Filtramos A PRUEBA DE BALAS: Comprobamos si tiene el Texto Literal o el ID migrado
         const proveedoresFiltrados = todasEmpresas.filter((emp: any) => {
+          // Si tiene el formato nuevo de Array
+          if (Array.isArray(emp.tiposEmpresa)) {
+            return emp.tiposEmpresa.some((valor: string) => 
+              valor.toLowerCase().includes('proveedor (transporte)') || idsValidosProveedor.includes(valor)
+            );
+          }
+          
+          // Respaldo agresivo por si el valor viene como un String viejo o de otra columna heredada
           const stringData = JSON.stringify(emp).toLowerCase();
-          return stringData.includes('proveedor (transporte)');
+          return stringData.includes('proveedor (transporte)') || idsValidosProveedor.some(id => stringData.includes(id.toLowerCase()));
         });
         
         setProveedores(proveedoresFiltrados);
@@ -251,7 +274,6 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
         const monSnapshot = await getDocs(collection(db, 'catalogo_moneda'));
         setMonedas(monSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
-        // NUEVA COLECCIÓN: Tarifas de Referencia
         const tarifarioSnapshot = await getDocs(collection(db, 'catalogo_tarifas_referencia'));
         setTarifarios(tarifarioSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       } catch (error) {
@@ -280,17 +302,14 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
     setFormData(prev => ({ ...prev, monedaId: id, monedaNombre: moneda ? moneda.moneda : '' }));
   };
 
-  // --- NUEVA LÓGICA DE EXTRACCIÓN DE TARIFAS DE PROVEEDORES ---
   const handleTipoConvenioChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     const tarifario = tarifarios.find(t => t.id === id);
     
-    // Leemos la descripción del nuevo catálogo
     const nombreTarifario = tarifario ? (tarifario.descripcion || 'Desconocido') : '';
     
     let sugerencias: number[] = [];
     if (tarifario) {
-      // Extraemos exclusivamente las tarifas configuradas para PROVEEDORES
       if (tarifario.tarifa_proveedor_1 && Number(tarifario.tarifa_proveedor_1) > 0) sugerencias.push(Number(tarifario.tarifa_proveedor_1));
       if (tarifario.tarifa_proveedor_2 && Number(tarifario.tarifa_proveedor_2) > 0) sugerencias.push(Number(tarifario.tarifa_proveedor_2));
       if (tarifario.tarifa_proveedor_3 && Number(tarifario.tarifa_proveedor_3) > 0) sugerencias.push(Number(tarifario.tarifa_proveedor_3));
