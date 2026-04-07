@@ -238,31 +238,19 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
-        // 1. Buscamos el ID exacto de "Cliente (Paga)" en el catálogo
-        const catEmpresasSnap = await getDocs(collection(db, 'catalogo_tipo_empresa'));
-        let idClientePaga = '';
-        catEmpresasSnap.forEach(doc => {
-          if (doc.data().tipo === 'Cliente (Paga)') {
-            idClientePaga = doc.id;
-          }
-        });
-
-        // 2. Descargamos las empresas
         const empSnapshot = await getDocs(collection(db, 'empresas'));
         const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // 3. Filtramos inteligentemente (Por Texto para las nuevas, o por ID para las importadas del CSV)
+        // ¡MODIFICACIÓN! Busca explícitamente el ID '7eec9cbb' (Cliente Paga) en cualquier campo o arreglo de la empresa
+        const ID_CLIENTE_PAGA = '7eec9cbb';
+        
         const clientesFiltrados = todasEmpresas.filter((emp: any) => {
-          let esCliente = false;
           if (Array.isArray(emp.tiposEmpresa)) {
-            esCliente = emp.tiposEmpresa.some((tipo: string) => 
-              tipo === 'Cliente (Paga)' || (idClientePaga && tipo === idClientePaga)
-            );
-          } else if (emp.tiposServicio) {
-            // Retrocompatibilidad en caso de que aún exista el formato viejo string
-            esCliente = emp.tiposServicio.includes('Cliente (Paga)') || (idClientePaga && emp.tiposServicio.includes(idClientePaga));
+            return emp.tiposEmpresa.includes(ID_CLIENTE_PAGA);
           }
-          return esCliente;
+          // Fallback robusto convirtiendo toda la empresa a texto para buscar el ID
+          const stringData = JSON.stringify(emp).toLowerCase();
+          return stringData.includes(ID_CLIENTE_PAGA.toLowerCase()) || stringData.includes('cliente (paga)');
         });
         
         setClientes(clientesFiltrados);
