@@ -17,7 +17,6 @@ const MultiSelectCheckbox: React.FC<{
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Cerrar el menú al hacer clic fuera
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
@@ -240,13 +239,11 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
   const [cargando, setCargando] = useState(false);
   const [activeTab, setActiveTab] = useState<'general' | 'fiscal' | 'contacto'>('general');
   
-  // CATÁLOGOS BASE DE DATOS
   const [regimenesFiscales, setRegimenesFiscales] = useState<{id: string, label: string}[]>([]);
   const [direccionesDB, setDireccionesDB] = useState<{id: string, label: string}[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
   const [tiposFacturas, setTiposFacturas] = useState<any[]>([]);
   
-  // NUEVOS CATÁLOGOS PARA LISTAS
   const [catalogoTiposEmpresa, setCatalogoTiposEmpresa] = useState<string[]>([]);
   const [catalogoTiposServicio, setCatalogoTiposServicio] = useState<string[]>([]);
 
@@ -260,8 +257,8 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     status: 'Activa',
     fechaBaja: '', 
     observacionesBaja: '', 
-    tiposEmpresa: [] as string[], // AHORA ES UN ARRAY DE STRINGS
-    tiposServicio: [] as string[], // AHORA ES UN ARRAY DE STRINGS
+    tiposEmpresa: [] as string[], 
+    tiposServicio: [] as string[], 
     clienteRelacionadoId: '', 
     clienteRelacionadoNombre: '', 
     rfcTaxId: '',
@@ -269,8 +266,9 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     
     regimenFiscalId: '',
     regimenFiscalLabel: '',
-    moneda: '',
-    tipoFactura: '',
+    // Enlazar de manera estricta a IDs para respetar el diseño de BD relacional
+    moneda: '', 
+    tipoFactura: '', 
     condicionPago: 'Crédito',
     diasCredito: 30,
     limiteCredito: 0.00,
@@ -283,7 +281,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
   });
 
   useEffect(() => {
-    // Suscripciones a Firebase
     const unsubRegimenes = onSnapshot(collection(db, 'catalogo_regimen_fiscal'), (snap) => {
       setRegimenesFiscales(snap.docs.map(doc => {
         const d = doc.data();
@@ -302,7 +299,6 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       setTiposFacturas(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    // Cargar los catálogos nuevos
     const fetchTiposLists = async () => {
       try {
         const tEmpresas = await getDocs(collection(db, 'catalogo_tipo_empresa'));
@@ -340,23 +336,15 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
   useEffect(() => {
     if (initialData) {
-      // Normalizar datos legacy (por si antes eran strings y ahora son arrays)
       const data = { ...initialData };
-      if (data.tiposEmpresa && !Array.isArray(data.tiposEmpresa)) {
-        data.tiposEmpresa = [data.tiposEmpresa];
-      } else if (!data.tiposEmpresa) {
-        data.tiposEmpresa = [];
-      }
+      if (data.tiposEmpresa && !Array.isArray(data.tiposEmpresa)) data.tiposEmpresa = [data.tiposEmpresa];
+      else if (!data.tiposEmpresa) data.tiposEmpresa = [];
       
-      // Adaptación especial para el cambio de nombre de tiposServicio a array
       if (data.tiposServicio && !Array.isArray(data.tiposServicio)) {
-         // Si era un string antiguo y es un cliente mercancía, lo pasamos al array de Empresas por coherencia
          if(data.tiposServicio === 'Cliente (Mercancía)' || data.tiposServicio === 'Cliente (Paga)') {
-           if(!data.tiposEmpresa.includes(data.tiposServicio)){
-              data.tiposEmpresa = [...data.tiposEmpresa, data.tiposServicio];
-           }
+           if(!data.tiposEmpresa.includes(data.tiposServicio)) data.tiposEmpresa = [...data.tiposEmpresa, data.tiposServicio];
          }
-         data.tiposServicio = []; // Lo vaciamos porque ahora servicios es otra cosa
+         data.tiposServicio = []; 
       } else if (!data.tiposServicio) {
         data.tiposServicio = [];
       }
@@ -372,34 +360,25 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     
     setFormData(prev => {
       const newData = { ...prev, [name]: value };
-      
       if (name === 'moneda') newData.tipoFactura = '';
-
       if (name === 'status' && value !== 'Baja') {
         newData.fechaBaja = '';
         newData.observacionesBaja = '';
       }
-      
       return newData;
     });
   };
 
-  // Manejadores específicos para los Multi Selects
   const handleTiposEmpresaChange = (nuevosValores: string[]) => {
     setFormData(prev => {
       const newData = { ...prev, tiposEmpresa: nuevosValores };
-      
-      // Lógica 1: Si deja de ser Cliente Mercancía, borrar cliente relacionado
       if (!nuevosValores.includes('Cliente (Mercancía)')) {
         newData.clienteRelacionadoId = '';
         newData.clienteRelacionadoNombre = '';
       }
-
-      // Lógica 2: Si deja de ser Proveedor (Servicios), borrar los servicios seleccionados
       if (!nuevosValores.includes('Proveedor (Servicios)')) {
         newData.tiposServicio = [];
       }
-
       return newData;
     });
   };
@@ -466,9 +445,10 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     transition: 'all 0.2s ease', outline: 'none'
   });
 
-  const tiposFacturasFiltrados = tiposFacturas.filter(tf => tf.moneda === formData.moneda);
+  // Para el filtrado encadenado de tipo de factura en base al ID de la moneda seleccionada
+  const monedaSeleccionadaString = monedas.find(m => m.id === formData.moneda)?.moneda || formData.moneda;
+  const tiposFacturasFiltrados = tiposFacturas.filter(tf => tf.moneda === monedaSeleccionadaString);
   
-  // Buscar a los clientes que SI tengan 'Cliente (Paga)' dentro de su array de tiposEmpresa
   const clientesPaga = registros.filter(r => Array.isArray(r.tiposEmpresa) && r.tiposEmpresa.includes('Cliente (Paga)'));
   const opcionesClientesPaga = clientesPaga.map(c => ({ id: c.id, label: c.nombre }));
 
@@ -501,6 +481,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
             <form onSubmit={handleSubmit} style={{ padding: '24px', maxHeight: '65vh', overflowY: 'auto' }}>
               
+              {/* --- PESTAÑA 1: INFORMACIÓN GENERAL --- */}
               <div style={{ display: activeTab === 'general' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   <div className="form-group" style={{ gridColumn: 'span 2' }}>
@@ -582,6 +563,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                 </div>
               </div>
 
+              {/* --- PESTAÑA 2: INFORMACIÓN FISCAL Y COMERCIAL --- */}
               <div style={{ display: activeTab === 'fiscal' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   
@@ -604,16 +586,18 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
                   <div className="form-group">
                     <label className="form-label">Moneda</label>
+                    {/* MODIFICACIÓN: AHORA GUARDA EL ID EN LA BASE DE DATOS */}
                     <select name="moneda" className="form-control" value={formData.moneda} onChange={handleChange}>
                       <option value="">Seleccione Moneda...</option>
                       {monedas.map(mon => (
-                        <option key={mon.id} value={mon.moneda}>{mon.moneda}</option>
+                        <option key={mon.id} value={mon.id}>{mon.moneda}</option>
                       ))}
                     </select>
                   </div>
 
                   <div className="form-group">
                     <label className="form-label">Tipo de Factura</label>
+                    {/* MODIFICACIÓN: AHORA GUARDA EL ID EN LA BASE DE DATOS */}
                     <select 
                       name="tipoFactura" 
                       className="form-control" 
@@ -628,7 +612,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                     >
                       <option value="">{formData.moneda ? 'Seleccione Tipo de Factura...' : 'Primero seleccione Moneda'}</option>
                       {tiposFacturasFiltrados.map(tf => (
-                        <option key={tf.id} value={tf.nombre}>{tf.nombre}</option>
+                        <option key={tf.id} value={tf.id}>{tf.nombre}</option>
                       ))}
                     </select>
                   </div>
@@ -653,6 +637,7 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                 </div>
               </div>
 
+              {/* --- PESTAÑA 3: CONTACTO Y DIRECCIÓN --- */}
               <div style={{ display: activeTab === 'contacto' ? 'block' : 'none', animation: 'fadeIn 0.3s ease' }}>
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                   
