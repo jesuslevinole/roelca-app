@@ -1,6 +1,6 @@
 // src/features/relojChecador/components/RelojChecadorModal.tsx
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
+import { collection, addDoc, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
 import { registrarLog } from '../../../utils/logger';
 
@@ -18,9 +18,12 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
   const [obteniendoGps, setObteniendoGps] = useState(false);
   const [cargando, setCargando] = useState(false);
   
-  // Estado para guardar los chequeos que el usuario YA hizo hoy
   const [registrosHoy, setRegistrosHoy] = useState<string[]>([]);
-  const [cargandoHistorial, setCargandoHistorial] = useState(true);
+  const [cargandoDatos, setCargandoDatos] = useState(true);
+
+  // Estados de Seguridad por IP
+  const [ipValida, setIpValida] = useState<boolean | null>(null);
+  const [ipActualUsuario, setIpActualUsuario] = useState('');
 
   // Reloj en tiempo real
   useEffect(() => {
@@ -31,16 +34,46 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
     return () => clearInterval(timer);
   }, [isOpen]);
 
-  // Validar qué ha checado hoy al abrir el modal
+  // Validar IP y buscar registros del día
   useEffect(() => {
     if (!isOpen || !usuario) return;
 
-    const fetchRegistrosHoy = async () => {
-      setCargandoHistorial(true);
+    const inicializarChecador = async () => {
+      setCargandoDatos(true);
       try {
+        // --- 1. VALIDACIÓN DE SEGURIDAD PERIMETRAL (IP) ---
+        const rolesExentos = ['Admin', 'Gerencia', 'Sistemas'];
+        let accesoPermitido = true;
+
+        if (!rolesExentos.includes(usuario.rol)) {
+          // Obtener la IP Oficial de Firebase
+          const configRef = doc(db, 'configuracion', 'seguridad');
+          const configSnap = await getDoc(configRef);
+          const ipOficial = configSnap.exists() ? configSnap.data().ipOficial : null;
+
+          if (ipOficial) {
+            // Obtener la IP pública actual del dispositivo
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            const ipActual = data.ip;
+            setIpActualUsuario(ipActual);
+
+            if (ipActual !== ipOficial) {
+              accesoPermitido = false;
+            }
+          }
+        }
+
+        setIpValida(accesoPermitido);
+
+        // Si el acceso no está permitido, no cargamos el historial para ahorrar peticiones
+        if (!accesoPermitido) {
+          setCargandoDatos(false);
+          return;
+        }
+
+        // --- 2. OBTENER HISTORIAL DE HOY ---
         const fechaLocal = new Date().toLocaleDateString('es-MX');
-        
-        // Buscamos en Firebase qué movimientos hizo ESTE usuario HOY
         const q = query(
           collection(db, 'reloj_checador'),
           where('userId', '==', usuario.id),
@@ -56,23 +89,24 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
         if (!tipos.includes('Llegada al Turno')) {
           setTipoRegistro('Llegada al Turno');
         } else if (tipos.includes('Llegada al Turno') && !tipos.includes('Salida a la Comida') && !tipos.includes('Salida del Turno')) {
-          setTipoRegistro('Salida del Turno'); // Por defecto propone salir, aunque la comida esté habilitada
+          setTipoRegistro('Salida del Turno');
         } else if (tipos.includes('Salida a la Comida') && !tipos.includes('Llegada de la Comida')) {
           setTipoRegistro('Llegada de la Comida');
         } else if (tipos.includes('Llegada de la Comida') && !tipos.includes('Salida del Turno')) {
           setTipoRegistro('Salida del Turno');
         } else {
-          setTipoRegistro(''); // Ya terminó todo
+          setTipoRegistro(''); 
         }
 
       } catch (error) {
-        console.error("Error al obtener historial de hoy:", error);
+        console.error("Error al inicializar checador:", error);
+        alert("Hubo un problema de conexión al verificar la red.");
       } finally {
-        setCargandoHistorial(false);
+        setCargandoDatos(false);
       }
     };
 
-    fetchRegistrosHoy();
+    inicializarChecador();
   }, [isOpen, usuario]);
 
   const obtenerUbicacion = () => {
@@ -90,7 +124,7 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
       },
       (error) => {
         console.error("Error GPS:", error);
-        alert('No se pudo obtener la ubicación. Por favor, asegúrate de dar permisos o escríbela manualmente.');
+        alert('No se pudo obtener la ubicación. Asegúrate de dar permisos a tu navegador.');
         setObteniendoGps(false);
       }
     );
@@ -119,6 +153,7 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
         hora: horaLocal,
         tipoRegistro: tipoRegistro,
         ubicacion: ubicacion,
+        ipRegistro: ipActualUsuario || 'Exento',
         timestamp: tiempoActual.getTime() 
       });
 
@@ -135,7 +170,6 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
 
   if (!isOpen || !usuario) return null;
 
-  // LÓGICA ESTRICTA DE OPCIONES DISPONIBLES
   const hasLlegadaTurno = registrosHoy.includes('Llegada al Turno');
   const hasSalidaComida = registrosHoy.includes('Salida a la Comida');
   const hasLlegadaComida = registrosHoy.includes('Llegada de la Comida');
@@ -146,17 +180,9 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
   if (!hasLlegadaTurno) {
     opcionesDisponibles.push('Llegada al Turno');
   } else if (!hasSalidaTurno) {
-    // Si ya llegó al turno y no ha salido del turno, puede hacer lo siguiente:
-    if (!hasSalidaComida) {
-      opcionesDisponibles.push('Salida a la Comida');
-    }
-    if (hasSalidaComida && !hasLlegadaComida) {
-      opcionesDisponibles.push('Llegada de la Comida');
-    }
-    // Puede salir del turno si NO ha salido a comer, o si ya salió Y volvió de comer
-    if (!hasSalidaComida || (hasSalidaComida && hasLlegadaComida)) {
-      opcionesDisponibles.push('Salida del Turno');
-    }
+    if (!hasSalidaComida) opcionesDisponibles.push('Salida a la Comida');
+    if (hasSalidaComida && !hasLlegadaComida) opcionesDisponibles.push('Llegada de la Comida');
+    if (!hasSalidaComida || (hasSalidaComida && hasLlegadaComida)) opcionesDisponibles.push('Salida del Turno');
   }
 
   const jornadaTerminada = hasSalidaTurno;
@@ -169,14 +195,26 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
           <p style={{ color: '#8b949e', margin: '8px 0 0 0', fontSize: '0.9rem' }}>Registra tu asistencia del día</p>
         </div>
 
-        {cargandoHistorial ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>
-            Verificando historial del día...
+        {cargandoDatos ? (
+          <div style={{ padding: '60px 40px', textAlign: 'center', color: '#8b949e' }}>
+            <div style={{ marginBottom: '16px', fontSize: '1.5rem' }}>⏳</div>
+            Verificando credenciales de red y leyendo historial del día...
+          </div>
+        ) : ipValida === false ? (
+          <div style={{ padding: '40px 24px', textAlign: 'center' }}>
+            <div style={{ backgroundColor: 'rgba(218, 54, 51, 0.1)', border: '1px solid rgba(218, 54, 51, 0.4)', padding: '24px', borderRadius: '8px' }}>
+              <span style={{ fontSize: '3rem', display: 'block', marginBottom: '16px' }}>⛔</span>
+              <h3 style={{ color: '#ff4d4d', margin: '0 0 12px 0', fontSize: '1.2rem' }}>Acceso Denegado</h3>
+              <p style={{ color: '#c9d1d9', fontSize: '0.95rem', margin: 0, lineHeight: '1.5' }}>
+                No estás conectado a la red WiFi oficial de la oficina.<br/><br/>
+                Tu IP actual es: <strong style={{ color: '#f0f6fc' }}>{ipActualUsuario}</strong>
+              </p>
+            </div>
+            <button onClick={onClose} className="btn btn-outline" style={{ marginTop: '24px', width: '100%' }}>Cerrar</button>
           </div>
         ) : (
           <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
             
-            {/* Reloj Digital Visual */}
             <div style={{ textAlign: 'center', marginBottom: '24px', backgroundColor: '#010409', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
               <div style={{ color: '#58a6ff', fontSize: '2.5rem', fontWeight: 'bold', fontFamily: 'monospace', letterSpacing: '2px' }}>
                 {tiempoActual.toLocaleTimeString('es-MX', { hour12: false })}

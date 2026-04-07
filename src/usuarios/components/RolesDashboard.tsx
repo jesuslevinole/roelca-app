@@ -1,281 +1,263 @@
 // src/usuarios/components/RolesDashboard.tsx
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, doc, deleteDoc, setDoc, addDoc, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, getDoc, setDoc, deleteDoc, updateDoc, addDoc } from 'firebase/firestore';
 import { db } from '../../config/firebase';
 import { registrarLog } from '../../utils/logger';
 
-const MODULOS_SISTEMA = [
-  'Operaciones',
-  'Clientes',
-  'Proveedores',
-  'Empleados',
-  'Empresas (Bases de Datos)',
-  'Direcciones (Bases de Datos)',
-  'Catálogos',
-  'Usuarios y Roles',
-  'Historial de Actividad'
-];
-
-export const RolesDashboard = () => {
+export const RolesDashboard: React.FC = () => {
   const [roles, setRoles] = useState<any[]>([]);
-  const [modalAbierto, setModalAbierto] = useState(false);
-  const [rolActual, setRolActual] = useState<any | null>(null);
-  const [cargando, setCargando] = useState(false);
-
-  const [nombre, setNombre] = useState('');
-  const [modulosPermitidos, setModulosPermitidos] = useState<string[]>([]);
-  const [requiereIPOficina, setRequiereIPOficina] = useState(false);
-
-  // ESTADOS PARA LA CONFIGURACIÓN GLOBAL DE IP
-  const [ipOficina, setIpOficina] = useState('');
+  const [ipOficial, setIpOficial] = useState('');
   const [guardandoIp, setGuardandoIp] = useState(false);
+  
+  // Estados para el Modal de Rol
+  const [modalAbierto, setModalAbierto] = useState(false);
+  const [rolEditando, setRolEditando] = useState<any>(null);
+  
+  const [nombreRol, setNombreRol] = useState('');
+  const [modulos, setModulos] = useState<string[]>([]);
+  const [cargandoRol, setCargandoRol] = useState(false);
+
+  const listaModulos = [
+    'Operaciones', 'Proveedores', 'Empresas (Bases de Datos)', 'Catálogos',
+    'Usuarios y Roles', 'Clientes', 'Direcciones (Bases de Datos)', 'Empleados',
+    'Historial de Actividad'
+  ];
 
   useEffect(() => {
-    // Cargar roles
-    const unsubscribeRoles = onSnapshot(collection(db, 'catalogo_roles'), (snapshot) => {
-      setRoles(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    // Suscripción a Roles
+    const unsubRoles = onSnapshot(collection(db, 'roles'), (snapshot) => {
+      const rolesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setRoles(rolesData);
     });
 
-    // Cargar configuración de IP global
-    const cargarConfiguracionIP = async () => {
-      try {
-        const docSnap = await getDoc(doc(db, 'configuracion', 'seguridad'));
-        if (docSnap.exists()) {
-          setIpOficina(docSnap.data().ipOficina || '');
-        }
-      } catch (error) {
-        console.error("Error cargando IP de oficina:", error);
+    // Cargar Configuración IP
+    const fetchConfig = async () => {
+      const configRef = doc(db, 'configuracion', 'seguridad');
+      const snap = await getDoc(configRef);
+      if (snap.exists()) {
+        setIpOficial(snap.data().ipOficial || '');
       }
     };
-    cargarConfiguracionIP();
+    fetchConfig();
 
-    return () => unsubscribeRoles();
+    return () => unsubRoles();
   }, []);
 
-  const handleAbrirModal = (rol?: any) => {
-    if (rol) {
-      setRolActual(rol);
-      setNombre(rol.nombre || '');
-      setModulosPermitidos(rol.modulos || []);
-      setRequiereIPOficina(rol.requiereIPOficina || false);
-    } else {
-      setRolActual(null);
-      setNombre('');
-      setModulosPermitidos([]);
-      setRequiereIPOficina(false);
-    }
-    setModalAbierto(true);
-  };
-
-  const handleToggleModulo = (modulo: string) => {
-    setModulosPermitidos(prev => 
-      prev.includes(modulo) ? prev.filter(m => m !== modulo) : [...prev, modulo]
-    );
-  };
-
-  const handleGuardar = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCargando(true);
-    try {
-      const data = {
-        nombre: nombre.toUpperCase(),
-        modulos: modulosPermitidos,
-        requiereIPOficina: requiereIPOficina,
-        fechaActualizacion: new Date().toISOString()
-      };
-
-      if (rolActual) {
-        await setDoc(doc(db, 'catalogo_roles', rolActual.id), data, { merge: true });
-        await registrarLog('Roles y Permisos', 'Edición', `Editó los permisos del rol: ${data.nombre}`);
-      } else {
-        await addDoc(collection(db, 'catalogo_roles'), data);
-        await registrarLog('Roles y Permisos', 'Creación', `Creó un nuevo rol: ${data.nombre}`);
-      }
-      setModalAbierto(false);
-    } catch (error) {
-      alert('Error guardando el rol');
-    } finally {
-      setCargando(false);
-    }
-  };
-
-  const handleEliminar = async (rol: any) => {
-    if (window.confirm(`¿Eliminar el rol "${rol.nombre}" de forma permanente?`)) {
-      await deleteDoc(doc(db, 'catalogo_roles', rol.id));
-      await registrarLog('Roles y Permisos', 'Eliminación', `Eliminó el rol: ${rol.nombre}`);
-    }
-  };
-
-  // FUNCIONES PARA LA IP GLOBAL
-  const obtenerMiIpActual = async () => {
+  const detectarIp = async () => {
     try {
       const res = await fetch('https://api.ipify.org?format=json');
       const data = await res.json();
-      setIpOficina(data.ip);
-    } catch (error) {
-      alert("No se pudo detectar la IP. Por favor, escríbela manualmente.");
+      setIpOficial(data.ip);
+    } catch (e) {
+      alert("No se pudo detectar tu IP automáticamente.");
     }
   };
 
-  const handleGuardarIPGlobal = async () => {
+  const guardarIp = async () => {
+    if (!ipOficial) return;
     setGuardandoIp(true);
     try {
-      await setDoc(doc(db, 'configuracion', 'seguridad'), { ipOficina: ipOficina }, { merge: true });
-      await registrarLog('Roles y Permisos', 'Seguridad', `Actualizó la IP de la Oficina autorizada a: ${ipOficina}`);
-      alert("IP de seguridad guardada correctamente.");
-    } catch (error) {
-      alert("Error al guardar la configuración de seguridad.");
+      await setDoc(doc(db, 'configuracion', 'seguridad'), { ipOficial }, { merge: true });
+      await registrarLog('Seguridad', 'Actualización', `Actualizó la IP Oficial del Reloj Checador a: ${ipOficial}`);
+      alert("IP Oficial guardada. El Reloj Checador ahora usará esta red.");
+    } catch (e) {
+      alert("Error al guardar IP.");
     } finally {
       setGuardandoIp(false);
+    }
+  };
+
+  const abrirModalNuevo = () => {
+    setRolEditando(null);
+    setNombreRol('');
+    setModulos([]);
+    setModalAbierto(true);
+  };
+
+  const abrirModalEditar = (rol: any) => {
+    setRolEditando(rol);
+    setNombreRol(rol.nombre);
+    setModulos(rol.modulosPermitidos || []);
+    setModalAbierto(true);
+  };
+
+  const toggleModulo = (mod: string) => {
+    setModulos(prev => prev.includes(mod) ? prev.filter(m => m !== mod) : [...prev, mod]);
+  };
+
+  const guardarRol = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nombreRol.trim()) return alert("El nombre del rol es obligatorio");
+    
+    setCargandoRol(true);
+    try {
+      const datosRol = {
+        nombre: nombreRol.toUpperCase().trim(),
+        modulosPermitidos: modulos,
+        timestamp: Date.now()
+      };
+
+      if (rolEditando) {
+        await updateDoc(doc(db, 'roles', rolEditando.id), datosRol);
+        await registrarLog('Roles', 'Edición', `Editó el rol: ${datosRol.nombre}`);
+      } else {
+        await addDoc(collection(db, 'roles'), datosRol);
+        await registrarLog('Roles', 'Creación', `Creó el rol: ${datosRol.nombre}`);
+      }
+      setModalAbierto(false);
+    } catch (error) {
+      alert("Error al guardar rol.");
+    } finally {
+      setCargandoRol(false);
+    }
+  };
+
+  const eliminarRol = async (id: string, nombre: string) => {
+    if (window.confirm(`¿Estás seguro de eliminar el rol ${nombre}?`)) {
+      try {
+        await deleteDoc(doc(db, 'roles', id));
+        await registrarLog('Roles', 'Eliminación', `Eliminó el rol: ${nombre}`);
+      } catch (error) {
+        alert("Error al eliminar.");
+      }
     }
   };
 
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
       
-      {/* TARJETA DE CONFIGURACIÓN GLOBAL DE SEGURIDAD (IP) */}
-      <div style={{ backgroundColor: '#161b22', padding: '20px', borderRadius: '8px', border: '1px solid #3b82f6', marginBottom: '32px' }}>
-        <h3 style={{ color: '#58a6ff', margin: '0 0 12px 0', fontSize: '1rem' }}>🛡️ Configuración de Seguridad Perimetral</h3>
-        <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '16px' }}>
-          Define aquí la Dirección IP pública del internet de tu oficina. Los roles que tengan activa la restricción de red solo podrán iniciar sesión si su equipo coincide con esta IP.
+      {/* SECCIÓN 1: CONFIGURACIÓN IP (EXCLUSIVO PARA EL RELOJ) */}
+      <div style={{ backgroundColor: '#0d1117', border: '1px solid #3b82f6', borderRadius: '12px', padding: '24px', marginBottom: '32px' }}>
+        <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 12px 0', color: '#f0f6fc', fontSize: '1.1rem' }}>
+          🛡️ Configuración de Red para Reloj Checador
+        </h3>
+        <p style={{ color: '#8b949e', fontSize: '0.9rem', marginBottom: '20px' }}>
+          Define aquí la Dirección IP pública del internet de tu oficina. Los colaboradores operativos <strong>solo podrán registrar su asistencia</strong> si se encuentran conectados a esta red.
         </p>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
           <input 
             type="text" 
-            placeholder="Ej. 190.200.50.12" 
-            value={ipOficina}
-            onChange={(e) => setIpOficina(e.target.value)}
-            style={{ padding: '10px', backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px', width: '250px' }}
+            value={ipOficial} 
+            onChange={(e) => setIpOficial(e.target.value)} 
+            placeholder="Ej. 192.168.1.1" 
+            className="form-control" 
+            style={{ width: '250px', backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d' }} 
           />
-          <button onClick={obtenerMiIpActual} style={{ background: 'transparent', border: '1px solid #8b949e', color: '#c9d1d9', padding: '10px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem' }}>
+          <button onClick={detectarIp} className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             📍 Detectar mi IP actual
           </button>
-          <button onClick={handleGuardarIPGlobal} disabled={guardandoIp} style={{ backgroundColor: '#3b82f6', color: '#fff', border: 'none', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer', fontWeight: '500' }}>
+          <button onClick={guardarIp} className="btn btn-primary" disabled={guardandoIp} style={{ backgroundColor: '#3b82f6', border: 'none' }}>
             {guardandoIp ? 'Guardando...' : 'Guardar IP Oficial'}
           </button>
         </div>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+      {/* SECCIÓN 2: LISTA DE ROLES */}
+      <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '16px' }}>
         <h2 style={{ fontSize: '1.25rem', color: '#8b949e', margin: 0, fontWeight: '400' }}>
           Configuración {'>'} <span style={{ color: '#f0f6fc', fontWeight: '600' }}>Roles y Permisos ({roles.length})</span>
         </h2>
-        <button className="btn-primary" onClick={() => handleAbrirModal()}>+ Nuevo Rol</button>
+        <button className="btn btn-primary" onClick={abrirModalNuevo}>+ Nuevo Rol</button>
       </div>
 
-      <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto' }}>
+      <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
         <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-          <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d' }}>
+          <thead style={{ backgroundColor: '#161b22' }}>
             <tr>
-              <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>ACCIONES</th>
-              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>NOMBRE DEL ROL</th>
-              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>RESTRICCIÓN DE RED</th>
-              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600' }}>MÓDULOS PERMITIDOS</th>
+              <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>ACCIONES</th>
+              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>NOMBRE DEL ROL</th>
+              <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>MÓDULOS PERMITIDOS</th>
             </tr>
           </thead>
           <tbody>
-            {roles.length === 0 ? (
-              <tr><td colSpan={4} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>No hay roles registrados.</td></tr>
-            ) : (
-              roles.map(rol => (
-                <tr key={rol.id} style={{ borderBottom: '1px solid #21262d' }}>
-                  <td style={{ padding: '16px', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                      <button onClick={() => handleAbrirModal(rol)} style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px' }}>Editar</button>
-                      <button onClick={() => handleEliminar(rol)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px' }}>Eliminar</button>
-                    </div>
-                  </td>
-                  <td style={{ padding: '16px', color: '#f0f6fc', fontWeight: '600' }}>{rol.nombre}</td>
-                  
-                  {/* INDICADOR DE SEGURIDAD */}
-                  <td style={{ padding: '16px' }}>
-                    {rol.requiereIPOficina ? (
-                      <span style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', border: '1px solid rgba(239, 68, 68, 0.3)' }}>🔒 Solo Oficina</span>
-                    ) : (
-                      <span style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', border: '1px solid rgba(16, 185, 129, 0.3)' }}>🌐 Acceso Remoto</span>
-                    )}
-                  </td>
-
-                  <td style={{ padding: '16px', color: '#c9d1d9' }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {rol.modulos?.map((m: string) => (
-                        <span key={m} style={{ backgroundColor: '#21262d', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', border: '1px solid #30363d' }}>{m}</span>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
+            {roles.map(rol => (
+              <tr key={rol.id} style={{ borderBottom: '1px solid #21262d' }}>
+                <td style={{ padding: '16px', textAlign: 'center' }}>
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                    <button 
+                      onClick={() => abrirModalEditar(rol)} 
+                      className="btn-small btn-edit"
+                      style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '4px 12px' }}
+                    >
+                      Editar
+                    </button>
+                    <button 
+                      onClick={() => eliminarRol(rol.id, rol.nombre)} 
+                      className="btn-small btn-danger"
+                      style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 12px' }}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                </td>
+                <td style={{ padding: '16px', color: '#f0f6fc', fontWeight: 'bold' }}>{rol.nombre}</td>
+                <td style={{ padding: '16px' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {rol.modulosPermitidos?.map((mod: string) => (
+                      <span key={mod} style={{ backgroundColor: '#21262d', color: '#c9d1d9', padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', border: '1px solid #30363d' }}>
+                        {mod}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
 
+      {/* MODAL DE EDICIÓN DE ROL (Limpio, sin checkbox de red) */}
       {modalAbierto && (
-        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)' }}>
-          <div className="form-card" style={{ maxWidth: '500px', width: '100%', borderRadius: '12px', border: '1px solid #444', backgroundColor: '#0d1117' }}>
+        <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)', zIndex: 1000 }}>
+          <div className="form-card" style={{ maxWidth: '500px', backgroundColor: '#0d1117', border: '1px solid #444', borderRadius: '12px' }}>
             <div className="form-header" style={{ padding: '24px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ fontSize: '1.25rem', color: '#f0f6fc', margin: 0, fontWeight: '500' }}>{rolActual ? 'Editar Rol' : 'Nuevo Rol'}</h2>
-              <button onClick={() => setModalAbierto(false)} style={{ background: 'none', border: 'none', color: '#8b949e', fontSize: '1.2rem', cursor: 'pointer' }}>✕</button>
+              <h2 style={{ fontSize: '1.25rem', color: '#f0f6fc', margin: 0, fontWeight: '500' }}>
+                {rolEditando ? 'Editar Rol' : 'Nuevo Rol'}
+              </h2>
+              <button onClick={() => setModalAbierto(false)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
-            
-            <form onSubmit={handleGuardar} style={{ padding: '24px' }}>
+
+            <form onSubmit={guardarRol} style={{ padding: '24px' }}>
               <div className="form-group" style={{ marginBottom: '24px' }}>
-                <label style={{ color: '#8b949e', fontSize: '0.85rem', display: 'block', marginBottom: '8px' }}>Nombre del Rol (Ej. VENTAS, ADMIN) *</label>
+                <label className="form-label" style={{ color: '#8b949e' }}>Nombre del Rol (Ej. VENTAS, ADMIN) *</label>
                 <input 
                   type="text" 
-                  value={nombre} 
-                  onChange={(e) => setNombre(e.target.value)} 
-                  required 
                   className="form-control" 
-                  style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9', width: '100%', padding: '10px', borderRadius: '6px' }}
+                  value={nombreRol} 
+                  onChange={(e) => setNombreRol(e.target.value)} 
+                  required 
+                  style={{ backgroundColor: '#010409', color: '#f0f6fc', border: '1px solid #30363d' }}
                 />
               </div>
 
-              {/* CHECKBOX DE SEGURIDAD POR IP */}
-              <div className="form-group" style={{ marginBottom: '24px', padding: '16px', backgroundColor: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '8px' }}>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', color: '#f0f6fc', cursor: 'pointer', margin: 0 }}>
-                  <input 
-                    type="checkbox" 
-                    checked={requiereIPOficina}
-                    onChange={(e) => setRequiereIPOficina(e.target.checked)}
-                    style={{ accentColor: '#ef4444', width: '20px', height: '20px', marginTop: '2px' }}
-                  />
-                  <div>
-                    <span style={{ display: 'block', fontWeight: '500', marginBottom: '4px' }}>Bloquear fuera de la oficina</span>
-                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', lineHeight: '1.4' }}>
-                      Si activas esta casilla, los usuarios con este rol serán bloqueados automáticamente si intentan iniciar sesión desde una red WiFi ajena a la configurada.
-                    </span>
-                  </div>
-                </label>
-              </div>
-
-              <div className="form-group">
-                <label style={{ color: '#8b949e', fontSize: '0.85rem', display: 'block', marginBottom: '12px' }}>Selecciona los módulos a los que tendrá acceso:</label>
+              <div className="form-group" style={{ marginBottom: '0' }}>
+                <label className="form-label" style={{ color: '#8b949e', marginBottom: '12px' }}>Selecciona los módulos a los que tendrá acceso:</label>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
-                  {MODULOS_SISTEMA.map(modulo => (
-                    <label key={modulo} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#c9d1d9', cursor: 'pointer', fontSize: '0.9rem' }}>
+                  {listaModulos.map(mod => (
+                    <label key={mod} style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#c9d1d9', cursor: 'pointer', fontSize: '0.9rem' }}>
                       <input 
                         type="checkbox" 
-                        checked={modulosPermitidos.includes(modulo)} 
-                        onChange={() => handleToggleModulo(modulo)} 
+                        checked={modulos.includes(mod)} 
+                        onChange={() => toggleModulo(mod)} 
                         style={{ accentColor: '#D84315', width: '16px', height: '16px', cursor: 'pointer' }}
                       />
-                      {modulo}
+                      {mod}
                     </label>
                   ))}
                 </div>
               </div>
 
-              <div style={{ marginTop: '32px', display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '20px' }}>
-                <button type="button" onClick={() => setModalAbierto(false)} style={{ backgroundColor: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer' }}>Cancelar</button>
-                <button type="submit" disabled={cargando} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer' }}>
-                  {cargando ? 'Guardando...' : 'Guardar Rol'}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', marginTop: '32px', paddingTop: '24px', borderTop: '1px solid #30363d' }}>
+                <button type="button" onClick={() => setModalAbierto(false)} className="btn btn-outline" style={{ flex: 1 }}>Cancelar</button>
+                <button type="submit" className="btn btn-primary" disabled={cargandoRol} style={{ flex: 1, backgroundColor: '#D84315', border: 'none' }}>
+                  {cargandoRol ? 'Guardando...' : 'Guardar Rol'}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
     </div>
   );
 };
