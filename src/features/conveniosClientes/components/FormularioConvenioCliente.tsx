@@ -238,19 +238,33 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
+        // 1. Buscamos TODOS los posibles IDs que signifiquen "Cliente (Paga)" 
+        const catEmpresasSnap = await getDocs(collection(db, 'catalogo_tipo_empresa'));
+        const idsValidosClientePaga: string[] = [];
+        
+        catEmpresasSnap.forEach(doc => {
+          const data = doc.data();
+          if (data.tipo && data.tipo.toLowerCase().includes('cliente (paga)')) {
+            idsValidosClientePaga.push(doc.id);
+          }
+        });
+
+        // 2. Descargamos las empresas
         const empSnapshot = await getDocs(collection(db, 'empresas'));
         const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // ¡MODIFICACIÓN! Busca explícitamente el ID '7eec9cbb' (Cliente Paga) en cualquier campo o arreglo de la empresa
-        const ID_CLIENTE_PAGA = '7eec9cbb';
-        
+        // 3. Filtramos A PRUEBA DE BALAS: Comprobamos si tiene el Texto Literal o el ID migrado
         const clientesFiltrados = todasEmpresas.filter((emp: any) => {
+          // Si tiene el formato nuevo de Array (Ya sea con Textos o con IDs de MySQL)
           if (Array.isArray(emp.tiposEmpresa)) {
-            return emp.tiposEmpresa.includes(ID_CLIENTE_PAGA);
+            return emp.tiposEmpresa.some((valor: string) => 
+              valor.toLowerCase().includes('cliente (paga)') || idsValidosClientePaga.includes(valor)
+            );
           }
-          // Fallback robusto convirtiendo toda la empresa a texto para buscar el ID
+          
+          // Respaldo agresivo por si el valor viene como un String viejo o de otra columna heredada
           const stringData = JSON.stringify(emp).toLowerCase();
-          return stringData.includes(ID_CLIENTE_PAGA.toLowerCase()) || stringData.includes('cliente (paga)');
+          return stringData.includes('cliente (paga)') || idsValidosClientePaga.some(id => stringData.includes(id.toLowerCase()));
         });
         
         setClientes(clientesFiltrados);
