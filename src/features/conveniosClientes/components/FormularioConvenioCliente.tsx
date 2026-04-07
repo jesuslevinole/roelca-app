@@ -241,7 +241,12 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
         const empSnapshot = await getDocs(collection(db, 'empresas'));
         const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
+        // ¡MODIFICACIÓN! Ahora busca en el Array 'tiposEmpresa' o en los campos viejos
         const clientesFiltrados = todasEmpresas.filter((emp: any) => {
+          if (Array.isArray(emp.tiposEmpresa)) {
+            return emp.tiposEmpresa.includes('Cliente (Paga)');
+          }
+          // Fallback para empresas que aún no han sido migradas al nuevo esquema
           const stringData = JSON.stringify(emp).toLowerCase();
           return stringData.includes('cliente (paga)');
         });
@@ -251,7 +256,6 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
         const monSnapshot = await getDocs(collection(db, 'catalogo_moneda'));
         setMonedas(monSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
 
-        // NUEVA COLECCIÓN: Tarifas de Referencia
         const tarifarioSnapshot = await getDocs(collection(db, 'catalogo_tarifas_referencia'));
         setTarifarios(tarifarioSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       } catch (error) {
@@ -280,17 +284,14 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     setFormData(prev => ({ ...prev, monedaId: id, monedaNombre: moneda ? moneda.moneda : '' }));
   };
 
-  // --- NUEVA LÓGICA DE EXTRACCIÓN DE TARIFAS DE CLIENTES ---
   const handleTipoConvenioChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     const tarifario = tarifarios.find(t => t.id === id);
     
-    // Leemos la descripción del nuevo catálogo
     const nombreTarifario = tarifario ? (tarifario.descripcion || 'Desconocido') : '';
     
     let sugerencias: number[] = [];
     if (tarifario) {
-      // Extraemos exclusivamente las tarifas configuradas para Clientes
       if (tarifario.tarifa_cliente_1 && Number(tarifario.tarifa_cliente_1) > 0) sugerencias.push(Number(tarifario.tarifa_cliente_1));
       if (tarifario.tarifa_cliente_2 && Number(tarifario.tarifa_cliente_2) > 0) sugerencias.push(Number(tarifario.tarifa_cliente_2));
       if (tarifario.tarifa_cliente_3 && Number(tarifario.tarifa_cliente_3) > 0) sugerencias.push(Number(tarifario.tarifa_cliente_3));
