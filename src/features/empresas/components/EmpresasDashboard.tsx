@@ -29,11 +29,10 @@ const EmpresasDashboard = () => {
   const [observacionesBaja, setObservacionesBaja] = useState('');
   const [guardandoBaja, setGuardandoBaja] = useState(false);
 
-  // --- NUEVO: MOTOR DE DICCIONARIOS PARA TRADUCCIÓN DE IDs ---
+  // MOTOR DE DICCIONARIOS PARA TRADUCCIÓN DE IDs
   const [diccionarios, setDiccionarios] = useState<any>({});
 
   useEffect(() => {
-    // 1. Descargamos las empresas en tiempo real
     const unsubscribe = onSnapshot(collection(db, 'empresas'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       data.sort((a: any, b: any) => {
@@ -43,7 +42,7 @@ const EmpresasDashboard = () => {
       setEmpresas(data);
     });
 
-    // 2. Descargamos los catálogos para traducir los IDs
+    // 2. Descargamos TODOS los catálogos necesarios para traducir IDs
     const fetchDiccionarios = async () => {
       try {
         const getDict = async (col: string, labelField: string, formatFn?: Function) => {
@@ -53,14 +52,19 @@ const EmpresasDashboard = () => {
           return dict;
         };
 
-        const [reg, mon, fac, dir] = await Promise.all([
+        const [reg, mon, fac, dir, tEmpresa, tServicio] = await Promise.all([
           getDict('catalogo_regimen_fiscal', '', (d: any) => `${d.clave} - ${d.descripcion}`),
           getDict('catalogo_moneda', 'moneda'),
           getDict('catalogo_tipo_factura', 'nombre'),
-          getDict('direcciones', 'direccionCompleta')
+          getDict('direcciones', 'direccionCompleta'),
+          getDict('catalogo_tipo_empresa', 'tipo'),     // <-- AÑADIDO
+          getDict('catalogo_tipo_servicio', 'nombre')   // <-- AÑADIDO
         ]);
 
-        setDiccionarios({ regimenes: reg, monedas: mon, facturas: fac, direcciones: dir });
+        setDiccionarios({ 
+          regimenes: reg, monedas: mon, facturas: fac, direcciones: dir, 
+          tiposEmpresa: tEmpresa, tiposServicio: tServicio 
+        });
       } catch (error) {
         console.error("Error cargando diccionarios de traducción:", error);
       }
@@ -135,12 +139,12 @@ const EmpresasDashboard = () => {
 
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
 
-  // Funciones de ayuda para traducir el ID a su texto correspondiente usando los diccionarios
+  // Funciones del Motor de Traducción
   const getLabel = (idOrRaw: string, dictName: string) => {
     if (!idOrRaw) return '-';
     const dict = diccionarios[dictName];
     if (dict && dict[idOrRaw]) return dict[idOrRaw];
-    return idOrRaw; // Fallback: Si no es un ID o no lo encuentra, asume que ya era el texto
+    return idOrRaw; 
   };
 
   const getLabelExt = (labelField: string, idField: string, dictName: string) => {
@@ -151,35 +155,55 @@ const EmpresasDashboard = () => {
     return idField;
   };
 
+  // NUEVO: Función para traducir un Array de IDs a un Array de Textos
+  const getArrayLabels = (idsArray: any, dictName: string) => {
+    if (!idsArray) return [];
+    const dict = diccionarios[dictName];
+    
+    // Si viene como Array (lo ideal) iteramos y traducimos cada elemento
+    if (Array.isArray(idsArray)) {
+      return idsArray.map(item => {
+        if (dict && dict[item]) return dict[item];
+        return item; // Si no lo encuentra, devuelve lo que tenía
+      });
+    }
+    
+    // Si por algún error de base de datos viene como string solitario
+    if (typeof idsArray === 'string') {
+      if (dict && dict[idsArray]) return [dict[idsArray]];
+      return [idsArray];
+    }
+    return [];
+  };
+
   // --- TRADUCCIÓN Y FILTRADO MAESTRO ---
   const empresasEnriquecidas = useMemo(() => {
     return empresas.map(emp => {
-      // Búsqueda especial para el Cliente Relacionado dentro de la misma colección
+      
       let clienteRelName = emp.clienteRelacionadoNombre;
       if (!clienteRelName && emp.clienteRelacionadoId) {
         const match = empresas.find(e => e.id === emp.clienteRelacionadoId);
         clienteRelName = match ? match.nombre : emp.clienteRelacionadoId;
       }
 
-      // Inyectamos las variables "Limpias" (Traducidas) al objeto para usarlas en la UI y Excel
+      // TRADUCIMOS ABSOLUTAMENTE TODO AL VUELO
       return {
         ...emp,
         _regimenLabel: getLabelExt(emp.regimenFiscalLabel, emp.regimenFiscalId || emp.regimenFiscal, 'regimenes'),
         _monedaLabel: getLabel(emp.moneda, 'monedas'),
         _facturaLabel: getLabel(emp.tipoFactura, 'facturas'),
         _direccionLabel: getLabelExt(emp.direccionLabel, emp.direccionId || emp.direccion, 'direcciones'),
-        _clienteRelLabel: clienteRelName || '-'
+        _clienteRelLabel: clienteRelName || '-',
+        _tiposEmpresaArray: getArrayLabels(emp.tiposEmpresa, 'tiposEmpresa'),    // <-- Traducido
+        _tiposServicioArray: getArrayLabels(emp.tiposServicio, 'tiposServicio')  // <-- Traducido
       };
     }).filter(emp => {
       let pasaFiltro = true;
       if (filtroActivo === 'Empresa Inactiva') pasaFiltro = emp.status === 'Inactiva';
       else if (filtroActivo === 'Baja') pasaFiltro = emp.status === 'Baja';
       else if (filtroActivo !== 'Todo') {
-        if (Array.isArray(emp.tiposEmpresa)) {
-          pasaFiltro = emp.tiposEmpresa.includes(filtroActivo);
-        } else {
-          pasaFiltro = emp.tiposServicio === filtroActivo || emp.tiposEmpresa === filtroActivo;
-        }
+        // Ahora filtramos basándonos en el array traducido para mayor precisión
+        pasaFiltro = emp._tiposEmpresaArray.includes(filtroActivo) || emp._tiposServicioArray.includes(filtroActivo);
       }
 
       if (!pasaFiltro) return false;
@@ -197,14 +221,14 @@ const EmpresasDashboard = () => {
   const exportarExcel = () => {
     if (empresasEnriquecidas.length === 0) return;
 
-    // Utilizamos los campos traducidos (_) en el Excel en lugar de los IDs brutos
+    // Exportación utilizando TODAS las variables enriquecidas (_)
     const datosExcel = empresasEnriquecidas.map(emp => ({
       '# de Cliente': emp.numCliente || '',
       'Razón Social': emp.nombre || '',
       'Nombre Corto': emp.nombreCorto || '',
       'Status': emp.status || '',
-      'Tipo(s) de Empresa': renderArrayValues(emp.tiposEmpresa),
-      'Servicios Ofrecidos': renderArrayValues(emp.tiposServicio),
+      'Tipo(s) de Empresa': renderArrayValues(emp._tiposEmpresaArray),
+      'Servicios Ofrecidos': renderArrayValues(emp._tiposServicioArray),
       'Cliente Relacionado': emp._clienteRelLabel !== '-' ? emp._clienteRelLabel : '',
       'RFC/Tax ID': emp.rfcTaxId || '',
       'Último Servicio': emp.fechaUltimoServicio || '',
@@ -373,11 +397,12 @@ const EmpresasDashboard = () => {
                       </td>
                       <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{mostrarDato(emp.nombreCorto)}</td>
                       
+                      {/* USAMOS LAS VARIABLES TRADUCIDAS PARA MOSTRAR TEXTOS */}
                       <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.85rem', maxWidth: '200px', whiteSpace: 'normal' }}>
-                        {renderArrayValues(emp.tiposEmpresa)}
+                        {renderArrayValues(emp._tiposEmpresaArray)}
                       </td>
                       <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.85rem', maxWidth: '200px', whiteSpace: 'normal' }}>
-                        {renderArrayValues(emp.tiposServicio)}
+                        {renderArrayValues(emp._tiposServicioArray)}
                       </td>
                       
                       <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>{mostrarDato(emp.rfcTaxId)}</td>
@@ -423,8 +448,9 @@ const EmpresasDashboard = () => {
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Nombre Corto</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.nombreCorto)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Status</span><span className="detail-value" style={{ color: '#c9d1d9', display: 'flex', alignItems: 'center', gap: '8px' }}><span className={`dot ${empresaViendo.status === 'Activa' ? 'dot-green' : empresaViendo.status === 'Baja' ? 'dot-red' : 'dot-gray'}`}></span>{mostrarDato(empresaViendo.status)}</span></div>
                   
-                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo(s) de Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{renderArrayValues(empresaViendo.tiposEmpresa)}</span></div>
-                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Servicios Ofrecidos</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{renderArrayValues(empresaViendo.tiposServicio)}</span></div>
+                  {/* AQUÍ TAMBIÉN USAMOS LAS VARIABLES TRADUCIDAS '_' */}
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo(s) de Empresa</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{renderArrayValues(empresaViendo._tiposEmpresaArray)}</span></div>
+                  <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Servicios Ofrecidos</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{renderArrayValues(empresaViendo._tiposServicioArray)}</span></div>
                   
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>RFC / Tax ID</span><span className="detail-value font-mono" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.rfcTaxId)}</span></div>
                   <div className="detail-item" style={{ gridColumn: 'span 2' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Fecha del último servicio</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo.fechaUltimoServicio)}</span></div>
@@ -444,7 +470,6 @@ const EmpresasDashboard = () => {
 
               {activeTabDetalle === 'fiscal' && (
                 <div className="detail-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
-                  {/* AQUÍ SE IMPRIMEN LAS VARIABLES TRADUCIDAS '_' DEL MOTOR */}
                   <div className="detail-item" style={{ gridColumn: 'span 3' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Régimen Fiscal</span><span className="detail-value" style={{ color: '#f0f6fc', fontSize: '0.95rem' }}>{mostrarDato(empresaViendo._regimenLabel)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Moneda</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo._monedaLabel)}</span></div>
                   <div className="detail-item"><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>Tipo de Factura</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo._facturaLabel)}</span></div>
