@@ -238,17 +238,31 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
+        // 1. Buscamos el ID exacto de "Cliente (Paga)" en el catálogo
+        const catEmpresasSnap = await getDocs(collection(db, 'catalogo_tipo_empresa'));
+        let idClientePaga = '';
+        catEmpresasSnap.forEach(doc => {
+          if (doc.data().tipo === 'Cliente (Paga)') {
+            idClientePaga = doc.id;
+          }
+        });
+
+        // 2. Descargamos las empresas
         const empSnapshot = await getDocs(collection(db, 'empresas'));
         const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // ¡MODIFICACIÓN! Ahora busca en el Array 'tiposEmpresa' o en los campos viejos
+        // 3. Filtramos inteligentemente (Por Texto para las nuevas, o por ID para las importadas del CSV)
         const clientesFiltrados = todasEmpresas.filter((emp: any) => {
+          let esCliente = false;
           if (Array.isArray(emp.tiposEmpresa)) {
-            return emp.tiposEmpresa.includes('Cliente (Paga)');
+            esCliente = emp.tiposEmpresa.some((tipo: string) => 
+              tipo === 'Cliente (Paga)' || (idClientePaga && tipo === idClientePaga)
+            );
+          } else if (emp.tiposServicio) {
+            // Retrocompatibilidad en caso de que aún exista el formato viejo string
+            esCliente = emp.tiposServicio.includes('Cliente (Paga)') || (idClientePaga && emp.tiposServicio.includes(idClientePaga));
           }
-          // Fallback para empresas que aún no han sido migradas al nuevo esquema
-          const stringData = JSON.stringify(emp).toLowerCase();
-          return stringData.includes('cliente (paga)');
+          return esCliente;
         });
         
         setClientes(clientesFiltrados);
@@ -362,14 +376,10 @@ export const FormularioConvenioCliente = ({ estado, initialData, registrosExiste
     }
   };
 
-  const opcionesClientes = clientes.map(cli => {
-    const keys = Object.keys(cli);
-    const nombreKey = keys.find(k => k.toLowerCase().includes('empresa') || k.toLowerCase().includes('nombre'));
-    return {
-      id: cli.id,
-      label: nombreKey ? cli[nombreKey] : `Cliente ID: ${cli.id.slice(0,4)}`
-    };
-  });
+  const opcionesClientes = clientes.map(cli => ({
+    id: cli.id,
+    label: cli.nombre || cli.nombreCorto || `Cliente ID: ${cli.id.slice(0,4)}`
+  }));
 
   return (
     <>
