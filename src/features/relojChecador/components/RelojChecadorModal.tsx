@@ -14,9 +14,8 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
   const [tiempoActual, setTiempoActual] = useState(new Date());
   const [tipoRegistro, setTipoRegistro] = useState('');
   
-  // Novedad: Separamos la vista de la base de datos
-  const [coordenadasVisuales, setCoordenadasVisuales] = useState(''); // Lo que ve el usuario (Lat/Long)
-  const [ubicacionBD, setUbicacionBD] = useState(''); // Lo que va a Firebase (URL del mapa)
+  const [coordenadasVisuales, setCoordenadasVisuales] = useState(''); 
+  const [ubicacionBD, setUbicacionBD] = useState(''); 
   
   const [obteniendoGps, setObteniendoGps] = useState(false);
   const [cargando, setCargando] = useState(false);
@@ -24,11 +23,9 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
   const [registrosHoy, setRegistrosHoy] = useState<string[]>([]);
   const [cargandoDatos, setCargandoDatos] = useState(true);
 
-  // Estados de Seguridad por IP
   const [ipValida, setIpValida] = useState<boolean | null>(null);
   const [ipActualUsuario, setIpActualUsuario] = useState('');
 
-  // Reloj en tiempo real
   useEffect(() => {
     if (!isOpen) return;
     const timer = setInterval(() => {
@@ -37,14 +34,12 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
     return () => clearInterval(timer);
   }, [isOpen]);
 
-  // Validar IP y buscar registros del día
   useEffect(() => {
     if (!isOpen || !usuario) return;
 
     const inicializarChecador = async () => {
       setCargandoDatos(true);
       try {
-        // --- 1. VALIDACIÓN DE SEGURIDAD PERIMETRAL (IP) ---
         const rolesExentos = ['Admin', 'Gerencia', 'Sistemas'];
         let accesoPermitido = true;
 
@@ -72,7 +67,6 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
           return;
         }
 
-        // --- 2. OBTENER HISTORIAL DE HOY ---
         const fechaLocal = new Date().toLocaleDateString('es-MX');
         const q = query(
           collection(db, 'reloj_checador'),
@@ -85,7 +79,6 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
         
         setRegistrosHoy(tipos);
 
-        // Auto-seleccionar la opción lógica siguiente
         if (!tipos.includes('Llegada al Turno')) {
           setTipoRegistro('Llegada al Turno');
         } else if (tipos.includes('Llegada al Turno') && !tipos.includes('Salida a la Comida') && !tipos.includes('Salida del Turno')) {
@@ -114,39 +107,54 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
       alert('Tu navegador no soporta geolocalización.');
       return;
     }
+    
     setObteniendoGps(true);
+
+    // CONFIGURACIÓN ROBUSTA PARA PC DE ESCRITORIO Y NAVEGADORES PRIVADOS
+    const opcionesGps = {
+      enableHighAccuracy: false, // En PC, true provoca fallos si no hay chip GPS
+      timeout: 15000,           // Máximo 15 segundos esperando
+      maximumAge: 0             // No usar caché vieja
+    };
+
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
         
-        // Formateamos visualmente para el usuario
         setCoordenadasVisuales(`${latitude.toFixed(6)}, ${longitude.toFixed(6)}`);
         
-        // Guardamos el link oficial para Firebase
-        const mapsLink = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        // Link real y funcional de Google Maps con Pin Exacto
+        const mapsLink = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
         setUbicacionBD(mapsLink);
         
         setObteniendoGps(false);
       },
       (error) => {
-        console.error("Error GPS:", error);
-        alert('No se pudo obtener la ubicación. Asegúrate de dar permisos a tu navegador.');
+        console.error("Error GPS detallado:", error);
+        let mensaje = 'No se pudo obtener la ubicación automáticamente.\n\nMotivo: ';
+        
+        if (error.code === 1) mensaje += 'Permiso denegado. (Revisa la configuración de Privacidad de Windows/Mac o del navegador Brave).';
+        else if (error.code === 2) mensaje += 'Posición no disponible. (Común en PC de escritorio sin tarjeta WiFi).';
+        else if (error.code === 3) mensaje += 'El tiempo de espera se agotó.';
+        else mensaje += 'Error desconocido.';
+
+        alert(mensaje + '\n\nPuedes escribir la dirección o "Ubicación en Oficina" manualmente en el recuadro si tu rol lo permite.');
         setObteniendoGps(false);
-      }
+      },
+      opcionesGps
     );
   };
 
-  // Por si falla el GPS y necesitan escribir a mano (Fallback)
   const handleIngresoManualGPS = (e: React.ChangeEvent<HTMLInputElement>) => {
     const texto = e.target.value;
     setCoordenadasVisuales(texto);
-    setUbicacionBD(texto); // Si lo escriben manual, se va tal cual a la BD
+    setUbicacionBD(texto); 
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ubicacionBD) {
-      alert("La ubicación es obligatoria para poder checar. Por favor presiona el botón GPS.");
+      alert("La ubicación es obligatoria para poder checar. Por favor presiona el botón GPS o escríbela a mano.");
       return;
     }
     if (!tipoRegistro) {
@@ -165,7 +173,7 @@ export const RelojChecadorModal: React.FC<Props> = ({ isOpen, onClose, usuario }
         fecha: fechaLocal,
         hora: horaLocal,
         tipoRegistro: tipoRegistro,
-        ubicacion: ubicacionBD, // Enviamos el Link del Mapa a Firestore
+        ubicacion: ubicacionBD, 
         ipRegistro: ipActualUsuario || 'Exento',
         timestamp: tiempoActual.getTime() 
       });
