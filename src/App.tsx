@@ -1,9 +1,9 @@
 // src/App.tsx
 import { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, getDoc } from 'firebase/firestore'; // <-- AÑADIDO getDoc
 import { auth, db } from './config/firebase'; 
-import { registrarLog } from './utils/logger'; // <-- IMPORTACIÓN DEL LOGGER
+import { registrarLog } from './utils/logger'; 
 
 import { Login } from './features/auth/components/Login';
 import OperacionesDashboard from './features/operaciones/components/OperacionesDashboard';
@@ -13,7 +13,7 @@ import CatalogosDashboard from './features/catalogos/components/CatalogosDashboa
 import { CombustibleDashboard } from './features/combustible/components/CombustibleDashboard';
 import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
 import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
-import { ConveniosClientesDashboard } from './features/conveniosClientes/components/ConveniosClientesDashboard';
+import ConveniosClientesDashboard from './features/conveniosClientes/components/ConveniosClientesDashboard';
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
 import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDashboard';
@@ -21,13 +21,18 @@ import { RolesDashboard } from './usuarios/components/RolesDashboard';
 import { UsuariosDashboard } from './usuarios/components/UsuariosDashboard';
 import { LogsDashboard } from './features/configuracion/components/LogsDashboard';
 
+// NUEVOS IMPORTES DEL RELOJ CHECADOR
+import { RelojChecadorModal } from './features/relojChecador/components/RelojChecadorModal';
+import { HistorialChequeosDashboard } from './features/relojChecador/components/HistorialChequeosDashboard';
+
 import './App.css';
 
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   const [cargandoAuth, setCargandoAuth] = useState(true); 
+  const [usuarioActualDB, setUsuarioActualDB] = useState<any>(null); // Guardará el Documento del Usuario
   
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'roles' | 'usuarios' | 'logs'>('operaciones');
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -38,28 +43,32 @@ function App() {
   const [menuEmpleadosAbierto, setMenuEmpleadosAbierto] = useState(false);
   const [menuConfiguracionAbierto, setMenuConfiguracionAbierto] = useState(false);
 
-  // 1. DETECTAR SESIÓN AL RECARGAR PÁGINA
+  // Estado del Modal de Reloj
+  const [modalChecadorAbierto, setModalChecadorAbierto] = useState(false);
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setEstaAutenticado(true);
+        // Traer datos del usuario de Firestore para saber su Rol
+        const userDoc = await getDoc(doc(db, 'usuarios', user.uid));
+        if (userDoc.exists()) {
+          setUsuarioActualDB({ id: userDoc.id, ...userDoc.data() });
+        }
       } else {
         setEstaAutenticado(false);
+        setUsuarioActualDB(null);
       }
       setCargandoAuth(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. FUNCIÓN PARA CERRAR SESIÓN (Manual o Automática) CON AUDITORÍA
   const handleCerrarSesion = async (motivo: 'manual' | 'inactividad' = 'manual') => {
     if (auth.currentUser) {
       try {
-        // Registramos la salida en el Log ANTES de cerrar sesión para tener sus datos
         const detalle = motivo === 'inactividad' ? 'Cierre de sesión automático por inactividad (5 min)' : 'Cierre de sesión manual voluntario';
         await registrarLog('Sesión', 'Cierre de Sesión', detalle);
-
-        // Actualizamos su estado a offline
         await updateDoc(doc(db, 'usuarios', auth.currentUser.uid), { isOnline: false });
       } catch (error) {
         console.warn("No se pudo actualizar estado online o log al salir", error);
@@ -72,7 +81,6 @@ function App() {
     }
   };
 
-  // 3. TEMPORIZADOR DE 5 MINUTOS DE INACTIVIDAD
   useEffect(() => {
     if (!estaAutenticado) return;
 
@@ -101,7 +109,6 @@ function App() {
     };
   }, [estaAutenticado]);
 
-  // 4. REGISTRAR SALIDA SI CIERRAN LA PESTAÑA
   useEffect(() => {
     const handleTabClose = () => {
       if (auth.currentUser) {
@@ -111,6 +118,10 @@ function App() {
     window.addEventListener('beforeunload', handleTabClose);
     return () => window.removeEventListener('beforeunload', handleTabClose);
   }, []);
+
+  // Lógica de Permisos para el Reloj Checador
+  const rolesExentosChequeo = ['Admin', 'Gerencia', 'Sistemas'];
+  const debeChecar = usuarioActualDB && !rolesExentosChequeo.includes(usuarioActualDB.rol);
 
   if (cargandoAuth) {
     return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#010409', color: '#8b949e' }}>Cargando Roelca Inc...</div>;
@@ -123,13 +134,19 @@ function App() {
   const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'direcciones';
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
-  const esEmpleadosActivo = moduloActivo === 'colaboradores';
+  const esEmpleadosActivo = moduloActivo === 'colaboradores' || moduloActivo === 'historialAsistencia';
   const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios' || moduloActivo === 'logs';
 
   return (
     <div className="app-wrapper">
       
-      {/* --- MENÚ LATERAL --- */}
+      {/* MODAL GLOBAL DE RELOJ CHECADOR */}
+      <RelojChecadorModal 
+        isOpen={modalChecadorAbierto} 
+        onClose={() => setModalChecadorAbierto(false)} 
+        usuario={usuarioActualDB} 
+      />
+
       <div className={`sidebar ${!menuAbierto ? 'collapsed' : ''}`}>
         <div className="sidebar-brand">
           <span style={{ color: '#D84315', marginRight: '8px' }}>■</span> Roelca Inc.
@@ -166,6 +183,7 @@ function App() {
         {menuEmpleadosAbierto && (
           <div className="sidebar-submenu">
             <div className={`sidebar-subitem ${moduloActivo === 'colaboradores' ? 'active' : ''}`} onClick={() => setModuloActivo('colaboradores')}>Colaboradores</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'historialAsistencia' ? 'active' : ''}`} onClick={() => setModuloActivo('historialAsistencia')}>Historial de Chequeo</div>
           </div>
         )}
 
@@ -205,7 +223,6 @@ function App() {
         </div>
       </div>
 
-      {/* --- ÁREA PRINCIPAL --- */}
       <div className="main-area">
         <div className="topbar">
           <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -215,7 +232,24 @@ function App() {
             </div>
           </div>
           
-          <div className="topbar-right" style={{ position: 'relative' }}>
+          <div className="topbar-right" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '20px' }}>
+            
+            {/* BOTÓN RELOJ CHECADOR (Visible solo para quienes deben checar) */}
+            {debeChecar && (
+              <button 
+                onClick={() => setModalChecadorAbierto(true)}
+                style={{ 
+                  backgroundColor: 'rgba(59, 130, 246, 0.15)', border: '1px solid #3b82f6', color: '#58a6ff',
+                  padding: '8px 16px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold',
+                  display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s ease', whiteSpace: 'nowrap'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#3b82f6'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.15)'}
+              >
+                ⏱️ Checar Turno
+              </button>
+            )}
+
             <div className="notification-wrapper" title="Notificaciones" style={{ marginRight: '16px' }}>
               <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24" style={{ color: '#8b949e' }}>
                 <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>
@@ -224,17 +258,18 @@ function App() {
             </div>
             
             <div className="avatar" style={{ cursor: 'pointer', backgroundColor: '#D84315', color: 'white', border: 'none' }} onClick={() => setPerfilAbierto(!perfilAbierto)}>
-              JM
+              {usuarioActualDB?.nombre ? usuarioActualDB.nombre.substring(0,2).toUpperCase() : 'JM'}
             </div>
 
             {perfilAbierto && (
               <div className="profile-dropdown">
                 <div className="profile-header-info">
-                  <div className="profile-avatar-large" style={{ backgroundColor: '#D84315', color: 'white' }}>JM</div>
+                  <div className="profile-avatar-large" style={{ backgroundColor: '#D84315', color: 'white' }}>
+                    {usuarioActualDB?.nombre ? usuarioActualDB.nombre.substring(0,2).toUpperCase() : 'JM'}
+                  </div>
                   <div className="profile-text">
-                    <span className="profile-name">Jesus Molero</span>
-                    <span className="profile-role">Admin</span>
-                    <span className="profile-dept">Informática</span>
+                    <span className="profile-name">{usuarioActualDB?.nombre || 'Usuario'}</span>
+                    <span className="profile-role">{usuarioActualDB?.rol || 'Rol'}</span>
                   </div>
                 </div>
                 <div className="profile-actions">
@@ -247,7 +282,6 @@ function App() {
           </div>
         </div>
 
-        {/* --- CONTENIDO DINÁMICO --- */}
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
         {moduloActivo === 'direcciones' && <DireccionesDashboard />}
@@ -259,6 +293,7 @@ function App() {
         {moduloActivo === 'conveniosProveedores' && <ConveniosProveedoresDashboard />}
         {moduloActivo === 'catalogos' && <CatalogosDashboard />}
         {moduloActivo === 'colaboradores' && <EmpleadosDashboard />}
+        {moduloActivo === 'historialAsistencia' && <HistorialChequeosDashboard usuarioActual={usuarioActualDB} />}
         {moduloActivo === 'roles' && <RolesDashboard />}
         {moduloActivo === 'usuarios' && <UsuariosDashboard />}
         {moduloActivo === 'logs' && <LogsDashboard />}
