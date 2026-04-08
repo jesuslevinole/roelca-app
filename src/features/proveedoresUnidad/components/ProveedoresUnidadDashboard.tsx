@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, eliminarRegistro } from '../../../config/firebase'; 
-import { FormularioProveedorUnidad } from './FormularioProveedorUnidad';
+import { FormularioProveedorUnidad } from './FormularioProveedorUnidad'; // ✅ IMPORTACIÓN AGREGADA AQUÍ
 
 export const ProveedoresUnidadDashboard: React.FC = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
@@ -35,7 +35,7 @@ export const ProveedoresUnidadDashboard: React.FC = () => {
 
   const handleEliminar = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation(); 
-    if (window.confirm('¿Estás seguro de que deseas eliminar permanentemente este proveedor?')) {
+    if (window.confirm('¿Estás seguro de que deseas eliminar permanentemente este conductor/proveedor?')) {
       try {
         await eliminarRegistro('proveedores_unidad', id);
       } catch (error) {
@@ -135,5 +135,4 @@ export const ProveedoresUnidadDashboard: React.FC = () => {
   );
 };
 
-// ✅ IMPORTANTE: Se agregó la exportación por defecto para que App.tsx no tire error de compilación.
 export default ProveedoresUnidadDashboard;
