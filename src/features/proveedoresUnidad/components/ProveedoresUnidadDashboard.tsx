@@ -134,3 +134,6 @@ export const ProveedoresUnidadDashboard: React.FC = () => {
     </div>
   );
 };
+
+// ✅ IMPORTANTE: Se agregó la exportación por defecto para que App.tsx no tire error de compilación.
+export default ProveedoresUnidadDashboard;
