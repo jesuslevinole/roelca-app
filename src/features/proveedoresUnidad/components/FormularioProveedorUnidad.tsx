@@ -34,15 +34,23 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
   useEffect(() => {
     const obtenerProveedores = async () => {
       try {
-        // NOTA: Ajusta 'catalogo_empresas' si tu colección principal se llama distinto (ej. 'empresas')
-        const querySnapshot = await getDocs(collection(db, 'catalogo_empresas'));
+        const querySnapshot = await getDocs(collection(db, 'empresas'));
         const todasLasEmpresas = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // Filtrar estrictamente las que sean de categoría Proveedor (Transporte)
-        // NOTA: Verifica si en tu BD el campo se llama 'tipo_empresa' o 'categoria_principal'
-        const filtradas = todasLasEmpresas.filter((emp: any) => 
-          emp.tipo_empresa === 'Proveedor (Transporte)' || emp.categoria_principal === 'Proveedor (Transporte)'
-        );
+        // El ID explícito que solicitaste
+        const ID_PROVEEDOR = 'ca21ab07';
+
+        const filtradas = todasLasEmpresas.filter((emp: any) => {
+          // Si tiene el formato nuevo de Array
+          if (Array.isArray(emp.tiposEmpresa)) {
+            return emp.tiposEmpresa.some((valor: string) => 
+              valor === ID_PROVEEDOR || valor.toLowerCase().includes('proveedor (transporte)')
+            );
+          }
+          // Respaldo agresivo por si el valor viene como un String viejo
+          const stringData = JSON.stringify(emp).toLowerCase();
+          return stringData.includes(ID_PROVEEDOR.toLowerCase()) || stringData.includes('proveedor (transporte)');
+        });
         
         setEmpresasProveedoras(filtradas);
       } catch (error) {
@@ -73,7 +81,7 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
     setFormData(prev => ({
       ...prev,
       proveedorId: idSeleccionado,
-      proveedorNombre: empresaEncontrada ? empresaEncontrada.empresa : '' // Asegúrate de que tu BD use la propiedad 'empresa' o 'nombre'
+      proveedorNombre: empresaEncontrada ? empresaEncontrada.nombre || empresaEncontrada.empresa : '' 
     }));
   };
 
@@ -125,7 +133,7 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
                 >
                   <option value="">Seleccione un proveedor...</option>
                   {empresasProveedoras.map(emp => (
-                    <option key={emp.id} value={emp.id}>{emp.empresa}</option>
+                    <option key={emp.id} value={emp.id}>{emp.nombre || emp.empresa}</option>
                   ))}
                 </select>
               </div>
