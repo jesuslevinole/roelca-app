@@ -1,20 +1,17 @@
-// src/features/proveedoresUnidad/components/ProveedoresUnidadDashboard.tsx
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, eliminarRegistro } from '../../../config/firebase'; 
-import { FormularioProveedorUnidad } from './FormularioProveedorUnidad'; // ✅ IMPORTACIÓN AGREGADA AQUÍ
+import { FormularioProveedorUnidad } from './FormularioProveedorUnidad';
 
 export const ProveedoresUnidadDashboard: React.FC = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [registroEditando, setRegistroEditando] = useState<any | null>(null);
   const [registros, setRegistros] = useState<any[]>([]);
 
-  // Suscripción en tiempo real a Firebase
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'proveedores_unidad'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
-      // Ordenar alfabéticamente por Apellido como buena práctica
       data.sort((a: any, b: any) => (a.apellido || '').localeCompare(b.apellido || ''));
       
       setRegistros(data);
@@ -70,7 +67,6 @@ export const ProveedoresUnidadDashboard: React.FC = () => {
           <table className="data-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead style={{ backgroundColor: '#161b22', position: 'sticky', top: 0, zIndex: 10 }}>
               <tr>
-                {/* Columna de Acciones al principio */}
                 <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d', borderBottom: '1px solid #30363d' }}>
                   Acciones
                 </th>
@@ -96,7 +92,6 @@ export const ProveedoresUnidadDashboard: React.FC = () => {
                     onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
                     onClick={() => editarRegistro(reg)}
                   >
-                    {/* Celda de Acciones */}
                     <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
                       <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                         <button 
