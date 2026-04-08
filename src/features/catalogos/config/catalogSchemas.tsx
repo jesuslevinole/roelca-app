@@ -14,6 +14,8 @@ export interface CatalogField {
     collection: string;
     labelField: string;
     valueField: string;
+    filterField?: string; // NUEVO: Campo por el cual filtrar (Ej. tiposEmpresa)
+    filterValue?: string; // NUEVO: Valor que debe tener para ser mostrado
   };
 }
 
@@ -188,7 +190,14 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
         label: 'Empresa', 
         type: 'select', 
         required: true, 
-        dynamicOptions: { collection: 'empresas', labelField: 'empresa', valueField: 'id' }
+        // MODIFICACIÓN CRÍTICA: Se ajusta el label a 'nombre' (ya no 'empresa') y se aplica el filtro por el ID
+        dynamicOptions: { 
+          collection: 'empresas', 
+          labelField: 'nombre', 
+          valueField: 'id',
+          filterField: 'tiposEmpresa', 
+          filterValue: 'f21b15a4'
+        }
       }
     ]
   },
@@ -212,7 +221,6 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'obligatorio', label: 'Obligatorio', type: 'select', options: ['Sí', 'No'] }
     ]
   },
-  // NUEVO CATÁLOGO: Tipo de Empresa
   tipo_empresa: {
     id: 'tipo_empresa', titulo: 'Tipo de Empresa',
     icono: <path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm10 12h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V5h2v2zm4 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/>,

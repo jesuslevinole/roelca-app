@@ -77,7 +77,6 @@ const CatalogosDashboard = () => {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [requiredFields, setRequiredFields] = useState<string[]>([]);
 
-  // NUEVOS ESTADOS: Buscador y Filtros
   const [busqueda, setBusqueda] = useState('');
   const [filtroActivo, setFiltroActivo] = useState('Todo');
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
@@ -101,10 +100,25 @@ const CatalogosDashboard = () => {
       const nuevasOpciones: Record<string, any[]> = {};
       for (const field of catalogoSeleccionado.fields) {
         if (field.dynamicOptions) {
-          const { collection: col } = field.dynamicOptions;
+          const { collection: col, filterField, filterValue } = field.dynamicOptions;
           try {
             const querySnapshot = await getDocs(collection(db, col));
-            nuevasOpciones[field.name] = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            let optionsData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            // NUEVO: Lógica de Filtrado Inteligente en Memoria
+            if (filterField && filterValue) {
+              optionsData = optionsData.filter((item: any) => {
+                const fieldValue = item[filterField];
+                // Si el campo a filtrar es un arreglo (ej. tiposEmpresa), verifica si lo contiene
+                if (Array.isArray(fieldValue)) {
+                  return fieldValue.includes(filterValue);
+                }
+                // Si no es arreglo, compara directo (por si hay retrocompatibilidad)
+                return String(fieldValue) === String(filterValue);
+              });
+            }
+
+            nuevasOpciones[field.name] = optionsData;
           } catch (error) {
             console.error(`Error cargando colección dinámica ${col}:`, error);
           }
@@ -114,8 +128,8 @@ const CatalogosDashboard = () => {
     };
 
     cargarOpcionesDinamicas();
-    setBusqueda(''); // Limpiar búsqueda al cambiar de catálogo
-    setFiltroActivo('Todo'); // Resetear filtro
+    setBusqueda(''); 
+    setFiltroActivo('Todo'); 
 
     return () => unsubscribe();
   }, [catalogoSeleccionado]);
@@ -149,9 +163,9 @@ const CatalogosDashboard = () => {
     return registros.filter(reg => {
       // Buscar en cualquier campo del registro
       return Object.entries(reg).some(([key, value]) => {
-        if (key === 'id') return false; // Ignorar el ID interno
+        if (key === 'id') return false; 
         
-        // Si el campo es dinámico, buscar por el label que se muestra, no por el ID guardado
+        // Si el campo es dinámico, buscar por el label (nombre) y no por el ID
         const fieldConfig = catalogoSeleccionado.fields.find((f: CatalogField) => f.name === key);
         if (fieldConfig?.dynamicOptions && opcionesDinamicas[key]) {
           const dOpt = fieldConfig.dynamicOptions;
@@ -175,7 +189,7 @@ const CatalogosDashboard = () => {
         return catalogoSeleccionado.fields.map((f: CatalogField) => {
           let valor = reg[f.name] || '';
           
-          // Reemplazar IDs dinámicos por sus etiquetas reales
+          // Reemplazar IDs dinámicos por sus etiquetas reales al exportar
           if (f.dynamicOptions && opcionesDinamicas[f.name]) {
             const dOpt = f.dynamicOptions;
             valor = opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === valor)?.[dOpt.labelField] || valor;
@@ -217,7 +231,6 @@ const CatalogosDashboard = () => {
   // --- VISTA 2: TABLA ESTANDARIZADA DEL CATÁLOGO SELECCIONADO ---
   return (
     <>
-      {/* HEADER DEL MÓDULO (Limpio y centrado) */}
       <div className="module-header" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: '32px' }}>
         <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
           <div>
@@ -234,7 +247,6 @@ const CatalogosDashboard = () => {
           </div>
         </div>
 
-        {/* CONTROLES SOBRE LA TABLA (Filtros y Buscador Central) */}
         <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ position: 'relative' }}>
             <button className="btn btn-outline" onClick={() => setMostrarFiltros(!mostrarFiltros)}>
@@ -273,14 +285,12 @@ const CatalogosDashboard = () => {
         </div>
       </div>
 
-      {/* CUERPO DE LA TABLA CON SCROLL */}
       <div className="content-body" style={{ display: 'block' }}>
         <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflow: 'hidden' }}>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}> 
             <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '800px' }}>
               <thead style={{ backgroundColor: '#161b22', borderBottom: '1px solid #30363d', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
-                  {/* ACCIONES AL INICIO DEL ENCABEZADO */}
                   <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d' }}>
                     Acciones
                   </th>
@@ -307,7 +317,6 @@ const CatalogosDashboard = () => {
                       onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} 
                       onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
-                      {/* ACCIONES AL INICIO DEL CUERPO DE LA TABLA */}
                       <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
                         <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                           <button 
@@ -331,11 +340,11 @@ const CatalogosDashboard = () => {
                         </div>
                       </td>
 
-                      {/* DATOS DINÁMICOS */}
                       {catalogoSeleccionado.fields.map((f: CatalogField) => {
                         const dOpt = f.dynamicOptions;
                         return (
                           <td key={f.name} style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>
+                            {/* AHORA LEE EL LABEL CORRECTO SEGÚN EL ESQUEMA ('nombre') */}
                             {dOpt && opcionesDinamicas[f.name]
                               ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || reg[f.name] || '-')
                               : (reg[f.name] || '-')}
@@ -351,7 +360,6 @@ const CatalogosDashboard = () => {
         </div>
       </div>
 
-      {/* MODAL DE CONFIGURACIÓN DE CAMPOS OBLIGATORIOS */}
       <FieldConfigModal 
         isOpen={isConfigOpen} 
         onClose={() => setIsConfigOpen(false)} 
@@ -360,7 +368,6 @@ const CatalogosDashboard = () => {
         toggleRequired={toggleRequired} 
       />
 
-      {/* MODAL DEL FORMULARIO Y DETALLES */}
       {modalEstado !== 'cerrado' && (
         <div className="modal-overlay" style={{ backdropFilter: 'blur(4px)' }}>
           <div className="form-card" style={{ maxWidth: modalEstado === 'formulario' && isLongForm ? '800px' : '480px', width: '100%', borderRadius: '12px', border: '1px solid #444', backgroundColor: '#0d1117', transition: 'max-width 0.3s ease' }}>
