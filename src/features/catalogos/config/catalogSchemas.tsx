@@ -14,8 +14,8 @@ export interface CatalogField {
     collection: string;
     labelField: string;
     valueField: string;
-    filterField?: string; // NUEVO: Campo por el cual filtrar (Ej. tiposEmpresa)
-    filterValue?: string; // NUEVO: Valor que debe tener para ser mostrado
+    filterField?: string; // Campo por el cual filtrar (Ej. tiposEmpresa)
+    filterValue?: string; // Valor que debe tener para ser mostrado
   };
 }
 
@@ -190,7 +190,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
         label: 'Empresa', 
         type: 'select', 
         required: true, 
-        // MODIFICACIÓN CRÍTICA: Se ajusta el label a 'nombre' (ya no 'empresa') y se aplica el filtro por el ID
+        // AHORA SÍ: labelField es 'nombre' y aplica el filtro estricto en el formulario
         dynamicOptions: { 
           collection: 'empresas', 
           labelField: 'nombre', 

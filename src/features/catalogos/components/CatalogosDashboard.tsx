@@ -100,25 +100,12 @@ const CatalogosDashboard = () => {
       const nuevasOpciones: Record<string, any[]> = {};
       for (const field of catalogoSeleccionado.fields) {
         if (field.dynamicOptions) {
-          const { collection: col, filterField, filterValue } = field.dynamicOptions;
+          const { collection: col } = field.dynamicOptions;
           try {
+            // Descargamos TODAS las opciones sin filtrar. 
+            // Esto garantiza que la tabla siempre pueda traducir cualquier ID histórico a su Nombre.
             const querySnapshot = await getDocs(collection(db, col));
-            let optionsData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-            // NUEVO: Lógica de Filtrado Inteligente en Memoria
-            if (filterField && filterValue) {
-              optionsData = optionsData.filter((item: any) => {
-                const fieldValue = item[filterField];
-                // Si el campo a filtrar es un arreglo (ej. tiposEmpresa), verifica si lo contiene
-                if (Array.isArray(fieldValue)) {
-                  return fieldValue.includes(filterValue);
-                }
-                // Si no es arreglo, compara directo (por si hay retrocompatibilidad)
-                return String(fieldValue) === String(filterValue);
-              });
-            }
-
-            nuevasOpciones[field.name] = optionsData;
+            nuevasOpciones[field.name] = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           } catch (error) {
             console.error(`Error cargando colección dinámica ${col}:`, error);
           }
@@ -161,11 +148,9 @@ const CatalogosDashboard = () => {
     
     const termino = busqueda.toLowerCase();
     return registros.filter(reg => {
-      // Buscar en cualquier campo del registro
       return Object.entries(reg).some(([key, value]) => {
         if (key === 'id') return false; 
         
-        // Si el campo es dinámico, buscar por el label (nombre) y no por el ID
         const fieldConfig = catalogoSeleccionado.fields.find((f: CatalogField) => f.name === key);
         if (fieldConfig?.dynamicOptions && opcionesDinamicas[key]) {
           const dOpt = fieldConfig.dynamicOptions;
@@ -189,13 +174,11 @@ const CatalogosDashboard = () => {
         return catalogoSeleccionado.fields.map((f: CatalogField) => {
           let valor = reg[f.name] || '';
           
-          // Reemplazar IDs dinámicos por sus etiquetas reales al exportar
           if (f.dynamicOptions && opcionesDinamicas[f.name]) {
             const dOpt = f.dynamicOptions;
             valor = opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === valor)?.[dOpt.labelField] || valor;
           }
           
-          // Escapar comillas dobles y comas
           return `"${String(valor).replace(/"/g, '""')}"`;
         }).join(',');
       })
@@ -344,7 +327,7 @@ const CatalogosDashboard = () => {
                         const dOpt = f.dynamicOptions;
                         return (
                           <td key={f.name} style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>
-                            {/* AHORA LEE EL LABEL CORRECTO SEGÚN EL ESQUEMA ('nombre') */}
+                            {/* AHORA TRADUCE EL ID PERFECTAMENTE Y MUESTRA EL NOMBRE */}
                             {dOpt && opcionesDinamicas[f.name]
                               ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || reg[f.name] || '-')
                               : (reg[f.name] || '-')}
@@ -414,12 +397,21 @@ const CatalogosDashboard = () => {
                               style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}
                             >
                               <option value="">Seleccione una opción</option>
+                              {/* FILTRO AL VUELO SOLO PARA EL FORMULARIO */}
                               {dOpt 
-                                ? opcionesDinamicas[field.name]?.map((opt: any) => (
-                                    <option key={opt[dOpt.valueField]} value={opt[dOpt.valueField]}>
-                                      {opt[dOpt.labelField]}
-                                    </option>
-                                  ))
+                                ? opcionesDinamicas[field.name]
+                                    ?.filter((opt: any) => {
+                                      if (!dOpt.filterField || !dOpt.filterValue) return true;
+                                      const fVal = opt[dOpt.filterField];
+                                      if (Array.isArray(fVal)) return fVal.includes(dOpt.filterValue);
+                                      // Modo Robusto
+                                      return JSON.stringify(opt).toLowerCase().includes(String(dOpt.filterValue).toLowerCase());
+                                    })
+                                    .map((opt: any) => (
+                                      <option key={opt[dOpt.valueField]} value={opt[dOpt.valueField]}>
+                                        {opt[dOpt.labelField]}
+                                      </option>
+                                    ))
                                 : field.options?.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)
                               }
                             </select>

@@ -26,16 +26,27 @@ export const FormularioUnidadProveedor = ({ estado, initialData, onClose, onMini
   const [empresasProveedoras, setEmpresasProveedoras] = useState<any[]>([]);
   const [cargando, setCargando] = useState(false);
 
-  // Obtener y filtrar empresas que son proveedores de transporte
+  // Obtener y filtrar empresas inteligentemente
   useEffect(() => {
     const obtenerProveedores = async () => {
       try {
-        const querySnapshot = await getDocs(collection(db, 'catalogo_empresas'));
+        const querySnapshot = await getDocs(collection(db, 'empresas'));
         const todasLasEmpresas = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        const filtradas = todasLasEmpresas.filter((emp: any) => 
-          emp.tipo_empresa === 'Proveedor (Transporte)' || emp.categoria_principal === 'Proveedor (Transporte)'
-        );
+        // El ID explícito que solicitaste
+        const ID_PROVEEDOR = 'ca21ab07';
+
+        const filtradas = todasLasEmpresas.filter((emp: any) => {
+          // Si tiene el formato nuevo de Array
+          if (Array.isArray(emp.tiposEmpresa)) {
+            return emp.tiposEmpresa.some((valor: string) => 
+              valor === ID_PROVEEDOR || valor.toLowerCase().includes('proveedor (transporte)')
+            );
+          }
+          // Respaldo agresivo por si el valor viene como un String viejo
+          const stringData = JSON.stringify(emp).toLowerCase();
+          return stringData.includes(ID_PROVEEDOR.toLowerCase()) || stringData.includes('proveedor (transporte)');
+        });
         
         setEmpresasProveedoras(filtradas);
       } catch (error) {
@@ -64,7 +75,7 @@ export const FormularioUnidadProveedor = ({ estado, initialData, onClose, onMini
     setFormData(prev => ({
       ...prev,
       proveedorId: idSeleccionado,
-      proveedorNombre: empresaEncontrada ? empresaEncontrada.empresa : '' 
+      proveedorNombre: empresaEncontrada ? empresaEncontrada.nombre || empresaEncontrada.empresa : '' 
     }));
   };
 
@@ -115,7 +126,7 @@ export const FormularioUnidadProveedor = ({ estado, initialData, onClose, onMini
                 >
                   <option value="">Seleccione un proveedor...</option>
                   {empresasProveedoras.map(emp => (
-                    <option key={emp.id} value={emp.id}>{emp.empresa}</option>
+                    <option key={emp.id} value={emp.id}>{emp.nombre || emp.empresa || `Proveedor ID: ${emp.id}`}</option>
                   ))}
                 </select>
               </div>
@@ -159,3 +170,4 @@ export const FormularioUnidadProveedor = ({ estado, initialData, onClose, onMini
     </div>
   );
 };
+
