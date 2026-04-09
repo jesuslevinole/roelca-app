@@ -3,13 +3,17 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, eliminarRegistro } from '../../../config/firebase'; 
 import { FormularioUnidad } from './FormularioUnidad';
-import type { UnidadRecord } from '../../../types/unidad'; // ✅ RUTA CORREGIDA
+import type { UnidadRecord } from '../../../types/unidad'; // Asegúrate de que la ruta sea correcta según tu proyecto
 
 export const UnidadesDashboard: React.FC = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [registroEditando, setRegistroEditando] = useState<UnidadRecord | null>(null);
   const [registros, setRegistros] = useState<UnidadRecord[]>([]);
 
+  // Nuevo estado para el filtro
+  const [filtroTipo, setFiltroTipo] = useState<string>('Todos');
+
+  // Suscripción en tiempo real a Firebase
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'unidades'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UnidadRecord[];
@@ -40,22 +44,24 @@ export const UnidadesDashboard: React.FC = () => {
     }
   };
 
-  const registrosAgrupados = useMemo(() => {
-    const grupos: Record<string, UnidadRecord[]> = {};
-    
-    registros.forEach(reg => {
-      const nombreGrupo = reg.tipoUnidadNombre || 'Sin Asignar';
-      if (!grupos[nombreGrupo]) {
-        grupos[nombreGrupo] = [];
-      }
-      grupos[nombreGrupo].push(reg);
-    });
-
-    return Object.keys(grupos).sort().reduce((acc, key) => {
-      acc[key] = grupos[key].sort((a, b) => a.unidad.localeCompare(b.unidad));
-      return acc;
-    }, {} as Record<string, UnidadRecord[]>);
+  // --- LÓGICA DE FILTRADO DINÁMICO ---
+  // 1. Extraer los tipos de unidad únicos que existen en los registros actuales
+  const tiposDisponibles = useMemo(() => {
+    const tipos = registros.map(reg => reg.tipoUnidadNombre || 'Sin Asignar');
+    return Array.from(new Set(tipos)).sort();
   }, [registros]);
+
+  // 2. Filtrar y ordenar la tabla plana
+  const registrosFiltrados = useMemo(() => {
+    let resultado = registros;
+    
+    if (filtroTipo !== 'Todos') {
+      resultado = resultado.filter(reg => (reg.tipoUnidadNombre || 'Sin Asignar') === filtroTipo);
+    }
+
+    // Ordenar alfabéticamente por el nombre de la unidad
+    return resultado.sort((a, b) => a.unidad.localeCompare(b.unidad));
+  }, [registros, filtroTipo]);
 
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
@@ -70,17 +76,39 @@ export const UnidadesDashboard: React.FC = () => {
         />
       )}
 
-      <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '24px' }}>
+      {/* HEADER CON TÍTULO Y BOTÓN AGREGAR */}
+      <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '16px' }}>
         <h1 className="module-title" style={{ fontSize: '1.25rem', color: '#8b949e', margin: 0, fontWeight: '400' }}>
-          Bases de Datos &gt; <span style={{ color: '#f0f6fc', fontWeight: 'bold' }}>Unidades Propias ({registros.length})</span>
+          Bases de Datos &gt; <span style={{ color: '#f0f6fc', fontWeight: 'bold' }}>Unidades Propias ({registrosFiltrados.length})</span>
         </h1>
         <button className="btn btn-primary" onClick={handleNuevo} style={{ backgroundColor: '#D84315', border: 'none', padding: '8px 16px', borderRadius: '6px', color: 'white', fontWeight: '600' }}>
           + Agregar
         </button>
       </div>
 
+      {/* BARRA DE CONTROLES (FILTROS) */}
+      <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', paddingBottom: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <label style={{ color: '#8b949e', fontSize: '0.9rem', fontWeight: '500' }}>Filtrar por Tipo:</label>
+          <select 
+            value={filtroTipo} 
+            onChange={(e) => setFiltroTipo(e.target.value)}
+            style={{ 
+              backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d', 
+              padding: '8px 12px', borderRadius: '6px', fontSize: '0.9rem', outline: 'none', cursor: 'pointer', minWidth: '200px'
+            }}
+          >
+            <option value="Todos">Todos los tipos</option>
+            {tiposDisponibles.map(tipo => (
+              <option key={tipo} value={tipo}>{tipo}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* TABLA PLANA Y FILTRADA */}
       <div className="content-body" style={{ display: 'block' }}>
-        <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 200px)' }}>
+        <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
           <table className="data-table" style={{ width: '100%', minWidth: '1200px', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead style={{ backgroundColor: '#161b22', position: 'sticky', top: 0, zIndex: 10 }}>
               <tr>
@@ -88,6 +116,7 @@ export const UnidadesDashboard: React.FC = () => {
                   ACCIONES
                 </th>
                 <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>UNIDAD</th>
+                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>TIPO</th>
                 <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>STATUS</th>
                 <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>PLACAS</th>
                 <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>SERIE</th>
@@ -99,70 +128,61 @@ export const UnidadesDashboard: React.FC = () => {
               </tr>
             </thead>
             
-            {Object.keys(registrosAgrupados).length === 0 ? (
-              <tbody>
+            <tbody>
+              {registrosFiltrados.length === 0 ? (
                 <tr>
-                  <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
-                    Aún no hay unidades registradas.
+                  <td colSpan={11} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+                    No hay unidades registradas para este filtro.
                   </td>
                 </tr>
-              </tbody>
-            ) : (
-              Object.entries(registrosAgrupados).map(([nombreGrupo, items]) => (
-                <tbody key={nombreGrupo}>
-                  <tr style={{ backgroundColor: '#21262d' }}>
-                    <td colSpan={10} style={{ padding: '12px 16px', fontWeight: 'bold', color: '#f0f6fc', borderBottom: '1px solid #30363d', borderTop: '1px solid #30363d' }}>
-                      {nombreGrupo} <span style={{ backgroundColor: '#30363d', color: '#8b949e', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', marginLeft: '8px' }}>{items.length}</span>
+              ) : (
+                registrosFiltrados.map(reg => (
+                  <tr 
+                    key={reg.id} 
+                    style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
+                    onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#161b22'} 
+                    onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    onClick={() => editarRegistro(reg)}
+                  >
+                    <td style={{ padding: '12px 16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
+                      <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                        <button 
+                          className="btn-small btn-edit" 
+                          onClick={(e) => { e.stopPropagation(); editarRegistro(reg); }}
+                          style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '4px 10px', fontSize: '0.8rem' }}
+                        >
+                          Editar
+                        </button>
+                        <button 
+                          className="btn-small btn-danger" 
+                          onClick={(e) => handleEliminar(e, reg.id!)}
+                          style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 10px', fontSize: '0.8rem' }}
+                        >
+                          Eliminar
+                        </button>
+                      </div>
                     </td>
-                  </tr>
-                  
-                  {items.map(reg => (
-                    <tr 
-                      key={reg.id} 
-                      style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
-                      onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#161b22'} 
-                      onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
-                      onClick={() => editarRegistro(reg)}
-                    >
-                      <td style={{ padding: '12px 16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
-                        <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                          <button 
-                            className="btn-small btn-edit" 
-                            onClick={(e) => { e.stopPropagation(); editarRegistro(reg); }}
-                            style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '4px 10px', fontSize: '0.8rem' }}
-                          >
-                            Editar
-                          </button>
-                          <button 
-                            className="btn-small btn-danger" 
-                            onClick={(e) => handleEliminar(e, reg.id!)}
-                            style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 10px', fontSize: '0.8rem' }}
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </td>
 
-                      <td style={{ padding: '12px 16px', fontWeight: '500', color: '#f0f6fc' }}>{reg.unidad}</td>
-                      <td style={{ padding: '12px 16px' }}>
-                        {reg.activo ? (
-                          <span style={{ backgroundColor: 'rgba(63, 185, 80, 0.2)', color: '#3fb950', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Activo</span>
-                        ) : (
-                          <span style={{ backgroundColor: 'rgba(139, 148, 158, 0.2)', color: '#8b949e', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Inactivo</span>
-                        )}
-                      </td>
-                      <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.placas || '-'}</td>
-                      <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.serie || '-'}</td>
-                      <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.marca || '-'}</td>
-                      <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.modelo || '-'}</td>
-                      <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tanqueUno || 0}</td>
-                      <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tanqueDos || 0}</td>
-                      <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{Number(reg.porcentajeRecarga || 0).toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              ))
-            )}
+                    <td style={{ padding: '12px 16px', fontWeight: '500', color: '#f0f6fc' }}>{reg.unidad}</td>
+                    <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tipoUnidadNombre || 'Sin Asignar'}</td>
+                    <td style={{ padding: '12px 16px' }}>
+                      {reg.activo ? (
+                        <span style={{ backgroundColor: 'rgba(63, 185, 80, 0.2)', color: '#3fb950', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Activo</span>
+                      ) : (
+                        <span style={{ backgroundColor: 'rgba(139, 148, 158, 0.2)', color: '#8b949e', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Inactivo</span>
+                      )}
+                    </td>
+                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.placas || '-'}</td>
+                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.serie || '-'}</td>
+                    <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.marca || '-'}</td>
+                    <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.modelo || '-'}</td>
+                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tanqueUno || 0}</td>
+                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tanqueDos || 0}</td>
+                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{Number(reg.porcentajeRecarga || 0).toFixed(2)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
           </table>
         </div>
       </div>
@@ -170,4 +190,4 @@ export const UnidadesDashboard: React.FC = () => {
   );
 };
 
-export default UnidadesDashboard; // ✅ EXPORTACIÓN POR DEFECTO PARA QUE APP.TSX NO FALLE
+export default UnidadesDashboard;
