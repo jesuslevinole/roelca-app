@@ -1,7 +1,7 @@
 // src/App.tsx
 import { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, updateDoc, getDoc } from 'firebase/firestore'; // <-- AÑADIDO getDoc
+import { doc, updateDoc, getDoc } from 'firebase/firestore'; 
 import { auth, db } from './config/firebase'; 
 import { registrarLog } from './utils/logger'; 
 
@@ -13,6 +13,7 @@ import CatalogosDashboard from './features/catalogos/components/CatalogosDashboa
 import { CombustibleDashboard } from './features/combustible/components/CombustibleDashboard';
 import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
 import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
+import UnidadesDashboard from './features/unidades/components/UnidadesDashboard'; // ✅ NUEVO MÓDULO IMPORTADO
 import ConveniosClientesDashboard from './features/conveniosClientes/components/ConveniosClientesDashboard';
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
@@ -32,7 +33,8 @@ function App() {
   const [cargandoAuth, setCargandoAuth] = useState(true); 
   const [usuarioActualDB, setUsuarioActualDB] = useState<any>(null); // Guardará el Documento del Usuario
   
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs'>('operaciones');
+  // ✅ TIPADO AMPLIADO CON 'unidades'
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'unidades' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -131,7 +133,9 @@ function App() {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
 
-  const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'direcciones';
+  // ✅ ACORDEÓN DE BASE DE DATOS ACTUALIZADO
+  const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'unidades' || moduloActivo === 'direcciones';
+  
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
   const esEmpleadosActivo = moduloActivo === 'colaboradores' || moduloActivo === 'historialAsistencia';
@@ -197,6 +201,7 @@ function App() {
             <div className={`sidebar-subitem ${moduloActivo === 'direcciones' ? 'active' : ''}`} onClick={() => setModuloActivo('direcciones')}>Direcciones</div>
             <div className={`sidebar-subitem ${moduloActivo === 'tipoCambio' ? 'active' : ''}`} onClick={() => setModuloActivo('tipoCambio')}>Tipo de Cambio</div>
             <div className={`sidebar-subitem ${moduloActivo === 'combustible' ? 'active' : ''}`} onClick={() => setModuloActivo('combustible')}>Combustible</div>
+            <div className={`sidebar-subitem ${moduloActivo === 'unidades' ? 'active' : ''}`} onClick={() => setModuloActivo('unidades')}>Unidades Propias</div> {/* ✅ NUEVO MENÚ */}
             <div className={`sidebar-subitem ${moduloActivo === 'proveedoresUnidad' ? 'active' : ''}`} onClick={() => setModuloActivo('proveedoresUnidad')}>Proveedores de Unidad</div>
             <div className={`sidebar-subitem ${moduloActivo === 'unidadesProveedor' ? 'active' : ''}`} onClick={() => setModuloActivo('unidadesProveedor')}>Unidades del Proveedor</div>
           </div>
@@ -282,11 +287,13 @@ function App() {
           </div>
         </div>
 
+        {/* ✅ RENDERIZADO DEL NUEVO MÓDULO */}
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
         {moduloActivo === 'direcciones' && <DireccionesDashboard />}
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
         {moduloActivo === 'combustible' && <CombustibleDashboard />}
+        {moduloActivo === 'unidades' && <UnidadesDashboard />} 
         {moduloActivo === 'proveedoresUnidad' && <ProveedoresUnidadDashboard />}
         {moduloActivo === 'unidadesProveedor' && <UnidadesProveedorDashboard />}
         {moduloActivo === 'conveniosClientes' && <ConveniosClientesDashboard />}
