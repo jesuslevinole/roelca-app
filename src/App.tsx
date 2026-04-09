@@ -13,7 +13,8 @@ import CatalogosDashboard from './features/catalogos/components/CatalogosDashboa
 import { CombustibleDashboard } from './features/combustible/components/CombustibleDashboard';
 import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
 import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
-import UnidadesDashboard from './features/unidades/components/UnidadesDashboard'; // ✅ NUEVO MÓDULO IMPORTADO
+import UnidadesDashboard from './features/unidades/components/UnidadesDashboard'; 
+import RemolquesDashboard from './features/remolques/components/RemolquesDashboard'; // ✅ NUEVO MÓDULO IMPORTADO
 import ConveniosClientesDashboard from './features/conveniosClientes/components/ConveniosClientesDashboard';
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
@@ -31,10 +32,10 @@ import './App.css';
 function App() {
   const [estaAutenticado, setEstaAutenticado] = useState(false);
   const [cargandoAuth, setCargandoAuth] = useState(true); 
-  const [usuarioActualDB, setUsuarioActualDB] = useState<any>(null); // Guardará el Documento del Usuario
+  const [usuarioActualDB, setUsuarioActualDB] = useState<any>(null); 
   
-  // ✅ TIPADO AMPLIADO CON 'unidades'
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'unidades' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs'>('operaciones');
+  // ✅ TIPADO AMPLIADO CON 'remolques'
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'unidades' | 'remolques' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -45,14 +46,12 @@ function App() {
   const [menuEmpleadosAbierto, setMenuEmpleadosAbierto] = useState(false);
   const [menuConfiguracionAbierto, setMenuConfiguracionAbierto] = useState(false);
 
-  // Estado del Modal de Reloj
   const [modalChecadorAbierto, setModalChecadorAbierto] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setEstaAutenticado(true);
-        // Traer datos del usuario de Firestore para saber su Rol
         const userDoc = await getDoc(doc(db, 'usuarios', user.uid));
         if (userDoc.exists()) {
           setUsuarioActualDB({ id: userDoc.id, ...userDoc.data() });
@@ -121,7 +120,6 @@ function App() {
     return () => window.removeEventListener('beforeunload', handleTabClose);
   }, []);
 
-  // Lógica de Permisos para el Reloj Checador
   const rolesExentosChequeo = ['Admin', 'Gerencia', 'Sistemas'];
   const debeChecar = usuarioActualDB && !rolesExentosChequeo.includes(usuarioActualDB.rol);
 
@@ -133,8 +131,8 @@ function App() {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
 
-  // ✅ ACORDEÓN DE BASE DE DATOS ACTUALIZADO
-  const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'unidades' || moduloActivo === 'direcciones';
+  // ✅ ACORDEÓN DE BASE DE DATOS ACTUALIZADO (AÑADIDO 'remolques')
+  const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'unidades' || moduloActivo === 'remolques' || moduloActivo === 'direcciones';
   
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
@@ -144,7 +142,6 @@ function App() {
   return (
     <div className="app-wrapper">
       
-      {/* MODAL GLOBAL DE RELOJ CHECADOR */}
       <RelojChecadorModal 
         isOpen={modalChecadorAbierto} 
         onClose={() => setModalChecadorAbierto(false)} 
@@ -201,7 +198,8 @@ function App() {
             <div className={`sidebar-subitem ${moduloActivo === 'direcciones' ? 'active' : ''}`} onClick={() => setModuloActivo('direcciones')}>Direcciones</div>
             <div className={`sidebar-subitem ${moduloActivo === 'tipoCambio' ? 'active' : ''}`} onClick={() => setModuloActivo('tipoCambio')}>Tipo de Cambio</div>
             <div className={`sidebar-subitem ${moduloActivo === 'combustible' ? 'active' : ''}`} onClick={() => setModuloActivo('combustible')}>Combustible</div>
-            <div className={`sidebar-subitem ${moduloActivo === 'unidades' ? 'active' : ''}`} onClick={() => setModuloActivo('unidades')}>Unidades Propias</div> {/* ✅ NUEVO MENÚ */}
+            <div className={`sidebar-subitem ${moduloActivo === 'unidades' ? 'active' : ''}`} onClick={() => setModuloActivo('unidades')}>Unidades Propias</div> 
+            <div className={`sidebar-subitem ${moduloActivo === 'remolques' ? 'active' : ''}`} onClick={() => setModuloActivo('remolques')}>Remolques</div> {/* ✅ NUEVO BOTÓN DE MENÚ */}
             <div className={`sidebar-subitem ${moduloActivo === 'proveedoresUnidad' ? 'active' : ''}`} onClick={() => setModuloActivo('proveedoresUnidad')}>Proveedores de Unidad</div>
             <div className={`sidebar-subitem ${moduloActivo === 'unidadesProveedor' ? 'active' : ''}`} onClick={() => setModuloActivo('unidadesProveedor')}>Unidades del Proveedor</div>
           </div>
@@ -239,7 +237,6 @@ function App() {
           
           <div className="topbar-right" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '20px' }}>
             
-            {/* BOTÓN RELOJ CHECADOR (Visible solo para quienes deben checar) */}
             {debeChecar && (
               <button 
                 onClick={() => setModalChecadorAbierto(true)}
@@ -287,13 +284,14 @@ function App() {
           </div>
         </div>
 
-        {/* ✅ RENDERIZADO DEL NUEVO MÓDULO */}
+        {/* ✅ RENDERIZADO CONDICIONAL DE TODOS LOS MÓDULOS */}
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
         {moduloActivo === 'direcciones' && <DireccionesDashboard />}
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
         {moduloActivo === 'combustible' && <CombustibleDashboard />}
         {moduloActivo === 'unidades' && <UnidadesDashboard />} 
+        {moduloActivo === 'remolques' && <RemolquesDashboard />} {/* ✅ NUEVO MÓDULO RENDERIZADO */}
         {moduloActivo === 'proveedoresUnidad' && <ProveedoresUnidadDashboard />}
         {moduloActivo === 'unidadesProveedor' && <UnidadesProveedorDashboard />}
         {moduloActivo === 'conveniosClientes' && <ConveniosClientesDashboard />}
