@@ -28,14 +28,14 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
   const [empresasProveedoras, setEmpresasProveedoras] = useState<any[]>([]);
   const [cargando, setCargando] = useState(false);
 
-  // --- ESCÁNER TOTAL SIN FILTRO ESTRICTO (Para garantizar que salgan datos) ---
+  // --- FILTRADO ESTRICTO POR ID: ca21ab07 ---
   useEffect(() => {
-    const obtenerProveedores = async () => {
+    const obtenerProveedoresFiltrados = async () => {
       try {
         let todasLasEmpresas: any[] = [];
         const coleccionesPosibles = ['empresa', 'empresas', 'catalogo_empresas'];
 
-        // Extraer todo lo que parezca una empresa
+        // 1. Buscamos en las colecciones disponibles
         for (const nombreColeccion of coleccionesPosibles) {
           try {
             const snap = await getDocs(collection(db, nombreColeccion));
@@ -44,27 +44,43 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
               todasLasEmpresas = [...todasLasEmpresas, ...docs];
             }
           } catch (e) {
-            // Ignorar silenciosamente
+            // Ignorar si la colección no existe
           }
         }
 
-        // Limpiar duplicados basados en el ID
+        // 2. Eliminar duplicados por ID
         const empresasUnicas = Array.from(new Map(todasLasEmpresas.map(item => [item.id, item])).values());
-        
-        // NOTA: Quité el filtro que eliminaba las empresas para que puedas ver TODO y diagnosticar.
-        // Solo las ordenamos alfabéticamente para que sea fácil buscar.
-        empresasUnicas.sort((a: any, b: any) => {
-          const nombreA = a.nombre || a.empresa || a.razonSocial || '';
-          const nombreB = b.nombre || b.empresa || b.razonSocial || '';
+
+        // 3. APLICAR FILTRO ESTRICTO ca21ab07
+        const ID_REQUERIDO = 'ca21ab07';
+        const filtradas = empresasUnicas.filter((emp: any) => {
+          // Caso A: El ID está en el arreglo de tiposEmpresa
+          if (Array.isArray(emp.tiposEmpresa)) {
+            return emp.tiposEmpresa.includes(ID_REQUERIDO);
+          }
+          // Caso B: El ID coincide con el campo tipo_empresa o categoria
+          if (emp.tipo_empresa === ID_REQUERIDO || emp.categoria === ID_REQUERIDO) {
+            return true;
+          }
+          // Caso C: Verificación de seguridad en todo el objeto (por si está en otro campo)
+          const dataString = JSON.stringify(emp).toLowerCase();
+          return dataString.includes(ID_REQUERIDO.toLowerCase());
+        });
+
+        // 4. Ordenar alfabéticamente
+        filtradas.sort((a: any, b: any) => {
+          const nombreA = a.nombre || a.empresa || '';
+          const nombreB = b.nombre || b.empresa || '';
           return nombreA.localeCompare(nombreB);
         });
 
-        setEmpresasProveedoras(empresasUnicas);
+        setEmpresasProveedoras(filtradas);
       } catch (error) {
         console.error("Error al obtener proveedores:", error);
       }
     };
-    obtenerProveedores();
+
+    obtenerProveedoresFiltrados();
   }, []);
 
   useEffect(() => {
@@ -82,9 +98,8 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
     const idSeleccionado = e.target.value;
     const empresaEncontrada = empresasProveedoras.find(emp => emp.id === idSeleccionado);
     
-    // Extracción segura del nombre
     const nombreVisual = empresaEncontrada 
-      ? (empresaEncontrada.nombre || empresaEncontrada.empresa || empresaEncontrada.razonSocial || empresaEncontrada.nombreCorto || `Prov ID: ${idSeleccionado.substring(0,6)}`) 
+      ? (empresaEncontrada.nombre || empresaEncontrada.empresa || `Proveedor (${idSeleccionado.substring(0,4)})`) 
       : '';
 
     setFormData(prev => ({
@@ -97,7 +112,7 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.proveedorId) {
-      alert("Por favor selecciona una empresa de la lista.");
+      alert("Por favor selecciona un proveedor válido.");
       return;
     }
 
@@ -110,8 +125,8 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
       }
       onClose();
     } catch (error) {
-      console.error("Error al guardar en Firebase:", error);
-      alert('Error al guardar. Revisa tu conexión a internet.');
+      console.error("Error al guardar:", error);
+      alert('Error al guardar. Revisa tu conexión.');
     } finally {
       setCargando(false);
     }
@@ -121,7 +136,7 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
     <div className={`modal-overlay ${estado === 'minimizado' ? 'minimized' : ''}`}>
       <div className="form-card" style={{ maxWidth: '750px' }}>
         <div className="form-header">
-          <h2>{estado === 'minimizado' ? 'Editando...' : (initialData ? `Editar Proveedor de Unidad` : 'Nuevo Proveedor de Unidad')}</h2>
+          <h2>{estado === 'minimizado' ? 'Editando...' : (initialData ? `Editar Proveedor` : 'Nuevo Proveedor de Unidad')}</h2>
           <div className="header-actions">
             {estado === 'abierto' ? (
               <button type="button" onClick={onMinimize} className="btn-window">🗕</button>
@@ -137,23 +152,25 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
             <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
               
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                <label className="form-label">Proveedor (Empresa de Transporte) *</label>
+                <label className="form-label">Proveedor (Transportista Autorizado) *</label>
                 <select 
                   className="form-control" 
                   value={formData.proveedorId} 
                   onChange={handleProveedorChange} 
                   required
                 >
-                  <option value="">Seleccione la empresa transportista...</option>
-                  {empresasProveedoras.map(emp => {
-                    const isTransportista = JSON.stringify(emp).toLowerCase().includes('ca21ab07') || JSON.stringify(emp).toLowerCase().includes('transporte');
-                    return (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.nombre || emp.empresa || emp.razonSocial || `ID: ${emp.id.substring(0,5)}`} {isTransportista ? '🚚 (Transportista)' : ''}
-                      </option>
-                    )
-                  })}
+                  <option value="">Seleccione el proveedor...</option>
+                  {empresasProveedoras.map(emp => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.nombre || emp.empresa}
+                    </option>
+                  ))}
                 </select>
+                {empresasProveedoras.length === 0 && (
+                  <small style={{ color: '#8b949e', marginTop: '4px', display: 'block' }}>
+                    No se encontraron empresas con el ID ca21ab07.
+                  </small>
+                )}
               </div>
 
               <div className="form-group">
@@ -180,8 +197,8 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
               </div>
 
               <div className="form-group">
-                <label className="form-label">País de Nacimiento</label>
-                <input type="text" name="paisNacimiento" className="form-control" value={formData.paisNacimiento} onChange={handleChange} />
+                <label className="form-label">No. Licencia Federal *</label>
+                <input type="text" name="numeroLicencia" className="form-control" value={formData.numeroLicencia} onChange={handleChange} required />
               </div>
 
               <div className="form-group">
@@ -189,26 +206,11 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
                 <input type="text" name="numeroVisa" className="form-control" value={formData.numeroVisa} onChange={handleChange} />
               </div>
 
-              <div className="form-group">
-                <label className="form-label">No. Licencia Federal *</label>
-                <input type="text" name="numeroLicencia" className="form-control" value={formData.numeroLicencia} onChange={handleChange} required />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">País de Expedición</label>
-                <input type="text" name="paisExpedicion" className="form-control" value={formData.paisExpedicion} onChange={handleChange} />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Estado de Expedición</label>
-                <input type="text" name="estadoExpedicion" className="form-control" value={formData.estadoExpedicion} onChange={handleChange} />
-              </div>
-
             </div>
 
             <div className="form-actions" style={{ marginTop: '24px' }}>
               <button type="button" onClick={onClose} className="btn btn-outline">Cancelar</button>
-              <button type="submit" className="btn btn-primary" disabled={cargando}>
+              <button type="submit" className="btn btn-primary" disabled={cargando || empresasProveedoras.length === 0}>
                 {cargando ? 'Guardando...' : (initialData ? 'Guardar Cambios' : 'Guardar')}
               </button>
             </div>
