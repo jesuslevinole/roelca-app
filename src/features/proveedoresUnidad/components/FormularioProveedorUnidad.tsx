@@ -28,12 +28,14 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
   const [empresasProveedoras, setEmpresasProveedoras] = useState<any[]>([]);
   const [cargando, setCargando] = useState(false);
 
+  // --- ESCÁNER TOTAL SIN FILTRO ESTRICTO (Para garantizar que salgan datos) ---
   useEffect(() => {
     const obtenerProveedores = async () => {
       try {
         let todasLasEmpresas: any[] = [];
         const coleccionesPosibles = ['empresa', 'empresas', 'catalogo_empresas'];
 
+        // Extraer todo lo que parezca una empresa
         for (const nombreColeccion of coleccionesPosibles) {
           try {
             const snap = await getDocs(collection(db, nombreColeccion));
@@ -46,17 +48,18 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
           }
         }
 
+        // Limpiar duplicados basados en el ID
         const empresasUnicas = Array.from(new Map(todasLasEmpresas.map(item => [item.id, item])).values());
-        const ID_PROVEEDOR = 'ca21ab07';
         
-        const filtradas = empresasUnicas.filter((emp: any) => {
-          const stringData = JSON.stringify(emp).toLowerCase();
-          return stringData.includes(ID_PROVEEDOR.toLowerCase()) || 
-                 stringData.includes('proveedor (transporte)') || 
-                 stringData.includes('proveedor');
+        // NOTA: Quité el filtro que eliminaba las empresas para que puedas ver TODO y diagnosticar.
+        // Solo las ordenamos alfabéticamente para que sea fácil buscar.
+        empresasUnicas.sort((a: any, b: any) => {
+          const nombreA = a.nombre || a.empresa || a.razonSocial || '';
+          const nombreB = b.nombre || b.empresa || b.razonSocial || '';
+          return nombreA.localeCompare(nombreB);
         });
-        
-        setEmpresasProveedoras(filtradas);
+
+        setEmpresasProveedoras(empresasUnicas);
       } catch (error) {
         console.error("Error al obtener proveedores:", error);
       }
@@ -79,6 +82,7 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
     const idSeleccionado = e.target.value;
     const empresaEncontrada = empresasProveedoras.find(emp => emp.id === idSeleccionado);
     
+    // Extracción segura del nombre
     const nombreVisual = empresaEncontrada 
       ? (empresaEncontrada.nombre || empresaEncontrada.empresa || empresaEncontrada.razonSocial || empresaEncontrada.nombreCorto || `Prov ID: ${idSeleccionado.substring(0,6)}`) 
       : '';
@@ -92,6 +96,11 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.proveedorId) {
+      alert("Por favor selecciona una empresa de la lista.");
+      return;
+    }
+
     setCargando(true);
     try {
       if (initialData && initialData.id) {
@@ -128,29 +137,32 @@ export const FormularioProveedorUnidad = ({ estado, initialData, onClose, onMini
             <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
               
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                <label className="form-label">Proveedor (Transporte) *</label>
+                <label className="form-label">Proveedor (Empresa de Transporte) *</label>
                 <select 
                   className="form-control" 
                   value={formData.proveedorId} 
                   onChange={handleProveedorChange} 
                   required
                 >
-                  <option value="">Seleccione un proveedor...</option>
-                  {empresasProveedoras.map(emp => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.nombre || emp.empresa || emp.razonSocial || emp.nombreCorto || `Prov ID: ${emp.id.substring(0,6)}`}
-                    </option>
-                  ))}
+                  <option value="">Seleccione la empresa transportista...</option>
+                  {empresasProveedoras.map(emp => {
+                    const isTransportista = JSON.stringify(emp).toLowerCase().includes('ca21ab07') || JSON.stringify(emp).toLowerCase().includes('transporte');
+                    return (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.nombre || emp.empresa || emp.razonSocial || `ID: ${emp.id.substring(0,5)}`} {isTransportista ? '🚚 (Transportista)' : ''}
+                      </option>
+                    )
+                  })}
                 </select>
               </div>
 
               <div className="form-group">
-                <label className="form-label">Nombre *</label>
+                <label className="form-label">Nombre del Chofer *</label>
                 <input type="text" name="nombre" className="form-control" value={formData.nombre} onChange={handleChange} required />
               </div>
 
               <div className="form-group">
-                <label className="form-label">Apellido *</label>
+                <label className="form-label">Apellido del Chofer *</label>
                 <input type="text" name="apellido" className="form-control" value={formData.apellido} onChange={handleChange} required />
               </div>
 
