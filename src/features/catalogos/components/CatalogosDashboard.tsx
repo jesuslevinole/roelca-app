@@ -81,6 +81,15 @@ const CatalogosDashboard = () => {
   const [filtroActivo, setFiltroActivo] = useState('Todo');
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
 
+  // ✅ HELPER DE FORMATEO: Traduce "0"/"1" a "No"/"Sí" si el esquema lo demanda
+  const formatearValorVisual = (valor: any, field: CatalogField) => {
+    if (field.options?.includes('Sí') && field.options?.includes('No')) {
+      if (valor === '1' || valor === 1 || valor === true || valor === 'Sí') return 'Sí';
+      if (valor === '0' || valor === 0 || valor === false || valor === 'No') return 'No';
+    }
+    return valor !== undefined && valor !== null ? String(valor) : '-';
+  };
+
   useEffect(() => {
     if (!catalogoSeleccionado) return;
     
@@ -102,8 +111,6 @@ const CatalogosDashboard = () => {
         if (field.dynamicOptions) {
           const { collection: col } = field.dynamicOptions;
           try {
-            // Descargamos TODAS las opciones sin filtrar. 
-            // Esto garantiza que la tabla siempre pueda traducir cualquier ID histórico a su Nombre.
             const querySnapshot = await getDocs(collection(db, col));
             nuevasOpciones[field.name] = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           } catch (error) {
@@ -172,8 +179,14 @@ const CatalogosDashboard = () => {
       headers.join(','),
       ...registrosFiltrados.map(reg => {
         return catalogoSeleccionado.fields.map((f: CatalogField) => {
-          let valor = reg[f.name] || '';
+          let valor = reg[f.name] !== undefined ? reg[f.name] : '';
           
+          // Traducir booleanos SQL
+          if (f.options?.includes('Sí') && f.options?.includes('No')) {
+            if (valor === '1' || valor === 1 || valor === true) valor = 'Sí';
+            if (valor === '0' || valor === 0 || valor === false) valor = 'No';
+          }
+
           if (f.dynamicOptions && opcionesDinamicas[f.name]) {
             const dOpt = f.dynamicOptions;
             valor = opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === valor)?.[dOpt.labelField] || valor;
@@ -211,7 +224,7 @@ const CatalogosDashboard = () => {
     </div>
   );
 
-  // --- VISTA 2: TABLA ESTANDARIZADA DEL CATÁLOGO SELECCIONADO ---
+  // --- VISTA 2: TABLA ESTANDARIZADA ---
   return (
     <>
       <div className="module-header" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingBottom: '32px' }}>
@@ -306,8 +319,6 @@ const CatalogosDashboard = () => {
                             className="btn-small" 
                             onClick={() => { setRegistroActual(reg); setFormData(reg); setModalEstado('formulario'); }}
                             style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
-                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)'}
-                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
                             Editar
                           </button>
@@ -315,8 +326,6 @@ const CatalogosDashboard = () => {
                             className="btn-small" 
                             onClick={async () => { if (window.confirm('¿Desea eliminar permanentemente este registro?')) await eliminarRegistro(`catalogo_${catalogoSeleccionado!.id}`, reg.id); }}
                             style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
-                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
-                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
                             Eliminar
                           </button>
@@ -327,10 +336,10 @@ const CatalogosDashboard = () => {
                         const dOpt = f.dynamicOptions;
                         return (
                           <td key={f.name} style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem' }}>
-                            {/* AHORA TRADUCE EL ID PERFECTAMENTE Y MUESTRA EL NOMBRE */}
                             {dOpt && opcionesDinamicas[f.name]
-                              ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || reg[f.name] || '-')
-                              : (reg[f.name] || '-')}
+                              ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === reg[f.name])?.[dOpt.labelField] || formatearValorVisual(reg[f.name], f))
+                              : formatearValorVisual(reg[f.name], f) // ✅ FILTRO VISUAL APLICADO AQUÍ
+                            }
                           </td>
                         );
                       })}
@@ -383,6 +392,14 @@ const CatalogosDashboard = () => {
                     {catalogoSeleccionado.fields.map((field: CatalogField) => {
                       const esRequerido = isRequired(field.name);
                       const dOpt = field.dynamicOptions;
+                      
+                      // ✅ TRADUCCIÓN INVERSA: Si un select abre un "0", lo forzamos a "No" visualmente
+                      let valorInput = formData[field.name] !== undefined ? formData[field.name] : '';
+                      if (field.options?.includes('Sí') && field.options?.includes('No')) {
+                        if (valorInput === '1' || valorInput === 1 || valorInput === true) valorInput = 'Sí';
+                        if (valorInput === '0' || valorInput === 0 || valorInput === false) valorInput = 'No';
+                      }
+
                       return (
                         <div key={field.name} className="form-group" style={{ marginBottom: 0 }}>
                           <label className="form-label" style={{ color: '#8b949e', fontSize: '0.85rem' }}>
@@ -390,21 +407,19 @@ const CatalogosDashboard = () => {
                           </label>
                           {field.type === 'select' ? (
                             <select 
-                              value={formData[field.name] || ''} 
+                              value={valorInput} 
                               onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData({...formData, [field.name]: e.target.value})} 
                               className="form-control" 
                               required={esRequerido}
                               style={{ backgroundColor: '#010409', border: '1px solid #30363d', color: '#c9d1d9' }}
                             >
                               <option value="">Seleccione una opción</option>
-                              {/* FILTRO AL VUELO SOLO PARA EL FORMULARIO */}
                               {dOpt 
                                 ? opcionesDinamicas[field.name]
                                     ?.filter((opt: any) => {
                                       if (!dOpt.filterField || !dOpt.filterValue) return true;
                                       const fVal = opt[dOpt.filterField];
                                       if (Array.isArray(fVal)) return fVal.includes(dOpt.filterValue);
-                                      // Modo Robusto
                                       return JSON.stringify(opt).toLowerCase().includes(String(dOpt.filterValue).toLowerCase());
                                     })
                                     .map((opt: any) => (
@@ -418,7 +433,7 @@ const CatalogosDashboard = () => {
                           ) : (
                             <input 
                               type={field.type} 
-                              value={formData[field.name] || ''} 
+                              value={valorInput} 
                               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({...formData, [field.name]: e.target.value})} 
                               className="form-control" 
                               required={esRequerido} 
@@ -445,8 +460,9 @@ const CatalogosDashboard = () => {
                           <span style={{ fontSize: '0.75rem', color: '#8b949e', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>{f.label}</span>
                           <span style={{ fontSize: '1rem', color: '#f0f6fc' }}>
                             {dOpt && opcionesDinamicas[f.name]
-                              ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === registroActual[f.name])?.[dOpt.labelField] || registroActual[f.name] || '-')
-                              : (registroActual[f.name] || '-')}
+                              ? (opcionesDinamicas[f.name].find((opt: any) => opt[dOpt.valueField] === registroActual[f.name])?.[dOpt.labelField] || formatearValorVisual(registroActual[f.name], f))
+                              : formatearValorVisual(registroActual[f.name], f) // ✅ FILTRO VISUAL EN EL DETALLE
+                            }
                           </span>
                         </div>
                       );
