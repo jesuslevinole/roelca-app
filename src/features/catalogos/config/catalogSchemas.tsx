@@ -190,7 +190,6 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
         label: 'Empresa', 
         type: 'select', 
         required: true, 
-        // AHORA SÍ: labelField es 'nombre' y aplica el filtro estricto en el formulario
         dynamicOptions: { 
           collection: 'empresas', 
           labelField: 'nombre', 
@@ -254,13 +253,14 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'trafico', label: 'Exportación/Importación', type: 'select', required: true, options: ['Exportación', 'Importación'] }
     ]
   },
+  // ✅ CORRECCIÓN: Catálogo de Tipos Tarifarios Actualizado con Selectores
   tipos_tarifarios: {
     id: 'tipos_tarifarios', titulo: 'Tipos de Tarifarios',
     icono: <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 14h-4v-2h4v2zm0-4h-4v-2h4v2zm-3-5V3.5L18.5 9H13z" />,
     fields: [
       { name: 'descripcion', label: 'Descripción', type: 'text', required: true },
       { name: 'aduana', label: 'Aduana', type: 'select', required: true, options: ['Sí', 'No'] },
-      { name: 'movimiento', label: 'Importación/Exportación/Movimiento', type: 'select', required: true, options: ['Exportación', 'Importación', 'Movimiento'] }
+      { name: 'imp_exp', label: 'Importación/Exportación', type: 'select', required: true, options: ['Importación', 'Exportación', 'Movimiento', 'Trompo'] }
     ]
   },
   tarifas_referencia: {
