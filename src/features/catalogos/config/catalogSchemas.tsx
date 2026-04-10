@@ -253,8 +253,6 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'trafico', label: 'Exportación/Importación', type: 'select', required: true, options: ['Exportación', 'Importación'] }
     ]
   },
-  
-  // ✅ AQUÍ ESTÁ EL CATÁLOGO CORREGIDO: "movimiento" EN VEZ DE "imp_exp"
   tipos_tarifarios: {
     id: 'tipos_tarifarios', titulo: 'Tipos de Tarifarios',
     icono: <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 14h-4v-2h4v2zm0-4h-4v-2h4v2zm-3-5V3.5L18.5 9H13z" />,
@@ -264,7 +262,8 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'movimiento', label: 'Importación/Exportación', type: 'select', required: true, options: ['Importación', 'Exportación', 'Movimiento', 'Trompo'] }
     ]
   },
-
+  
+  // ✅ MODIFICACIÓN AQUÍ: ESQUEMA DE TARIFAS DE REFERENCIA ACTUALIZADO
   tarifas_referencia: {
     id: 'tarifas_referencia', titulo: 'Tarifas de Referencia',
     icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />,
@@ -276,9 +275,26 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
         required: true, 
         dynamicOptions: { collection: 'catalogo_tipos_tarifarios', labelField: 'descripcion', valueField: 'id' } 
       },
-      { name: 'tipo_remolque', label: 'Tipo de Remolque', type: 'text', required: true },
+      // 1. Convertido a selector dinámico
+      { 
+        name: 'tipo_remolque', 
+        label: 'Tipo de Remolque', 
+        type: 'select', 
+        required: true,
+        dynamicOptions: { collection: 'catalogo_tipo_remolque', labelField: 'nombre', valueField: 'id' }
+      },
       { name: 'estado_carga', label: 'Cargada / Vacía', type: 'select', required: true, options: ['Cargada', 'Vacía'] },
       { name: 'trompo', label: 'Trompo', type: 'select', required: true, options: ['Sí', 'No'] },
+      // 2. Nuevo campo Regular/Hazmat
+      { name: 'regular_hazmat', label: 'Regular / Hazmat', type: 'select', required: true, options: ['Regular', 'Hazmat'] },
+      // 3. Nuevo campo Aduana (Foráneo)
+      { 
+        name: 'aduana', 
+        label: 'Aduana', 
+        type: 'select', 
+        required: true,
+        dynamicOptions: { collection: 'catalogo_aduanas', labelField: 'aduana', valueField: 'id' }
+      },
       { name: 'descripcion', label: 'Descripción', type: 'text', required: true },
       { name: 'tarifa_cliente_1', label: 'Tarifa Cliente 1', type: 'number' },
       { name: 'tarifa_cliente_2', label: 'Tarifa Cliente 2', type: 'number' },
@@ -288,6 +304,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'tarifa_proveedor_3', label: 'Tarifa Proveedor 3', type: 'number' }
     ]
   },
+  
   tipo_factura: {
     id: 'tipo_factura',
     titulo: 'Tipo de Facturas',
