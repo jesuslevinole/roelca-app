@@ -71,6 +71,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     unidad: '', operador: ''
   });
 
+  // 1. DESCARGA MASIVA DE CATÁLOGOS
   useEffect(() => {
     const fetchCatalogos = async () => {
       setCargandoCatalogos(true);
@@ -80,7 +81,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           getDocs(collection(db, 'catalogo_tipo_operacion')),
           getDocs(collection(db, 'catalogo_embalaje')),
           getDocs(collection(db, 'remolques')),
-          getDocs(collection(db, 'tarifas_referencia')),
+          getDocs(collection(db, 'catalogo_tarifas_referencia')), 
           getDocs(collection(db, 'convenios_proveedores')),
           getDocs(collection(db, 'tipo_cambio')),
           getDocs(collection(db, 'convenios_clientes')),
@@ -112,6 +113,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     fetchCatalogos();
   }, []);
 
+  // 2. BÚSQUEDA DEL TIPO DE CAMBIO
   useEffect(() => {
     if (!formData.fechaServicio || catalogoTC.length === 0) return;
     setBuscandoTC(true);
@@ -147,15 +149,12 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     setBuscandoTC(false);
   }, [formData.fechaServicio, catalogoTC]);
 
-  // ✅ BÚSQUEDA DE CONVENIOS MEJORADA (Auto-selección por nombre)
+  // 3. ✅ CONSTRUCCIÓN DE LA LISTA DE CONVENIOS (Corregida con tipoConvenioId)
   useEffect(() => {
-    // Si el usuario escribió el nombre pero no hizo clic, buscamos el ID nosotros mismos
     let clientId = formData.clientePaga;
     if (!clientId && searchClientePaga) {
        const empresaEncontrada = empresas.find(e => e.nombre?.toLowerCase().trim() === searchClientePaga.toLowerCase().trim());
-       if (empresaEncontrada) {
-         clientId = empresaEncontrada.id;
-       }
+       if (empresaEncontrada) clientId = empresaEncontrada.id;
     }
 
     if (!clientId || catalogoConvClientes.length === 0) {
@@ -163,7 +162,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
       return;
     }
 
-    // Buscamos los convenios maestros del cliente
     const maestrosDelCliente = catalogoConvClientes.filter(c => {
       const refVal = String(c.clienteId || c.cliente || c.Cliente || c.CLIENTE || c.id_cliente || c.empresa || '').trim();
       return refVal === clientId;
@@ -171,7 +169,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
 
     if (maestrosDelCliente.length > 0) {
       const masterIds = maestrosDelCliente.map(m => String(m.id).trim());
-      // A veces AppSheet guarda el "# de Convenio" en lugar del ID, cubrimos ambas opciones
       const masterNames = maestrosDelCliente.map(m => String(m['# de Convenio'] || m.numeroConvenio || m.nombre || m.id).trim());
 
       const detalles = catalogoConvDetalles.filter(d => {
@@ -180,13 +177,18 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
       });
 
       const mapped = detalles.map(d => {
-        const tarifaRef = d.tipo_convenio || d.tarifaId || d.tarifa || d.Tipo_Convenio || d['TIPO DE CONVENIO'] || d.TIPO_DE_CONVENIO;
-        const tObj = tarifas.find(t => t.id === tarifaRef || t.descripcion === tarifaRef);
+        // ✅ CORRECCIÓN EXACTA: Buscar por tipoConvenioId y evitamos jalar el precio
+        const tarifaId = d.tipoConvenioId || d.tipo_convenio_id || d.tipoConvenio || d.tipo_convenio || d['TIPO DE CONVENIO'];
+        
+        // Cruzar con catalogo_tarifas_referencia
+        const tObj = tarifas.find(t => String(t.id).trim() === String(tarifaId).trim());
+
+        const nombreVisible = tObj?.descripcion || tObj?.nombre || (tarifaId ? `Desconocido (${tarifaId})` : 'Sin Asignar');
 
         return {
           id: d.id,
-          tarifaBaseId: tObj ? tObj.id : tarifaRef,
-          descripcion: tObj ? tObj.descripcion : `Detalle (${tarifaRef || 'Sin Tarifa'})`,
+          tarifaBaseId: tarifaId,
+          descripcion: nombreVisible,
           ...d
         };
       });
@@ -197,6 +199,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   }, [formData.clientePaga, searchClientePaga, catalogoConvClientes, catalogoConvDetalles, tarifas, empresas]);
 
+  // 4. RESOLUCIÓN DE LLAVE COMPUESTA INVISIBLE (Calcula en 2do plano sin UI molesta)
   useEffect(() => {
     const resolverVariablesDeFlujo = async () => {
       if (!formData.convenio) return;
@@ -242,6 +245,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     resolverVariablesDeFlujo();
   }, [formData.convenio, listaConveniosCliente, tarifas]);
 
+  // 5. CÁLCULO DE MONEDAS
   useEffect(() => {
     const facturadoEn = formData.facturadoEnUnidad;
     const monedaConv = formData.monedaConvenioProv;
@@ -353,6 +357,9 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           <form onSubmit={handleSubmit}>
             <div className="tab-content" style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: '12px' }}>
 
+              {/* =========================================
+                  PESTAÑA 1: INFORMACIÓN GENERAL
+              ========================================== */}
               {pestañaActiva === 'general' && (
                 <div className="form-grid">
                   <div className="form-group">
@@ -393,6 +400,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     )}
                   </div>
 
+                  {/* ✅ AQUÍ ESTÁ EL CONVENIO LIMPIO, SIN CUADROS EXTRAÑOS DEBAJO */}
                   <div className="form-group">
                     <label className="form-label">Convenio (Tarifa)</label>
                     <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required disabled={listaConveniosCliente.length === 0}>
@@ -464,6 +472,9 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                 </div>
               )}
 
+              {/* =========================================
+                  PESTAÑA 2: PEDIMENTO Y CT
+              ========================================== */}
               {pestañaActiva === 'pedimento' && (
                 <div className="form-grid">
                   <div className="form-group" style={{ gridColumn: 'span 2' }}>
@@ -490,6 +501,9 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                 </div>
               )}
 
+              {/* =========================================
+                  PESTAÑA 3: MANIFIESTOS
+              ========================================== */}
               {pestañaActiva === 'manifiesto' && (
                 <div className="form-grid">
                   <div className="form-group">
@@ -523,6 +537,9 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                 </div>
               )}
 
+              {/* =========================================
+                  PESTAÑA 4: UNIDAD Y OPERADOR
+              ========================================== */}
               {pestañaActiva === 'unidad' && (
                 <div className="form-grid">
 
