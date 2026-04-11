@@ -1,5 +1,5 @@
 // src/features/configuracion/components/ConfiguradorStatus.tsx
-import { useState, useEffect } from 'react'; // ✅ ALERTA CORREGIDA (Se eliminó 'React')
+import { useState, useEffect } from 'react';
 import { collection, doc, getDoc, setDoc, getDocs } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
 
@@ -25,21 +25,24 @@ const CAMPOS_OPERACION = [
 ];
 
 export const ConfiguradorStatus = () => {
-  const [tiposOperacion, setTiposOperacion] = useState<string[]>([]);
   const [catalogoStatus, setCatalogoStatus] = useState<string[]>([]);
   
-  const [tipoSeleccionado, setTipoSeleccionado] = useState<string>('');
+  // ✅ 3 Variables de Combinación (Llave Compuesta)
+  const [tipoServicio, setTipoServicio] = useState('');
+  const [trafico, setTrafico] = useState('');
+  const [carga, setCarga] = useState('');
+
   const [reglas, setReglas] = useState<ReglaStatus[]>([]);
   const [cargando, setCargando] = useState(false);
   const [guardando, setGuardando] = useState(false);
 
+  const estaListoParaConfigurar = tipoServicio !== '' && trafico !== '' && carga !== '';
+  const configId = `${tipoServicio}_${trafico}_${carga}`; // Ej: Transfer_Importación_Cargada
+
+  // 1. Cargar el catálogo de estatus disponibles
   useEffect(() => {
     const cargarCatalogos = async () => {
       try {
-        const opSnap = await getDocs(collection(db, 'catalogo_tipo_operacion'));
-        const ops = opSnap.docs.map(d => d.data().tipo_operacion).filter(Boolean);
-        setTiposOperacion(ops.length > 0 ? ops : ['Importación', 'Exportación', 'Fletes', 'Transfer']);
-
         const statusSnap = await getDocs(collection(db, 'catalogo_status_servicio'));
         const statuses = statusSnap.docs.map(d => d.data().nombre).filter(Boolean);
         setCatalogoStatus(statuses);
@@ -50,15 +53,16 @@ export const ConfiguradorStatus = () => {
     cargarCatalogos();
   }, []);
 
+  // 2. Cargar las reglas cuando la combinación esté completa
   useEffect(() => {
     const cargarReglas = async () => {
-      if (!tipoSeleccionado) {
+      if (!estaListoParaConfigurar) {
         setReglas([]);
         return;
       }
       setCargando(true);
       try {
-        const docRef = doc(db, 'config_flujos_operacion', tipoSeleccionado);
+        const docRef = doc(db, 'config_flujos_operacion', configId);
         const docSnap = await getDoc(docRef);
         
         if (docSnap.exists() && docSnap.data().flujo) {
@@ -66,7 +70,7 @@ export const ConfiguradorStatus = () => {
           flujoBD.sort((a, b) => a.orden - b.orden);
           setReglas(flujoBD);
         } else {
-          setReglas([]);
+          setReglas([]); // Si no existe, empezamos desde cero
         }
       } catch (error) {
         console.error("Error cargando flujo:", error);
@@ -74,8 +78,9 @@ export const ConfiguradorStatus = () => {
       setCargando(false);
     };
     cargarReglas();
-  }, [tipoSeleccionado]);
+  }, [tipoServicio, trafico, carga, estaListoParaConfigurar, configId]);
 
+  // 3. Funciones de manipulación del flujo
   const agregarRegla = () => {
     const nuevaRegla: ReglaStatus = {
       id: `regla_${Date.now()}`,
@@ -89,7 +94,7 @@ export const ConfiguradorStatus = () => {
 
   const eliminarRegla = (id: string) => {
     const nuevasReglas = reglas.filter(r => r.id !== id);
-    nuevasReglas.forEach((r, index) => r.orden = index + 1);
+    nuevasReglas.forEach((r, index) => r.orden = index + 1); // Reordenar
     setReglas(nuevasReglas);
   };
 
@@ -123,21 +128,25 @@ export const ConfiguradorStatus = () => {
     setReglas(nuevasReglas);
   };
 
+  // 4. Guardar en Firebase
   const guardarConfiguracion = async () => {
-    if (!tipoSeleccionado) return alert("Selecciona un tipo de operación primero.");
+    if (!estaListoParaConfigurar) return alert("Selecciona todas las variables primero.");
     if (reglas.some(r => !r.nombreStatus)) return alert("Todos los pasos deben tener un Estatus asignado.");
 
     setGuardando(true);
     try {
-      const docRef = doc(db, 'config_flujos_operacion', tipoSeleccionado);
+      const docRef = doc(db, 'config_flujos_operacion', configId);
       await setDoc(docRef, {
-        tipoOperacion: tipoSeleccionado,
+        configId: configId,
+        tipoServicio,
+        trafico,
+        carga,
         ultimaActualizacion: new Date().toISOString(),
         flujo: reglas
       });
       alert('Flujo de trabajo guardado exitosamente.');
     } catch (error) {
-      console.error("Error guardando flujo:", error);
+      console.error("Error guardando:", error);
       alert('Error al guardar la configuración.');
     }
     setGuardando(false);
@@ -145,41 +154,66 @@ export const ConfiguradorStatus = () => {
 
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto', color: '#c9d1d9' }}>
+      
       <div className="module-header" style={{ borderBottom: '1px solid #30363d', paddingBottom: '16px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1 style={{ fontSize: '1.5rem', color: '#f0f6fc', margin: '0 0 8px 0' }}>Configurador de Flujos y Estatus</h1>
-          <p style={{ margin: 0, color: '#8b949e', fontSize: '0.9rem' }}>Define el orden y las reglas para que las operaciones cambien de estatus automáticamente o aparezcan como botones en la bitácora.</p>
+          <h1 style={{ fontSize: '1.5rem', color: '#f0f6fc', margin: '0 0 8px 0' }}>Configurador de Flujos Dinámicos</h1>
+          <p style={{ margin: 0, color: '#8b949e', fontSize: '0.9rem' }}>Construye el flujo de pasos basado en la combinación exacta de la Operación.</p>
         </div>
-        <button onClick={guardarConfiguracion} disabled={guardando || !tipoSeleccionado} className="btn btn-primary" style={{ height: '40px', padding: '0 24px' }}>
+        <button onClick={guardarConfiguracion} disabled={guardando || !estaListoParaConfigurar} className="btn btn-primary" style={{ height: '40px', padding: '0 24px' }}>
           {guardando ? 'Guardando...' : 'Guardar Flujo Completo'}
         </button>
       </div>
 
       <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '20px', marginBottom: '24px' }}>
-        <label className="form-label" style={{ fontSize: '1rem', color: '#f0f6fc' }}>1. Selecciona el Tipo de Operación a Configurar</label>
-        <select 
-          className="form-control" 
-          value={tipoSeleccionado} 
-          onChange={(e) => setTipoSeleccionado(e.target.value)}
-          style={{ maxWidth: '400px', marginTop: '8px', border: '1px solid #D84315' }}
-        >
-          <option value="">-- Elige una opción --</option>
-          {tiposOperacion.map(tipo => (
-            <option key={tipo} value={tipo}>{tipo}</option>
-          ))}
-        </select>
+        <h3 style={{ fontSize: '1rem', color: '#f0f6fc', margin: '0 0 16px 0' }}>1. Selecciona la Combinación a Configurar</h3>
+        
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          <div>
+            <label className="form-label orange">Tipo de Servicio</label>
+            <select className="form-control" value={tipoServicio} onChange={e => setTipoServicio(e.target.value)}>
+              <option value="">-- Seleccionar --</option>
+              <option value="Logística">Logística</option>
+              <option value="Transfer">Transfer</option>
+              <option value="Fletes">Fletes</option>
+              <option value="Movimiento">Movimiento</option>
+              <option value="Trompo">Trompo</option>
+              <option value="Demoras">Demoras</option>
+            </select>
+          </div>
+          <div>
+            <label className="form-label orange">Tráfico</label>
+            <select className="form-control" value={trafico} onChange={e => setTrafico(e.target.value)}>
+              <option value="">-- Seleccionar --</option>
+              <option value="Importación">Importación</option>
+              <option value="Exportación">Exportación</option>
+              <option value="N/A">N/A</option>
+            </select>
+          </div>
+          <div>
+            <label className="form-label orange">Estado de Carga</label>
+            <select className="form-control" value={carga} onChange={e => setCarga(e.target.value)}>
+              <option value="">-- Seleccionar --</option>
+              <option value="Cargada">Cargada</option>
+              <option value="Vacía">Vacía</option>
+              <option value="N/A">N/A</option>
+            </select>
+          </div>
+        </div>
       </div>
 
-      {!tipoSeleccionado ? (
+      {!estaListoParaConfigurar ? (
         <div style={{ textAlign: 'center', padding: '40px', backgroundColor: '#161b22', border: '1px dashed #30363d', borderRadius: '8px', color: '#8b949e' }}>
-          Selecciona un tipo de operación arriba para cargar o crear su flujo de trabajo.
+          Selecciona las 3 variables arriba para cargar o crear su flujo de trabajo.
         </div>
       ) : cargando ? (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>Cargando reglas...</div>
+        <div style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>Cargando reglas de la base de datos...</div>
       ) : (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h2 style={{ fontSize: '1.2rem', color: '#f0f6fc', margin: 0 }}>Línea de Tiempo del Flujo: <span style={{ color: '#D84315' }}>{tipoSeleccionado}</span></h2>
+            <h2 style={{ fontSize: '1.2rem', color: '#f0f6fc', margin: 0 }}>
+              Línea de Tiempo del Flujo: <span style={{ color: '#D84315' }}>{configId.replace(/_/g, ' ')}</span>
+            </h2>
             <button onClick={agregarRegla} className="btn btn-outline" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span>+</span> Agregar Nuevo Paso
             </button>
@@ -188,7 +222,7 @@ export const ConfiguradorStatus = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {reglas.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', backgroundColor: '#161b22', border: '1px dashed #30363d', borderRadius: '8px', color: '#8b949e' }}>
-                Este tipo de operación aún no tiene un flujo definido. Haz clic en "Agregar Nuevo Paso".
+                Esta combinación aún no tiene un flujo definido. Haz clic en "Agregar Nuevo Paso".
               </div>
             ) : (
               reglas.map((regla, index) => (
@@ -197,9 +231,7 @@ export const ConfiguradorStatus = () => {
                   {/* Controles de Orden */}
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', borderRight: '1px solid #30363d', paddingRight: '16px' }}>
                     <button onClick={() => moverRegla(index, 'arriba')} disabled={index === 0} style={{ background: 'none', border: 'none', color: index === 0 ? '#30363d' : '#8b949e', cursor: index === 0 ? 'not-allowed' : 'pointer', fontSize: '1.2rem' }}>▲</button>
-                    <div style={{ width: '32px', height: '32px', backgroundColor: '#21262d', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#f0f6fc' }}>
-                      {regla.orden}
-                    </div>
+                    <div style={{ width: '32px', height: '32px', backgroundColor: '#21262d', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#f0f6fc' }}>{regla.orden}</div>
                     <button onClick={() => moverRegla(index, 'abajo')} disabled={index === reglas.length - 1} style={{ background: 'none', border: 'none', color: index === reglas.length - 1 ? '#30363d' : '#8b949e', cursor: index === reglas.length - 1 ? 'not-allowed' : 'pointer', fontSize: '1.2rem' }}>▼</button>
                   </div>
 
@@ -226,17 +258,13 @@ export const ConfiguradorStatus = () => {
                         </select>
                       </div>
 
-                      <button onClick={() => eliminarRegla(regla.id)} style={{ height: '40px', padding: '0 16px', background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '4px', cursor: 'pointer' }}>
-                        Eliminar
-                      </button>
+                      <button onClick={() => eliminarRegla(regla.id)} style={{ height: '40px', padding: '0 16px', background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '4px', cursor: 'pointer' }}>Eliminar</button>
                     </div>
 
                     {/* Configuración Condicional si es Automático */}
                     {regla.tipoMecanismo === 'automatico' && (
                       <div style={{ backgroundColor: '#0d1117', padding: '16px', borderRadius: '6px', border: '1px dashed #30363d' }}>
-                        <label className="form-label" style={{ color: '#D84315', marginBottom: '12px' }}>
-                          Condiciones Obligatorias (¿Qué campos del formulario deben estar llenos para llegar a este estatus?)
-                        </label>
+                        <label className="form-label" style={{ color: '#D84315', marginBottom: '12px' }}>Condiciones Obligatorias (¿Qué campos del formulario deben estar llenos?)</label>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' }}>
                           {CAMPOS_OPERACION.map(campo => (
                             <label key={campo.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem' }}>
@@ -244,7 +272,7 @@ export const ConfiguradorStatus = () => {
                                 type="checkbox" 
                                 checked={regla.camposRequeridos.includes(campo.id)}
                                 onChange={() => toggleCampoRequerido(regla.id, campo.id)}
-                                style={{ accentColor: '#D84315' }}
+                                style={{ accentColor: '#D84315' }} 
                               />
                               {campo.label}
                             </label>
