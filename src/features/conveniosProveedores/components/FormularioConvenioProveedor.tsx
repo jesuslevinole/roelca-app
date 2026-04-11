@@ -125,7 +125,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
     cargarCatalogos();
   }, []);
 
-  // 2. CARGA DE DATOS Y JOIN DE NOMBRES
+  // 2. CARGA DE DATOS Y JOIN DE NOMBRES (HIDRATACIÓN)
   useEffect(() => {
     if (initialData && initialData.id && tarifarios.length > 0) {
       setFormData(initialData);
@@ -133,6 +133,8 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
         try {
           const q = query(collection(db, 'convenios_proveedores_detalles'), where('convenioId', '==', initialData.id));
           const snap = await getDocs(q);
+          
+          // ✅ CORRECCIÓN: Cruzamos el ID contra el catálogo para mostrar el nombre real
           const detallesBD = snap.docs.map(docSnap => {
             const data = docSnap.data();
             const refMaster = tarifarios.find(t => t.id === data.tipoConvenioId);
@@ -140,6 +142,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
               id: docSnap.id,
               convenioId: data.convenioId,
               tipoConvenioId: data.tipoConvenioId,
+              // Prioridad: 1. Nombre en el registro | 2. Nombre del catálogo | 3. Fallback
               tipoConvenioNombre: data.tipoConvenioNombre || (refMaster ? refMaster.descripcion : 'Concepto no identificado'),
               tarifa: data.tarifa || 0
             } as ConvenioProveedorDetalleRecord;
@@ -183,7 +186,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
     const nuevoDetalle = {
       id: `local_${Date.now()}`, 
       tipoConvenioId: detalleDraft.tipoConvenioId,
-      tipoConvenioNombre: detalleDraft.tipoConvenioNombre,
+      tipoConvenioNombre: detalleDraft.tipoConvenioNombre, // ✅ Se inyecta para visualización inmediata
       tarifa: detalleDraft.tarifa,
       _isNew: true 
     };
@@ -197,6 +200,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
     if (!isNew) setDetallesEliminados(prev => [...prev, id]);
   };
 
+  // ✅ TRANSACCIÓN BATCH PARA COLECCIONES SEPARADAS
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.proveedorId) return alert("Seleccione un proveedor.");
@@ -216,7 +220,12 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
       detalles.forEach(det => {
         if (det._isNew) {
           const detRef = doc(collection(db, 'convenios_proveedores_detalles'));
-          batch.set(detRef, { convenioId: masterId, tipoConvenioId: det.tipoConvenioId, tipoConvenioNombre: det.tipoConvenioNombre, tarifa: det.tarifa });
+          batch.set(detRef, { 
+            convenioId: masterId, 
+            tipoConvenioId: det.tipoConvenioId, 
+            tipoConvenioNombre: det.tipoConvenioNombre, // ✅ Guardamos el nombre para evitar vacíos
+            tarifa: det.tarifa 
+          });
         } else {
           const detRef = doc(db, 'convenios_proveedores_detalles', det.id!);
           batch.update(detRef, { tarifa: det.tarifa });
@@ -226,7 +235,10 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
       detallesEliminados.forEach(delId => batch.delete(doc(db, 'convenios_proveedores_detalles', delId)));
       await batch.commit();
       onClose();
-    } catch (error) { alert('Error al guardar convenio.'); }
+    } catch (error) { 
+      console.error(error);
+      alert('Error al guardar convenio transaccional.'); 
+    }
     finally { setCargando(false); }
   };
 
@@ -324,7 +336,7 @@ export const FormularioConvenioProveedor = ({ estado, initialData, registrosExis
 
             <div className="form-actions" style={{ marginTop: '32px', display: 'flex', justifyContent: 'flex-end', gap: '16px' }}>
               <button type="button" onClick={onClose} className="btn btn-outline">Cancelar</button>
-              <button type="submit" className="btn btn-primary" disabled={cargando}>{cargando ? 'Guardando...' : 'Guardar Convenio Maestro'}</button>
+              <button type="submit" className="btn btn-primary" disabled={cargando}>{cargando ? 'Guardando Lotes...' : 'Guardar Convenio Maestro'}</button>
             </div>
           </form>
         </div>
