@@ -40,6 +40,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [tipoCambioDia, setTipoCambioDia] = useState<number | null>(null);
   const [buscandoTC, setBuscandoTC] = useState(false);
 
+  // Estados para Buscadores Personalizados
   const [searchOrigen, setSearchOrigen] = useState('');
   const [showDropdownOrigen, setShowDropdownOrigen] = useState(false);
   const [searchDestino, setSearchDestino] = useState('');
@@ -48,9 +49,12 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [showDropdownClientePaga, setShowDropdownClientePaga] = useState(false);
   const [searchRemolque, setSearchRemolque] = useState('');
   const [showDropdownRemolque, setShowDropdownRemolque] = useState(false);
-  
   const [searchClienteMercancia, setSearchClienteMercancia] = useState('');
   const [showDropdownClienteMercancia, setShowDropdownClienteMercancia] = useState(false);
+  
+  // ✅ NUEVO: Estado para Buscador de Proveedor de Servicios
+  const [searchProvServicios, setSearchProvServicios] = useState('');
+  const [showDropdownProvServicios, setShowDropdownProvServicios] = useState(false);
 
   const [formData, setFormData] = useState({
     tipoServicio: '', trafico: '', carga: '',
@@ -150,6 +154,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     setBuscandoTC(false);
   }, [formData.fechaServicio, catalogoTC]);
 
+  // ✅ CORRECCIÓN FINAL: Mapeo exacto de la lista de convenios
   useEffect(() => {
     let clientId = formData.clientePaga;
     if (!clientId && searchClientePaga) {
@@ -177,14 +182,28 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
       });
 
       const mapped = detalles.map(d => {
-        const tarifaId = d.tipoConvenioId || d.tipo_convenio_id || d.tipoConvenio || d.tipo_convenio || d['TIPO DE CONVENIO'];
-        const tObj = tarifas.find(t => String(t.id).trim() === String(tarifaId).trim());
+        // Obtenemos el valor bruto de la columna (evitando la columna de tarifa/precio)
+        const rawRef = d.tipoConvenioId || d.tipo_convenio_id || d.tipoConvenio || d.tipo_convenio || d['TIPO DE CONVENIO'];
+        
+        // Cruzamos con catalogo_tarifas_referencia
+        const tObj = tarifas.find(t => 
+          String(t.id).trim() === String(rawRef).trim() || 
+          String(t.descripcion).trim().toLowerCase() === String(rawRef).trim().toLowerCase()
+        );
 
-        const nombreVisible = tObj?.descripcion || tObj?.nombre || (tarifaId ? `Desconocido (${tarifaId})` : 'Sin Asignar');
+        // Si existe en catálogo, usamos su descripción. Si no, usamos el texto literal (Ej: "Exportación Caja Cargada...")
+        let nombreVisible = '';
+        if (tObj && tObj.descripcion) {
+          nombreVisible = tObj.descripcion;
+        } else if (typeof rawRef === 'string' && isNaN(Number(rawRef))) {
+          nombreVisible = rawRef;
+        } else {
+          nombreVisible = `Convenio ID: ${rawRef || d.id}`;
+        }
 
         return {
           id: d.id,
-          tarifaBaseId: tarifaId,
+          tarifaBaseId: tObj ? tObj.id : rawRef,
           descripcion: nombreVisible,
           ...d
         };
@@ -279,17 +298,21 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   };
 
+  // Filtros de Catálogos (Empresas)
   const filClientesPaga = empresas.filter(e => e.tiposEmpresa?.includes('7eec9cbb'));
   const filClientesMercancia = empresas.filter(e => e.tiposEmpresa?.includes('51246232'));
   const filProveedoresServicios = empresas.filter(e => e.tiposEmpresa?.includes('11894dfd'));
   const filOrigenesDestinos = empresas.filter(e => e.tiposEmpresa?.includes('6e7af5ab'));
 
+  // Resultados de Búsqueda
   const resultadosOrigen = filOrigenesDestinos.filter(e => e.nombre?.toLowerCase().includes(searchOrigen.toLowerCase()) || e.direccion?.toLowerCase().includes(searchOrigen.toLowerCase()));
   const resultadosDestino = filOrigenesDestinos.filter(e => e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || e.direccion?.toLowerCase().includes(searchDestino.toLowerCase()));
   const resultadosClientePaga = filClientesPaga.filter(e => e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase()));
   const resultadosRemolque = remolques.filter(e => e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase()));
-  
   const resultadosClienteMercancia = filClientesMercancia.filter(e => e.nombre?.toLowerCase().includes(searchClienteMercancia.toLowerCase()));
+  
+  // ✅ RESULTADOS BUSCADOR DE PROVEEDORES DE SERVICIO
+  const resultadosProvServicios = filProveedoresServicios.filter(e => e.nombre?.toLowerCase().includes(searchProvServicios.toLowerCase()));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -473,7 +496,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
               ========================================== */}
               {pestañaActiva === 'pedimento' && (
                 <div className="form-grid">
-                  
                   <div className="form-group" style={{ position: 'relative', gridColumn: 'span 2' }}>
                     <label className="form-label">Cliente (Mercancía)</label>
                     <input
@@ -500,16 +522,13 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
 
                   <div className="form-group"><label className="form-label">Descripción de la Mercancía</label><input type="text" name="descripcionMercancia" className="form-control" value={formData.descripcionMercancia} onChange={handleChange} /></div>
                   <div className="form-group"><label className="form-label">Cantidad (Enteros)</label><input type="number" step="1" name="cantidad" className="form-control" value={formData.cantidad} onChange={handleChange} /></div>
-                  
                   <div className="form-group">
                     <label className="form-label">Embalaje</label>
                     <select name="embalaje" className="form-control" value={formData.embalaje} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
-                      {/* ✅ CAMBIO: Muestra estrictamente el campo 'clave' pero guarda el 'id' */}
                       {embalajes.map(e => <option key={e.id} value={e.id}>{e.clave}</option>)}
                     </select>
                   </div>
-
                   <div className="form-group"><label className="form-label">Peso (Kg) Decimales</label><input type="number" step="0.01" name="pesoKg" className="form-control" value={formData.pesoKg} onChange={handleChange} /></div>
                   <div className="form-group"><label className="form-label">PDF - Carta Porte</label><input type="file" accept=".pdf" className="form-control" onChange={(e) => handleFileChange(e, 'pdfCartaPorte')} /></div>
                   <div className="form-group"><label className="form-label"># DODA</label><input type="text" name="numDoda" className="form-control" value={formData.numDoda} onChange={handleChange} /></div>
@@ -543,13 +562,32 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                   <div className="form-group" style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d' }} /></div>
 
                   <div className="form-group"><label className="form-label"># Manifiesto</label><input type="text" name="numManifiesto" className="form-control" value={formData.numManifiesto} onChange={handleChange} /></div>
-                  <div className="form-group">
+                  
+                  {/* ✅ NUEVO BUSCADOR: PROVEEDOR DE SERVICIOS */}
+                  <div className="form-group" style={{ position: 'relative' }}>
                     <label className="form-label">Proveedor de Servicios</label>
-                    <select name="provServicios" className="form-control" value={formData.provServicios} onChange={handleChange}>
-                      <option value="">-- Seleccionar (11894dfd) --</option>
-                      {filProveedoresServicios.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-                    </select>
+                    <input
+                      type="text" className="form-control" placeholder="Escriba para buscar proveedor..."
+                      value={searchProvServicios}
+                      onChange={e => {
+                        setSearchProvServicios(e.target.value);
+                        setShowDropdownProvServicios(true);
+                        if (formData.provServicios) setFormData(prev => ({ ...prev, provServicios: '' }));
+                      }}
+                      onFocus={() => setShowDropdownProvServicios(true)}
+                    />
+                    {showDropdownProvServicios && searchProvServicios && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
+                        {resultadosProvServicios.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosProvServicios.map(c => (
+                          <div key={c.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}
+                            onClick={() => { setFormData(prev => ({ ...prev, provServicios: c.id })); setSearchProvServicios(c.nombre); setShowDropdownProvServicios(false); }}>
+                            <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{c.nombre}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+
                   <div className="form-group"><label className="form-label">PDF Manifiesto</label><input type="file" accept=".pdf" className="form-control" onChange={(e) => handleFileChange(e, 'pdfManifiesto')} /></div>
                 </div>
               )}
@@ -559,7 +597,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
               ========================================== */}
               {pestañaActiva === 'unidad' && (
                 <div className="form-grid">
-
                   <div className="form-group"><label className="form-label">Facturado En:</label>
                     <select name="facturadoEnUnidad" className="form-control" value={formData.facturadoEnUnidad} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
