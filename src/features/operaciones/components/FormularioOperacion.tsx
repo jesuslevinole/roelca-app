@@ -71,7 +71,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     unidad: '', operador: ''
   });
 
-  // 1. DESCARGA DE TODOS LOS CATÁLOGOS
   useEffect(() => {
     const fetchCatalogos = async () => {
       setCargandoCatalogos(true);
@@ -113,15 +112,14 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     fetchCatalogos();
   }, []);
 
-  // 2. BÚSQUEDA DEL TIPO DE CAMBIO
   useEffect(() => {
     if (!formData.fechaServicio || catalogoTC.length === 0) return;
     setBuscandoTC(true);
 
     const [y, m, d] = formData.fechaServicio.split('-');
-    const fechaLatina = `${d}/${m}/${y}`; // 10/04/2026
-    const fechaUS = `${m}/${d}/${y}`; // 04/10/2026
-    const fechaISO = `${y}-${m}-${d}`; // 2026-04-10
+    const fechaLatina = `${d}/${m}/${y}`; 
+    const fechaUS = `${m}/${d}/${y}`; 
+    const fechaISO = `${y}-${m}-${d}`; 
 
     let tcEncontrado = null;
 
@@ -149,40 +147,40 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     setBuscandoTC(false);
   }, [formData.fechaServicio, catalogoTC]);
 
-  // 3. BÚSQUEDA RED DE ARRASTRE PARA CONVENIOS DE CLIENTE (A PRUEBA DE FALLOS)
+  // ✅ BÚSQUEDA DE CONVENIOS MEJORADA (Auto-selección por nombre)
   useEffect(() => {
-    if (!formData.clientePaga || catalogoConvClientes.length === 0) {
+    // Si el usuario escribió el nombre pero no hizo clic, buscamos el ID nosotros mismos
+    let clientId = formData.clientePaga;
+    if (!clientId && searchClientePaga) {
+       const empresaEncontrada = empresas.find(e => e.nombre?.toLowerCase().trim() === searchClientePaga.toLowerCase().trim());
+       if (empresaEncontrada) {
+         clientId = empresaEncontrada.id;
+       }
+    }
+
+    if (!clientId || catalogoConvClientes.length === 0) {
       setListaConveniosCliente([]);
       return;
     }
 
-    const clientId = formData.clientePaga;
-    const clienteObj = empresas.find(e => e.id === clientId);
-    const clientName = clienteObj?.nombre || '';
-
-    // Encontrar TODOS los convenios maestros que pertenezcan a este cliente (por ID o por Nombre Literal)
+    // Buscamos los convenios maestros del cliente
     const maestrosDelCliente = catalogoConvClientes.filter(c => {
       const refVal = String(c.clienteId || c.cliente || c.Cliente || c.CLIENTE || c.id_cliente || c.empresa || '').trim();
-      return refVal === clientId || (clientName && refVal === clientName);
+      return refVal === clientId;
     });
 
     if (maestrosDelCliente.length > 0) {
-      // Extraemos los IDs de los convenios maestros y sus posibles números/nombres
-      const masterIds = maestrosDelCliente.map(m => m.id);
-      const masterNombres = maestrosDelCliente.map(m => String(m.nombre || m.id).trim());
+      const masterIds = maestrosDelCliente.map(m => String(m.id).trim());
+      // A veces AppSheet guarda el "# de Convenio" en lugar del ID, cubrimos ambas opciones
+      const masterNames = maestrosDelCliente.map(m => String(m['# de Convenio'] || m.numeroConvenio || m.nombre || m.id).trim());
 
-      // Filtrar detalles que apunten a CUALQUIERA de estos maestros
       const detalles = catalogoConvDetalles.filter(d => {
         const convRef = String(d.convenioId || d.convenio || d.id_convenio || d.Convenio || d.CONVENIO || '').trim();
-        return masterIds.includes(convRef) || masterNombres.includes(convRef);
+        return masterIds.includes(convRef) || masterNames.includes(convRef);
       });
 
-      // Mapear al formato correcto para el Dropdown
       const mapped = detalles.map(d => {
-        // Encontrar la Tarifa Base a la que apunta el detalle
         const tarifaRef = d.tipo_convenio || d.tarifaId || d.tarifa || d.Tipo_Convenio || d['TIPO DE CONVENIO'] || d.TIPO_DE_CONVENIO;
-        
-        // Buscar en la colección de Tarifas de Referencia
         const tObj = tarifas.find(t => t.id === tarifaRef || t.descripcion === tarifaRef);
 
         return {
@@ -197,9 +195,8 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     } else {
       setListaConveniosCliente([]);
     }
-  }, [formData.clientePaga, catalogoConvClientes, catalogoConvDetalles, tarifas, empresas]);
+  }, [formData.clientePaga, searchClientePaga, catalogoConvClientes, catalogoConvDetalles, tarifas, empresas]);
 
-  // 4. RESOLUCIÓN DE LLAVE COMPUESTA INVISIBLE
   useEffect(() => {
     const resolverVariablesDeFlujo = async () => {
       if (!formData.convenio) return;
@@ -245,7 +242,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     resolverVariablesDeFlujo();
   }, [formData.convenio, listaConveniosCliente, tarifas]);
 
-  // 5. CÁLCULO DE MONEDAS
   useEffect(() => {
     const facturadoEn = formData.facturadoEnUnidad;
     const monedaConv = formData.monedaConvenioProv;
@@ -357,9 +353,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           <form onSubmit={handleSubmit}>
             <div className="tab-content" style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: '12px' }}>
 
-              {/* =========================================
-                  PESTAÑA 1: INFORMACIÓN GENERAL
-              ========================================== */}
               {pestañaActiva === 'general' && (
                 <div className="form-grid">
                   <div className="form-group">
@@ -379,7 +372,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                   <div className="form-group" style={{ position: 'relative' }}>
                     <label className="form-label">Cliente (Paga)</label>
                     <input
-                      type="text" className="form-control" placeholder="Escriba para buscar cliente..." required={!formData.clientePaga}
+                      type="text" className="form-control" placeholder="Escriba para buscar cliente..." required={!formData.clientePaga && !searchClientePaga}
                       value={searchClientePaga}
                       onChange={e => {
                         setSearchClientePaga(e.target.value);
@@ -402,13 +395,13 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
 
                   <div className="form-group">
                     <label className="form-label">Convenio (Tarifa)</label>
-                    <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required disabled={!formData.clientePaga}>
+                    <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required disabled={listaConveniosCliente.length === 0}>
                       <option value="">-- Seleccione un Convenio --</option>
                       {listaConveniosCliente.map(c => (
                         <option key={c.id} value={c.id}>{c.descripcion}</option>
                       ))}
                     </select>
-                    {!formData.clientePaga && <small style={{ color: '#8b949e' }}>Seleccione Cliente Paga primero</small>}
+                    {listaConveniosCliente.length === 0 && searchClientePaga && <small style={{ color: '#8b949e' }}>Este cliente no tiene convenios asignados</small>}
                   </div>
 
                   <div className="form-group" style={{ position: 'relative' }}>
