@@ -474,7 +474,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
               {pestañaActiva === 'pedimento' && (
                 <div className="form-grid">
                   
-                  {/* ✅ BUSCADOR: CLIENTE MERCANCÍA */}
                   <div className="form-group" style={{ position: 'relative', gridColumn: 'span 2' }}>
                     <label className="form-label">Cliente (Mercancía)</label>
                     <input
@@ -501,14 +500,16 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
 
                   <div className="form-group"><label className="form-label">Descripción de la Mercancía</label><input type="text" name="descripcionMercancia" className="form-control" value={formData.descripcionMercancia} onChange={handleChange} /></div>
                   <div className="form-group"><label className="form-label">Cantidad (Enteros)</label><input type="number" step="1" name="cantidad" className="form-control" value={formData.cantidad} onChange={handleChange} /></div>
+                  
                   <div className="form-group">
                     <label className="form-label">Embalaje</label>
                     <select name="embalaje" className="form-control" value={formData.embalaje} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
-                      {/* ✅ CAMBIO: Ahora carga la clave (PALLET, PAQUETE, Piezas) */}
-                      {embalajes.map(e => <option key={e.id} value={e.id}>{e.clave || e.nombre || e.id}</option>)}
+                      {/* ✅ CAMBIO: Muestra estrictamente el campo 'clave' pero guarda el 'id' */}
+                      {embalajes.map(e => <option key={e.id} value={e.id}>{e.clave}</option>)}
                     </select>
                   </div>
+
                   <div className="form-group"><label className="form-label">Peso (Kg) Decimales</label><input type="number" step="0.01" name="pesoKg" className="form-control" value={formData.pesoKg} onChange={handleChange} /></div>
                   <div className="form-group"><label className="form-label">PDF - Carta Porte</label><input type="file" accept=".pdf" className="form-control" onChange={(e) => handleFileChange(e, 'pdfCartaPorte')} /></div>
                   <div className="form-group"><label className="form-label"># DODA</label><input type="text" name="numDoda" className="form-control" value={formData.numDoda} onChange={handleChange} /></div>
