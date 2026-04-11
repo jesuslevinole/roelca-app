@@ -1,6 +1,6 @@
 // src/features/operaciones/components/FormularioOperacion.tsx
-import { useState, useEffect } from 'react'; // ✅ Se eliminó useRef
-import { collection, getDocs, query, where, limit } from 'firebase/firestore'; // ✅ Se eliminaron doc y getDoc
+import { useState, useEffect } from 'react'; 
+import { collection, doc, getDoc, getDocs, query, where, limit } from 'firebase/firestore'; 
 import { db } from '../../../config/firebase';
 import { guardarOperacionSegura } from '../services/operacionesService';
 import { calcularStatusDinamico } from '../config/statusRules'; 
@@ -23,6 +23,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [pestañaActiva, setPestañaActiva] = useState<TabType>('general');
   const [cargando, setCargando] = useState(false); 
   const [cargandoCatalogos, setCargandoCatalogos] = useState(true);
+  const [resolviendoConvenio, setResolviendoConvenio] = useState(false);
 
   const [empresas, setEmpresas] = useState<any[]>([]);
   const [tiposOperacion, setTiposOperacion] = useState<any[]>([]);
@@ -31,13 +32,21 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [tarifas, setTarifas] = useState<any[]>([]);
   const [conveniosProv, setConveniosProv] = useState<any[]>([]);
   
+  // Catálogo dinámico de convenios del cliente seleccionado
+  const [listaConveniosCliente, setListaConveniosCliente] = useState<any[]>([]);
+  
   const [tipoCambioDia, setTipoCambioDia] = useState<number | null>(null);
   const [buscandoTC, setBuscandoTC] = useState(false);
 
+  // Estados para Buscadores Personalizados
   const [searchOrigen, setSearchOrigen] = useState('');
   const [showDropdownOrigen, setShowDropdownOrigen] = useState(false);
   const [searchDestino, setSearchDestino] = useState('');
   const [showDropdownDestino, setShowDropdownDestino] = useState(false);
+  const [searchClientePaga, setSearchClientePaga] = useState('');
+  const [showDropdownClientePaga, setShowDropdownClientePaga] = useState(false);
+  const [searchRemolque, setSearchRemolque] = useState('');
+  const [showDropdownRemolque, setShowDropdownRemolque] = useState(false);
 
   const [formData, setFormData] = useState({
     tipoServicio: '', trafico: '', carga: '', 
@@ -74,7 +83,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           getDocs(collection(db, 'convenios_proveedores'))
         ]);
 
-        // ✅ CORRECCIÓN TypeScript ts(2339): Añadido (d.data() as any) para que no marque error
         setEmpresas(empSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
         
         const opsPermitidas = ['Transfer', 'Logistica', 'Logística', 'Fletes'];
@@ -96,12 +104,17 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     fetchCatalogos();
   }, []);
 
+  // ✅ BÚSQUEDA DE TIPO DE CAMBIO CON REPARACIÓN DE FORMATO DE FECHA (YYYY-MM-DD -> DD/MM/YYYY)
   useEffect(() => {
     const buscarTC = async () => {
       if (!formData.fechaServicio) return;
       setBuscandoTC(true);
       try {
-        const q = query(collection(db, 'tipo_cambio'), where('fecha', '==', formData.fechaServicio), limit(1));
+        // Convertimos "2026-04-10" a "10/04/2026" para que coincida con AppSheet
+        const [year, month, day] = formData.fechaServicio.split('-');
+        const fechaFormateada = `${day}/${month}/${year}`;
+
+        const q = query(collection(db, 'tipo_cambio'), where('fecha', '==', fechaFormateada), limit(1));
         const snap = await getDocs(q);
         if (!snap.empty) {
           setTipoCambioDia(snap.docs[0].data().valor);
@@ -115,6 +128,101 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     };
     buscarTC();
   }, [formData.fechaServicio]);
+
+  // ✅ CASCADA: AL SELECCIONAR CLIENTE, BUSCAMOS SUS DETALLES DE CONVENIO
+  useEffect(() => {
+    const cargarDetallesDeCliente = async () => {
+      if (!formData.clientePaga) {
+        setListaConveniosCliente([]);
+        return;
+      }
+      try {
+        // 1. Buscamos el Convenio Maestro del Cliente
+        const qMaster = query(collection(db, 'convenios_clientes'), where('cliente', '==', formData.clientePaga), limit(1));
+        const masterSnap = await getDocs(qMaster);
+        
+        if (masterSnap.empty) {
+          setListaConveniosCliente([]);
+          return;
+        }
+        
+        const convenioMasterId = masterSnap.docs[0].id;
+
+        // 2. Buscamos los Detalles que pertenecen a ese Convenio Maestro
+        const qDetalles = query(collection(db, 'convenios_clientes_detalles'), where('convenioId', '==', convenioMasterId));
+        const detallesSnap = await getDocs(qDetalles);
+        
+        // 3. Mapeamos y cruzamos con Tarifas de Referencia para tener el nombre legible
+        const detalles = detallesSnap.docs.map(d => {
+          const data = d.data() as any;
+          // Asumimos que el detalle tiene un campo 'tipo_convenio' o 'tarifaId' que apunta a tarifas_referencia
+          const tarifaBaseId = data.tipo_convenio || data.tarifaId || data.tarifa; 
+          const tarifaObj = tarifas.find(t => t.id === tarifaBaseId);
+          
+          return {
+            id: d.id,
+            tarifaBaseId: tarifaBaseId,
+            descripcion: tarifaObj ? tarifaObj.descripcion : `Detalle (${data.tarifa || 'Sin Tarifa'})`,
+            ...data
+          };
+        });
+
+        setListaConveniosCliente(detalles);
+      } catch (error) {
+        console.error("Error cargando convenios del cliente:", error);
+      }
+    };
+    cargarDetallesDeCliente();
+  }, [formData.clientePaga, tarifas]);
+
+  // ✅ INDIRECCIÓN DE REGLAS: DETALLE -> TARIFA_REFERENCIA -> TIPO_TARIFARIO
+  useEffect(() => {
+    const resolverVariablesDeFlujo = async () => {
+      if (!formData.convenio) return;
+      
+      setResolviendoConvenio(true);
+      try {
+        // En este punto, formData.convenio es el ID del convenios_clientes_detalles
+        const detalleElegido = listaConveniosCliente.find(c => c.id === formData.convenio);
+        if (!detalleElegido) return;
+
+        // Buscamos la Tarifa de Referencia asociada a ese detalle
+        const tarifaRefId = detalleElegido.tarifaBaseId;
+        const tarifaObj = tarifas.find(t => t.id === tarifaRefId);
+
+        if (tarifaObj) {
+          const cargaDetectada = tarifaObj.estado_carga || 'N/A'; 
+          const tipoTarifarioId = tarifaObj.tipo_operacion; 
+
+          let tipoServicioDetectado = 'N/A';
+          let traficoDetectado = 'N/A';
+
+          if (tipoTarifarioId) {
+            const tipoRef = doc(db, 'catalogo_tipos_tarifarios', String(tipoTarifarioId));
+            const tipoSnap = await getDoc(tipoRef);
+            if (tipoSnap.exists()) {
+              const tipoData = tipoSnap.data();
+              tipoServicioDetectado = tipoData.descripcion || 'N/A'; 
+              traficoDetectado = tipoData.movimiento || 'N/A'; 
+            }
+          }
+
+          setFormData(prev => ({
+            ...prev,
+            tipoServicio: tipoServicioDetectado,
+            trafico: traficoDetectado,
+            carga: cargaDetectada
+          }));
+        }
+      } catch (error) {
+        console.error("Error resolviendo la lógica del convenio:", error);
+      } finally {
+        setResolviendoConvenio(false);
+      }
+    };
+
+    resolverVariablesDeFlujo();
+  }, [formData.convenio, listaConveniosCliente, tarifas]);
 
   useEffect(() => {
     const facturadoEn = formData.facturadoEnUnidad;
@@ -156,25 +264,35 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   };
 
+  // ✅ FILTROS BÁSICOS DE EMPRESAS
   const filClientesPaga = empresas.filter(e => e.tiposEmpresa?.includes('7eec9cbb'));
   const filClientesMercancia = empresas.filter(e => e.tiposEmpresa?.includes('51246232'));
   const filProveedoresServicios = empresas.filter(e => e.tiposEmpresa?.includes('11894dfd'));
   const filOrigenesDestinos = empresas.filter(e => e.tiposEmpresa?.includes('6e7af5ab'));
 
+  // ✅ FILTROS PARA BUSCADORES TEXTO LIBRE
   const resultadosOrigen = filOrigenesDestinos.filter(e => 
-    e.nombre?.toLowerCase().includes(searchOrigen.toLowerCase()) || 
-    e.direccion?.toLowerCase().includes(searchOrigen.toLowerCase())
+    e.nombre?.toLowerCase().includes(searchOrigen.toLowerCase()) || e.direccion?.toLowerCase().includes(searchOrigen.toLowerCase())
   );
   const resultadosDestino = filOrigenesDestinos.filter(e => 
-    e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || 
-    e.direccion?.toLowerCase().includes(searchDestino.toLowerCase())
+    e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || e.direccion?.toLowerCase().includes(searchDestino.toLowerCase())
+  );
+  const resultadosClientePaga = filClientesPaga.filter(e => 
+    e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase())
+  );
+  const resultadosRemolque = remolques.filter(e => 
+    e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase())
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!tipoCambioDia) {
-      return alert(`⛔ Imposible Guardar: No existe un Tipo de Cambio registrado para la fecha ${formData.fechaServicio}. Por favor registre el TC primero.`);
+      return alert(`⛔ Imposible Guardar: No existe un Tipo de Cambio registrado para la fecha seleccionada. Por favor registre el TC primero.`);
+    }
+
+    if (!formData.tipoServicio || formData.tipoServicio === 'N/A') {
+      alert("Advertencia: El convenio seleccionado no resolvió una configuración válida. El flujo de estatus podría fallar.");
     }
 
     setCargando(true);
@@ -182,13 +300,13 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
       const configId = `${formData.tipoServicio}_${formData.trafico}_${formData.carga}`;
       const statusCalculado = await calcularStatusDinamico(configId, formData, initialData?.status);
       
-      const tarifaDoc = tarifas.find(t => t.id === formData.convenio);
+      const detalleDoc = listaConveniosCliente.find(c => c.id === formData.convenio);
       
       const { pdfCartaPorte, pdfDoda, pdfManifiesto, pdfsEntrys, ...datosLimpios } = formData;
 
       const operacionData: Omit<Operacion, 'ref'> = { 
         ...datosLimpios, 
-        convenioNombre: tarifaDoc?.descripcion || 'Sin descripción',
+        convenioNombre: detalleDoc?.descripcion || 'Sin descripción',
         status: statusCalculado,
         tienePdfDoda: !!pdfDoda,
         cantPdfsEntrys: pdfsEntrys.filter(Boolean).length
@@ -233,7 +351,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           <form onSubmit={handleSubmit}>
             <div className="tab-content" style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: '12px' }}>
               
-              {/* ================= PESTAÑA 1: GENERAL ================= */}
               {pestañaActiva === 'general' && (
                 <div className="form-grid">
                   <div className="form-group">
@@ -248,42 +365,83 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <input type="date" name="fechaServicio" className="form-control" value={formData.fechaServicio} onChange={handleChange} required />
                     {buscandoTC ? <small style={{color: '#58a6ff'}}>Buscando TC...</small> : <small style={{color: tipoCambioDia ? '#3fb950' : '#f85149'}}>TC Oficial: {tipoCambioDia ? `$${tipoCambioDia}` : 'Sin Registro'}</small>}
                   </div>
-                  <div className="form-group">
+
+                  {/* ✅ BUSCADOR AVANZADO: CLIENTE PAGA */}
+                  <div className="form-group" style={{ position: 'relative' }}>
                     <label className="form-label">Cliente (Paga)</label>
-                    <select name="clientePaga" className="form-control" value={formData.clientePaga} onChange={handleChange} required>
-                      <option value="">-- Seleccionar (7eec9cbb) --</option>
-                      {filClientesPaga.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                    </select>
+                    <input 
+                      type="text" className="form-control" placeholder="Buscar cliente..." required={!formData.clientePaga}
+                      value={searchClientePaga} onChange={e => { setSearchClientePaga(e.target.value); setShowDropdownClientePaga(true); }}
+                      onFocus={() => setShowDropdownClientePaga(true)}
+                    />
+                    {showDropdownClientePaga && searchClientePaga && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
+                        {resultadosClientePaga.map(c => (
+                          <div key={c.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} 
+                               onClick={() => { setFormData(prev => ({...prev, clientePaga: c.id, convenio: ''})); setSearchClientePaga(c.nombre); setShowDropdownClientePaga(false); }}>
+                            <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{c.nombre}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+
+                  {/* ✅ CONVENIO DINÁMICO (Se llena basado en el Cliente Paga) */}
                   <div className="form-group">
-                    <label className="form-label">Convenio</label>
-                    <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required>
-                      <option value="">-- Seleccionar --</option>
-                      {tarifas.map(t => <option key={t.id} value={t.id}>{t.descripcion}</option>)}
+                    <label className="form-label">Convenio (Tarifa)</label>
+                    <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required disabled={!formData.clientePaga}>
+                      <option value="">-- Seleccione un Convenio --</option>
+                      {listaConveniosCliente.map(c => (
+                        <option key={c.id} value={c.id}>{c.descripcion}</option>
+                      ))}
                     </select>
+                    {!formData.clientePaga && <small style={{color: '#8b949e'}}>Seleccione Cliente Paga primero</small>}
                   </div>
-                  <div className="form-group">
+
+                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                    <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', padding: '12px 16px', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ color: '#8b949e', fontSize: '0.85rem' }}>Flujo Detectado:</span>
+                      {resolviendoConvenio ? (
+                        <span style={{ color: '#D84315', fontSize: '0.9rem' }}>Evaluando convenios...</span>
+                      ) : formData.tipoServicio && formData.tipoServicio !== 'N/A' ? (
+                        <span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                          {formData.tipoServicio} | {formData.trafico} | {formData.carga}
+                        </span>
+                      ) : (
+                        <span style={{ color: '#8b949e', fontStyle: 'italic', fontSize: '0.9rem' }}>Esperando selección de Convenio</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ✅ BUSCADOR AVANZADO: REMOLQUE */}
+                  <div className="form-group" style={{ position: 'relative' }}>
                     <label className="form-label"># de Remolque</label>
-                    <select name="numeroRemolque" className="form-control" value={formData.numeroRemolque} onChange={handleChange}>
-                      <option value="">-- Seleccionar --</option>
-                      {remolques.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
-                    </select>
+                    <input 
+                      type="text" className="form-control" placeholder="Buscar remolque..."
+                      value={searchRemolque} onChange={e => { setSearchRemolque(e.target.value); setShowDropdownRemolque(true); }}
+                      onFocus={() => setShowDropdownRemolque(true)}
+                    />
+                    {showDropdownRemolque && searchRemolque && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
+                        {resultadosRemolque.map(r => (
+                          <div key={r.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} 
+                               onClick={() => { setFormData(prev => ({...prev, numeroRemolque: r.id})); setSearchRemolque(r.nombre); setShowDropdownRemolque(false); }}>
+                            <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{r.nombre}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                  
                   <div className="form-group"><label className="form-label">Ref Cliente</label><input type="text" name="refCliente" className="form-control" value={formData.refCliente} onChange={handleChange} /></div>
                   
-                  {/* BUSCADOR AVANZADO: ORIGEN */}
                   <div className="form-group" style={{ position: 'relative' }}>
-                    <label className="form-label orange">Origen (Busca por nombre o dir.)</label>
-                    <input 
-                      type="text" className="form-control" placeholder="Buscar origen..."
-                      value={searchOrigen} onChange={e => { setSearchOrigen(e.target.value); setShowDropdownOrigen(true); }}
-                      onFocus={() => setShowDropdownOrigen(true)}
-                    />
+                    <label className="form-label orange">Origen</label>
+                    <input type="text" className="form-control" placeholder="Buscar origen..." value={searchOrigen} onChange={e => { setSearchOrigen(e.target.value); setShowDropdownOrigen(true); }} onFocus={() => setShowDropdownOrigen(true)} />
                     {showDropdownOrigen && searchOrigen && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
                         {resultadosOrigen.map(o => (
-                          <div key={o.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} 
-                               onClick={() => { setFormData(prev => ({...prev, origen: o.id})); setSearchOrigen(o.nombre); setShowDropdownOrigen(false); }}>
+                          <div key={o.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} onClick={() => { setFormData(prev => ({...prev, origen: o.id})); setSearchOrigen(o.nombre); setShowDropdownOrigen(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{o.nombre}</div>
                             <div style={{ fontSize: '0.8rem', color: '#8b949e' }}>{o.direccion}</div>
                           </div>
@@ -292,19 +450,13 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     )}
                   </div>
 
-                  {/* BUSCADOR AVANZADO: DESTINO */}
                   <div className="form-group" style={{ position: 'relative' }}>
-                    <label className="form-label orange">Destino (Busca por nombre o dir.)</label>
-                    <input 
-                      type="text" className="form-control" placeholder="Buscar destino..."
-                      value={searchDestino} onChange={e => { setSearchDestino(e.target.value); setShowDropdownDestino(true); }}
-                      onFocus={() => setShowDropdownDestino(true)}
-                    />
+                    <label className="form-label orange">Destino</label>
+                    <input type="text" className="form-control" placeholder="Buscar destino..." value={searchDestino} onChange={e => { setSearchDestino(e.target.value); setShowDropdownDestino(true); }} onFocus={() => setShowDropdownDestino(true)} />
                     {showDropdownDestino && searchDestino && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
                         {resultadosDestino.map(d => (
-                          <div key={d.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} 
-                               onClick={() => { setFormData(prev => ({...prev, destino: d.id})); setSearchDestino(d.nombre); setShowDropdownDestino(false); }}>
+                          <div key={d.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} onClick={() => { setFormData(prev => ({...prev, destino: d.id})); setSearchDestino(d.nombre); setShowDropdownDestino(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{d.nombre}</div>
                             <div style={{ fontSize: '0.8rem', color: '#8b949e' }}>{d.direccion}</div>
                           </div>
@@ -317,7 +469,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                 </div>
               )}
 
-              {/* ================= PESTAÑA 2: PEDIMENTO Y CT ================= */}
               {pestañaActiva === 'pedimento' && (
                 <div className="form-grid">
                   <div className="form-group" style={{ gridColumn: 'span 2' }}>
@@ -344,7 +495,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                 </div>
               )}
 
-              {/* ================= PESTAÑA 3: ENTRY'S Y MANIFIESTO ================= */}
               {pestañaActiva === 'manifiesto' && (
                 <div className="form-grid">
                   <div className="form-group">
@@ -378,7 +528,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                 </div>
               )}
 
-              {/* ================= PESTAÑA 4: UNIDAD Y OPERADOR ================= */}
               {pestañaActiva === 'unidad' && (
                 <div className="form-grid">
                   
