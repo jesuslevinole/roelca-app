@@ -1,6 +1,6 @@
 // src/features/operaciones/components/FormularioOperacion.tsx
 import { useState, useEffect } from 'react'; 
-import { collection, doc, getDoc, getDocs, query, where, limit } from 'firebase/firestore'; 
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore'; 
 import { db } from '../../../config/firebase';
 import { guardarOperacionSegura } from '../services/operacionesService';
 import { calcularStatusDinamico } from '../config/statusRules'; 
@@ -25,6 +25,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [cargandoCatalogos, setCargandoCatalogos] = useState(true);
   const [resolviendoConvenio, setResolviendoConvenio] = useState(false);
 
+  // Catálogos Generales
   const [empresas, setEmpresas] = useState<any[]>([]);
   const [tiposOperacion, setTiposOperacion] = useState<any[]>([]);
   const [embalajes, setEmbalajes] = useState<any[]>([]);
@@ -32,7 +33,10 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [tarifas, setTarifas] = useState<any[]>([]);
   const [conveniosProv, setConveniosProv] = useState<any[]>([]);
   
-  // Catálogo dinámico de convenios del cliente seleccionado
+  // ✅ NUEVOS: Catálogos descargados completos para búsqueda "A prueba de balas"
+  const [catalogoTC, setCatalogoTC] = useState<any[]>([]);
+  const [catalogoConvClientes, setCatalogoConvClientes] = useState<any[]>([]);
+  const [catalogoConvDetalles, setCatalogoConvDetalles] = useState<any[]>([]);
   const [listaConveniosCliente, setListaConveniosCliente] = useState<any[]>([]);
   
   const [tipoCambioDia, setTipoCambioDia] = useState<number | null>(null);
@@ -74,13 +78,16 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     const fetchCatalogos = async () => {
       setCargandoCatalogos(true);
       try {
-        const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap] = await Promise.all([
+        const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap] = await Promise.all([
           getDocs(collection(db, 'empresas')),
           getDocs(collection(db, 'catalogo_tipo_operacion')),
           getDocs(collection(db, 'catalogo_embalaje')),
           getDocs(collection(db, 'remolques')), 
           getDocs(collection(db, 'tarifas_referencia')),
-          getDocs(collection(db, 'convenios_proveedores'))
+          getDocs(collection(db, 'convenios_proveedores')),
+          getDocs(collection(db, 'tipo_cambio')),
+          getDocs(collection(db, 'convenios_clientes')),
+          getDocs(collection(db, 'convenios_clientes_detalles'))
         ]);
 
         setEmpresas(empSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
@@ -95,6 +102,11 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
         setRemolques(remSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
         setTarifas(tarSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
         setConveniosProv(convProvSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+        
+        // Bases de datos descargadas para búsqueda en memoria (Evita problemas de AppSheet)
+        setCatalogoTC(tcSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+        setCatalogoConvClientes(convCliSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+        setCatalogoConvDetalles(convDetSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
 
       } catch (error) {
         console.error("Error cargando catálogos", error);
@@ -104,91 +116,90 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     fetchCatalogos();
   }, []);
 
-  // ✅ BÚSQUEDA DE TIPO DE CAMBIO CON REPARACIÓN DE FORMATO DE FECHA (YYYY-MM-DD -> DD/MM/YYYY)
+  // ✅ BUSCADOR TIPO DE CAMBIO (Busca en múltiples formatos y nombres de columna)
   useEffect(() => {
-    const buscarTC = async () => {
-      if (!formData.fechaServicio) return;
-      setBuscandoTC(true);
-      try {
-        // Convertimos "2026-04-10" a "10/04/2026" para que coincida con AppSheet
-        const [year, month, day] = formData.fechaServicio.split('-');
-        const fechaFormateada = `${day}/${month}/${year}`;
+    if (!formData.fechaServicio || catalogoTC.length === 0) return;
+    setBuscandoTC(true);
+    
+    // Convertimos la fecha (ej. "2026-04-10") a varios formatos posibles de AppSheet
+    const [y, m, d] = formData.fechaServicio.split('-');
+    const formatosPosibles = [
+      `${d}/${m}/${y}`, `${m}/${d}/${y}`, `${y}-${m}-${d}`, 
+      `${d}-${m}-${y}`, formData.fechaServicio
+    ];
 
-        const q = query(collection(db, 'tipo_cambio'), where('fecha', '==', fechaFormateada), limit(1));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          setTipoCambioDia(snap.docs[0].data().valor);
-        } else {
-          setTipoCambioDia(null); 
-        }
-      } catch (error) {
-        console.error("Error buscando TC", error);
+    let tcEncontrado = null;
+
+    for (const tc of catalogoTC) {
+      // Intentamos con todos los nombres de columna posibles de fecha
+      const fechaVal = String(tc.fecha || tc.Fecha || tc.FECHA || tc.Date || '').trim();
+      
+      if (formatosPosibles.includes(fechaVal) || fechaVal.includes(formData.fechaServicio)) {
+        // Encontramos el día, ahora extraemos el valor numérico
+        const valorRaw = tc.valor || tc.Valor || tc.VALOR || tc['T.C. DOF'] || tc['T.C. DOF'] || tc.tc || tc.TC;
+        tcEncontrado = Number(String(valorRaw).replace(/[^0-9.-]+/g,"")) || null;
+        break;
       }
-      setBuscandoTC(false);
-    };
-    buscarTC();
-  }, [formData.fechaServicio]);
+    }
 
-  // ✅ CASCADA: AL SELECCIONAR CLIENTE, BUSCAMOS SUS DETALLES DE CONVENIO
+    setTipoCambioDia(tcEncontrado);
+    setBuscandoTC(false);
+  }, [formData.fechaServicio, catalogoTC]);
+
+  // ✅ BUSCADOR DE CONVENIOS (A prueba de errores de mayúsculas en las columnas)
   useEffect(() => {
-    const cargarDetallesDeCliente = async () => {
-      if (!formData.clientePaga) {
-        setListaConveniosCliente([]);
-        return;
-      }
-      try {
-        // 1. Buscamos el Convenio Maestro del Cliente
-        const qMaster = query(collection(db, 'convenios_clientes'), where('cliente', '==', formData.clientePaga), limit(1));
-        const masterSnap = await getDocs(qMaster);
-        
-        if (masterSnap.empty) {
-          setListaConveniosCliente([]);
-          return;
-        }
-        
-        const convenioMasterId = masterSnap.docs[0].id;
+    if (!formData.clientePaga || catalogoConvClientes.length === 0) {
+      setListaConveniosCliente([]);
+      return;
+    }
 
-        // 2. Buscamos los Detalles que pertenecen a ese Convenio Maestro
-        const qDetalles = query(collection(db, 'convenios_clientes_detalles'), where('convenioId', '==', convenioMasterId));
-        const detallesSnap = await getDocs(qDetalles);
+    const clientId = formData.clientePaga;
+
+    // 1. Buscamos el Convenio Maestro comprobando varios nombres de columna
+    const master = catalogoConvClientes.find(c => 
+      c.cliente === clientId || c.Cliente === clientId || c.CLIENTE === clientId || 
+      c.id_cliente === clientId || c.empresa === clientId
+    );
+
+    if (master) {
+      const masterId = master.id;
+
+      // 2. Filtramos los Detalles de ese convenio
+      const detalles = catalogoConvDetalles.filter(d => 
+        d.convenioId === masterId || d.convenio === masterId || 
+        d.id_convenio === masterId || d.Convenio === masterId || d.CONVENIO === masterId
+      );
+
+      // 3. Mapeamos y cruzamos con Tarifas de Referencia
+      const mapped = detalles.map(d => {
+        const tarifaId = d.tipo_convenio || d.tarifaId || d.tarifa || d.Tipo_Convenio || d['TIPO DE CONVENIO'] || d.TIPO_DE_CONVENIO;
+        const tObj = tarifas.find(t => t.id === tarifaId);
         
-        // 3. Mapeamos y cruzamos con Tarifas de Referencia para tener el nombre legible
-        const detalles = detallesSnap.docs.map(d => {
-          const data = d.data() as any;
-          // Asumimos que el detalle tiene un campo 'tipo_convenio' o 'tarifaId' que apunta a tarifas_referencia
-          const tarifaBaseId = data.tipo_convenio || data.tarifaId || data.tarifa; 
-          const tarifaObj = tarifas.find(t => t.id === tarifaBaseId);
-          
-          return {
-            id: d.id,
-            tarifaBaseId: tarifaBaseId,
-            descripcion: tarifaObj ? tarifaObj.descripcion : `Detalle (${data.tarifa || 'Sin Tarifa'})`,
-            ...data
-          };
-        });
+        return {
+          id: d.id,
+          tarifaBaseId: tarifaId,
+          descripcion: tObj ? tObj.descripcion : `Detalle (${tarifaId || 'Sin Tarifa'})`,
+          ...d
+        };
+      });
 
-        setListaConveniosCliente(detalles);
-      } catch (error) {
-        console.error("Error cargando convenios del cliente:", error);
-      }
-    };
-    cargarDetallesDeCliente();
-  }, [formData.clientePaga, tarifas]);
+      setListaConveniosCliente(mapped);
+    } else {
+      setListaConveniosCliente([]);
+    }
+  }, [formData.clientePaga, catalogoConvClientes, catalogoConvDetalles, tarifas]);
 
-  // ✅ INDIRECCIÓN DE REGLAS: DETALLE -> TARIFA_REFERENCIA -> TIPO_TARIFARIO
+  // Resolución de Llave Compuesta (Servicio_Trafico_Carga)
   useEffect(() => {
     const resolverVariablesDeFlujo = async () => {
       if (!formData.convenio) return;
       
       setResolviendoConvenio(true);
       try {
-        // En este punto, formData.convenio es el ID del convenios_clientes_detalles
         const detalleElegido = listaConveniosCliente.find(c => c.id === formData.convenio);
         if (!detalleElegido) return;
 
-        // Buscamos la Tarifa de Referencia asociada a ese detalle
-        const tarifaRefId = detalleElegido.tarifaBaseId;
-        const tarifaObj = tarifas.find(t => t.id === tarifaRefId);
+        const tarifaObj = tarifas.find(t => t.id === detalleElegido.tarifaBaseId);
 
         if (tarifaObj) {
           const cargaDetectada = tarifaObj.estado_carga || 'N/A'; 
@@ -215,7 +226,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           }));
         }
       } catch (error) {
-        console.error("Error resolviendo la lógica del convenio:", error);
+        console.error("Error resolviendo la lógica:", error);
       } finally {
         setResolviendoConvenio(false);
       }
@@ -224,15 +235,14 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     resolverVariablesDeFlujo();
   }, [formData.convenio, listaConveniosCliente, tarifas]);
 
+  // Cálculos de Moneda Proveedor
   useEffect(() => {
     const facturadoEn = formData.facturadoEnUnidad;
     const monedaConv = formData.monedaConvenioProv;
     const total = Number(formData.totalAPagarProv) || 0;
     const tc = tipoCambioDia || 0;
 
-    let dolares = 0;
-    let pesos = 0;
-    let conversion = 0;
+    let dolares = 0; let pesos = 0; let conversion = 0;
 
     if (tc > 0) {
       if (facturadoEn === ID_USD && monedaConv === ID_USD) dolares = total;
@@ -264,35 +274,22 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   };
 
-  // ✅ FILTROS BÁSICOS DE EMPRESAS
+  // Filtros de Búsqueda
   const filClientesPaga = empresas.filter(e => e.tiposEmpresa?.includes('7eec9cbb'));
   const filClientesMercancia = empresas.filter(e => e.tiposEmpresa?.includes('51246232'));
   const filProveedoresServicios = empresas.filter(e => e.tiposEmpresa?.includes('11894dfd'));
   const filOrigenesDestinos = empresas.filter(e => e.tiposEmpresa?.includes('6e7af5ab'));
 
-  // ✅ FILTROS PARA BUSCADORES TEXTO LIBRE
-  const resultadosOrigen = filOrigenesDestinos.filter(e => 
-    e.nombre?.toLowerCase().includes(searchOrigen.toLowerCase()) || e.direccion?.toLowerCase().includes(searchOrigen.toLowerCase())
-  );
-  const resultadosDestino = filOrigenesDestinos.filter(e => 
-    e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || e.direccion?.toLowerCase().includes(searchDestino.toLowerCase())
-  );
-  const resultadosClientePaga = filClientesPaga.filter(e => 
-    e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase())
-  );
-  const resultadosRemolque = remolques.filter(e => 
-    e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase())
-  );
+  const resultadosOrigen = filOrigenesDestinos.filter(e => e.nombre?.toLowerCase().includes(searchOrigen.toLowerCase()) || e.direccion?.toLowerCase().includes(searchOrigen.toLowerCase()));
+  const resultadosDestino = filOrigenesDestinos.filter(e => e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || e.direccion?.toLowerCase().includes(searchDestino.toLowerCase()));
+  const resultadosClientePaga = filClientesPaga.filter(e => e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase()));
+  const resultadosRemolque = remolques.filter(e => e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase()));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!tipoCambioDia) {
-      return alert(`⛔ Imposible Guardar: No existe un Tipo de Cambio registrado para la fecha seleccionada. Por favor registre el TC primero.`);
-    }
-
-    if (!formData.tipoServicio || formData.tipoServicio === 'N/A') {
-      alert("Advertencia: El convenio seleccionado no resolvió una configuración válida. El flujo de estatus podría fallar.");
+      return alert(`⛔ Imposible Guardar: No existe un Tipo de Cambio registrado para la fecha seleccionada.`);
     }
 
     setCargando(true);
@@ -360,23 +357,29 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                       {tiposOperacion.map(op => <option key={op.id} value={op.id}>{op.tipo_operacion}</option>)}
                     </select>
                   </div>
+                  
                   <div className="form-group">
                     <label className="form-label orange">Fecha de Servicio</label>
                     <input type="date" name="fechaServicio" className="form-control" value={formData.fechaServicio} onChange={handleChange} required />
-                    {buscandoTC ? <small style={{color: '#58a6ff'}}>Buscando TC...</small> : <small style={{color: tipoCambioDia ? '#3fb950' : '#f85149'}}>TC Oficial: {tipoCambioDia ? `$${tipoCambioDia}` : 'Sin Registro'}</small>}
+                    {buscandoTC ? <small style={{color: '#58a6ff'}}>Buscando TC...</small> : <small style={{color: tipoCambioDia ? '#3fb950' : '#f85149', fontWeight: 'bold'}}>TC Oficial: {tipoCambioDia ? `$${tipoCambioDia}` : 'Sin Registro'}</small>}
                   </div>
 
                   {/* ✅ BUSCADOR AVANZADO: CLIENTE PAGA */}
                   <div className="form-group" style={{ position: 'relative' }}>
                     <label className="form-label">Cliente (Paga)</label>
                     <input 
-                      type="text" className="form-control" placeholder="Buscar cliente..." required={!formData.clientePaga}
-                      value={searchClientePaga} onChange={e => { setSearchClientePaga(e.target.value); setShowDropdownClientePaga(true); }}
+                      type="text" className="form-control" placeholder="Escriba para buscar cliente..." required={!formData.clientePaga}
+                      value={searchClientePaga} 
+                      onChange={e => { 
+                        setSearchClientePaga(e.target.value); 
+                        setShowDropdownClientePaga(true);
+                        if (formData.clientePaga) setFormData(prev => ({...prev, clientePaga: '', convenio: ''})); 
+                      }}
                       onFocus={() => setShowDropdownClientePaga(true)}
                     />
                     {showDropdownClientePaga && searchClientePaga && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosClientePaga.map(c => (
+                        {resultadosClientePaga.length === 0 ? <div style={{padding: '8px', color: '#8b949e'}}>Sin resultados</div> : resultadosClientePaga.map(c => (
                           <div key={c.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} 
                                onClick={() => { setFormData(prev => ({...prev, clientePaga: c.id, convenio: ''})); setSearchClientePaga(c.nombre); setShowDropdownClientePaga(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{c.nombre}</div>
@@ -386,7 +389,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     )}
                   </div>
 
-                  {/* ✅ CONVENIO DINÁMICO (Se llena basado en el Cliente Paga) */}
+                  {/* CONVENIO DINÁMICO */}
                   <div className="form-group">
                     <label className="form-label">Convenio (Tarifa)</label>
                     <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required disabled={!formData.clientePaga}>
@@ -402,7 +405,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', padding: '12px 16px', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <span style={{ color: '#8b949e', fontSize: '0.85rem' }}>Flujo Detectado:</span>
                       {resolviendoConvenio ? (
-                        <span style={{ color: '#D84315', fontSize: '0.9rem' }}>Evaluando convenios...</span>
+                        <span style={{ color: '#D84315', fontSize: '0.9rem' }}>Evaluando catálogos...</span>
                       ) : formData.tipoServicio && formData.tipoServicio !== 'N/A' ? (
                         <span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '0.9rem' }}>
                           {formData.tipoServicio} | {formData.trafico} | {formData.carga}
@@ -418,12 +421,17 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <label className="form-label"># de Remolque</label>
                     <input 
                       type="text" className="form-control" placeholder="Buscar remolque..."
-                      value={searchRemolque} onChange={e => { setSearchRemolque(e.target.value); setShowDropdownRemolque(true); }}
+                      value={searchRemolque} 
+                      onChange={e => { 
+                        setSearchRemolque(e.target.value); 
+                        setShowDropdownRemolque(true);
+                        if (formData.numeroRemolque) setFormData(prev => ({...prev, numeroRemolque: ''})); 
+                      }}
                       onFocus={() => setShowDropdownRemolque(true)}
                     />
                     {showDropdownRemolque && searchRemolque && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosRemolque.map(r => (
+                        {resultadosRemolque.length === 0 ? <div style={{padding: '8px', color: '#8b949e'}}>Sin resultados</div> : resultadosRemolque.map(r => (
                           <div key={r.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} 
                                onClick={() => { setFormData(prev => ({...prev, numeroRemolque: r.id})); setSearchRemolque(r.nombre); setShowDropdownRemolque(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{r.nombre}</div>
@@ -577,8 +585,8 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
 
             <div className="form-actions" style={{ marginTop: '16px' }}>
               <button type="button" onClick={onClose} className="btn btn-outline">Cancelar</button>
-              <button type="submit" className="btn btn-primary" disabled={cargando}>
-                {cargando ? 'Guardando...' : (initialData ? 'Guardar Cambios' : 'Guardar Operación')}
+              <button type="submit" className="btn btn-primary" disabled={cargando || resolviendoConvenio}>
+                {cargando ? 'Evaluando Reglas...' : resolviendoConvenio ? 'Calculando Flujo...' : (initialData ? 'Guardar Cambios' : 'Guardar Operación')}
               </button>
             </div>
           </form>
