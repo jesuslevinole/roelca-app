@@ -1,6 +1,6 @@
 // src/features/operaciones/components/FormularioOperacion.tsx
 import { useState, useEffect } from 'react';
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
 import { guardarOperacionSegura } from '../services/operacionesService';
 import { calcularStatusDinamico } from '../config/statusRules';
@@ -12,6 +12,8 @@ interface FormProps {
   onClose: () => void;
   onMinimize: () => void;
   onRestore: () => void;
+  // Recibimos los catálogos cacheados por Props para ahorrar cuota
+  catalogosCacheados: any;
 }
 
 type TabType = 'general' | 'pedimento' | 'manifiesto' | 'unidad' | 'cobrar';
@@ -19,28 +21,28 @@ type TabType = 'general' | 'pedimento' | 'manifiesto' | 'unidad' | 'cobrar';
 const ID_USD = '7dca62b3';
 const ID_MXN = 'f95d8894';
 
-export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, onRestore }: FormProps) => {
+export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, onRestore, catalogosCacheados }: FormProps) => {
   const [pestañaActiva, setPestañaActiva] = useState<TabType>('general');
   const [cargando, setCargando] = useState(false);
-  const [cargandoCatalogos, setCargandoCatalogos] = useState(true);
   const [resolviendoConvenio, setResolviendoConvenio] = useState(false);
 
-  const [empresas, setEmpresas] = useState<any[]>([]);
-  const [tiposOperacion, setTiposOperacion] = useState<any[]>([]);
-  const [embalajes, setEmbalajes] = useState<any[]>([]);
-  const [remolques, setRemolques] = useState<any[]>([]);
-  const [tarifas, setTarifas] = useState<any[]>([]);
-  const [conveniosProv, setConveniosProv] = useState<any[]>([]);
+  // Destructuramos el regalo del padre
+  const {
+    empresas,
+    tiposOperacion,
+    embalajes,
+    remolques,
+    tarifas,
+    conveniosProv,
+    catalogoTC,
+    catalogoConvClientes,
+    catalogoConvDetalles
+  } = catalogosCacheados || {};
 
-  const [catalogoTC, setCatalogoTC] = useState<any[]>([]);
-  const [catalogoConvClientes, setCatalogoConvClientes] = useState<any[]>([]);
-  const [catalogoConvDetalles, setCatalogoConvDetalles] = useState<any[]>([]);
   const [listaConveniosCliente, setListaConveniosCliente] = useState<any[]>([]);
-
   const [tipoCambioDia, setTipoCambioDia] = useState<number | null>(null);
   const [buscandoTC, setBuscandoTC] = useState(false);
 
-  // Estados para Buscadores Personalizados
   const [searchOrigen, setSearchOrigen] = useState('');
   const [showDropdownOrigen, setShowDropdownOrigen] = useState(false);
   const [searchDestino, setSearchDestino] = useState('');
@@ -51,76 +53,29 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [showDropdownRemolque, setShowDropdownRemolque] = useState(false);
   const [searchClienteMercancia, setSearchClienteMercancia] = useState('');
   const [showDropdownClienteMercancia, setShowDropdownClienteMercancia] = useState(false);
-  
-  // ✅ NUEVO: Estado para Buscador de Proveedor de Servicios
   const [searchProvServicios, setSearchProvServicios] = useState('');
   const [showDropdownProvServicios, setShowDropdownProvServicios] = useState(false);
+  const [searchProvTransporte, setSearchProvTransporte] = useState('');
+  const [showDropdownProvTransporte, setShowDropdownProvTransporte] = useState(false);
 
   const [formData, setFormData] = useState({
     tipoServicio: '', trafico: '', carga: '',
-
     tipoOperacionId: '',
     fechaServicio: new Date().toISOString().split('T')[0],
     clientePaga: '', convenio: '', numeroRemolque: '', refCliente: '',
     origen: '', destino: '', observacionesEjecutivo: '',
-
     clienteMercancia: '', descripcionMercancia: '', cantidad: '', embalaje: '',
     pesoKg: '', numDoda: '', fechaEmisionDoda: '',
     pdfCartaPorte: null as File | null, pdfDoda: null as File | null,
-
     cantEntrys: 0, numManifiesto: '', provServicios: '',
-    pdfManifiesto: null as File | null,
-    pdfsEntrys: [] as (File | null)[],
-
+    pdfManifiesto: null as File | null, pdfsEntrys: [] as (File | null)[],
     proveedorUnidad: '', facturadoEnUnidad: '', convenioProveedor: '', monedaConvenioProv: '',
-    totalAPagarProv: 0,
-    dolaresProv: 0, pesosProv: 0, conversionProv: 0,
+    totalAPagarProv: 0, dolaresProv: 0, pesosProv: 0, conversionProv: 0,
     unidad: '', operador: ''
   });
 
   useEffect(() => {
-    const fetchCatalogos = async () => {
-      setCargandoCatalogos(true);
-      try {
-        const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap] = await Promise.all([
-          getDocs(collection(db, 'empresas')),
-          getDocs(collection(db, 'catalogo_tipo_operacion')),
-          getDocs(collection(db, 'catalogo_embalaje')),
-          getDocs(collection(db, 'remolques')),
-          getDocs(collection(db, 'catalogo_tarifas_referencia')),
-          getDocs(collection(db, 'convenios_proveedores')),
-          getDocs(collection(db, 'tipo_cambio')),
-          getDocs(collection(db, 'convenios_clientes')),
-          getDocs(collection(db, 'convenios_clientes_detalles'))
-        ]);
-
-        setEmpresas(empSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-
-        const opsPermitidas = ['Transfer', 'Logistica', 'Logística', 'Fletes'];
-        setTiposOperacion(
-          opSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
-            .filter((op: any) => opsPermitidas.includes(op.tipo_operacion))
-        );
-
-        setEmbalajes(embSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-        setRemolques(remSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-        setTarifas(tarSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-        setConveniosProv(convProvSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-
-        setCatalogoTC(tcSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-        setCatalogoConvClientes(convCliSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-        setCatalogoConvDetalles(convDetSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-
-      } catch (error) {
-        console.error("Error cargando catálogos", error);
-      }
-      setCargandoCatalogos(false);
-    };
-    fetchCatalogos();
-  }, []);
-
-  useEffect(() => {
-    if (!formData.fechaServicio || catalogoTC.length === 0) return;
+    if (!formData.fechaServicio || !catalogoTC || catalogoTC.length === 0) return;
     setBuscandoTC(true);
 
     const [y, m, d] = formData.fechaServicio.split('-');
@@ -154,56 +109,41 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     setBuscandoTC(false);
   }, [formData.fechaServicio, catalogoTC]);
 
-  // ✅ CORRECCIÓN FINAL: Mapeo exacto de la lista de convenios
   useEffect(() => {
     let clientId = formData.clientePaga;
-    if (!clientId && searchClientePaga) {
-       const empresaEncontrada = empresas.find(e => e.nombre?.toLowerCase().trim() === searchClientePaga.toLowerCase().trim());
+    if (!clientId && searchClientePaga && empresas) {
+       const empresaEncontrada = empresas.find((e:any) => e.nombre?.toLowerCase().trim() === searchClientePaga.toLowerCase().trim());
        if (empresaEncontrada) clientId = empresaEncontrada.id;
     }
 
-    if (!clientId || catalogoConvClientes.length === 0) {
+    if (!clientId || !catalogoConvClientes || catalogoConvClientes.length === 0) {
       setListaConveniosCliente([]);
       return;
     }
 
-    const maestrosDelCliente = catalogoConvClientes.filter(c => {
+    const maestrosDelCliente = catalogoConvClientes.filter((c:any) => {
       const refVal = String(c.clienteId || c.cliente || c.Cliente || c.CLIENTE || c.id_cliente || c.empresa || '').trim();
       return refVal === clientId;
     });
 
     if (maestrosDelCliente.length > 0) {
-      const masterIds = maestrosDelCliente.map(m => String(m.id).trim());
-      const masterNames = maestrosDelCliente.map(m => String(m['# de Convenio'] || m.numeroConvenio || m.nombre || m.id).trim());
+      const masterIds = maestrosDelCliente.map((m:any) => String(m.id).trim());
+      const masterNames = maestrosDelCliente.map((m:any) => String(m['# de Convenio'] || m.numeroConvenio || m.nombre || m.id).trim());
 
-      const detalles = catalogoConvDetalles.filter(d => {
+      const detalles = catalogoConvDetalles.filter((d:any) => {
         const convRef = String(d.convenioId || d.convenio || d.id_convenio || d.Convenio || d.CONVENIO || '').trim();
         return masterIds.includes(convRef) || masterNames.includes(convRef);
       });
 
-      const mapped = detalles.map(d => {
-        // Obtenemos el valor bruto de la columna (evitando la columna de tarifa/precio)
-        const rawRef = d.tipoConvenioId || d.tipo_convenio_id || d.tipoConvenio || d.tipo_convenio || d['TIPO DE CONVENIO'];
-        
-        // Cruzamos con catalogo_tarifas_referencia
-        const tObj = tarifas.find(t => 
-          String(t.id).trim() === String(rawRef).trim() || 
-          String(t.descripcion).trim().toLowerCase() === String(rawRef).trim().toLowerCase()
-        );
+      const mapped = detalles.map((d:any) => {
+        const tarifaId = d.tipoConvenioId || d.tipo_convenio_id || d.tipoConvenio || d.tipo_convenio || d['TIPO DE CONVENIO'];
+        const tObj = tarifas?.find((t:any) => String(t.id).trim() === String(tarifaId).trim());
 
-        // Si existe en catálogo, usamos su descripción. Si no, usamos el texto literal (Ej: "Exportación Caja Cargada...")
-        let nombreVisible = '';
-        if (tObj && tObj.descripcion) {
-          nombreVisible = tObj.descripcion;
-        } else if (typeof rawRef === 'string' && isNaN(Number(rawRef))) {
-          nombreVisible = rawRef;
-        } else {
-          nombreVisible = `Convenio ID: ${rawRef || d.id}`;
-        }
+        const nombreVisible = tObj?.descripcion || tObj?.nombre || (tarifaId ? `Desconocido (${tarifaId})` : 'Sin Asignar');
 
         return {
           id: d.id,
-          tarifaBaseId: tObj ? tObj.id : rawRef,
+          tarifaBaseId: tarifaId,
           descripcion: nombreVisible,
           ...d
         };
@@ -221,10 +161,10 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
 
       setResolviendoConvenio(true);
       try {
-        const detalleElegido = listaConveniosCliente.find(c => c.id === formData.convenio);
+        const detalleElegido = listaConveniosCliente.find((c:any) => c.id === formData.convenio);
         if (!detalleElegido) return;
 
-        const tarifaObj = tarifas.find(t => t.id === detalleElegido.tarifaBaseId);
+        const tarifaObj = tarifas?.find((t:any) => t.id === detalleElegido.tarifaBaseId);
 
         if (tarifaObj) {
           const cargaDetectada = tarifaObj.estado_carga || 'N/A';
@@ -298,21 +238,19 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   };
 
-  // Filtros de Catálogos (Empresas)
-  const filClientesPaga = empresas.filter(e => e.tiposEmpresa?.includes('7eec9cbb'));
-  const filClientesMercancia = empresas.filter(e => e.tiposEmpresa?.includes('51246232'));
-  const filProveedoresServicios = empresas.filter(e => e.tiposEmpresa?.includes('11894dfd'));
-  const filOrigenesDestinos = empresas.filter(e => e.tiposEmpresa?.includes('6e7af5ab'));
+  const filClientesPaga = empresas?.filter((e:any) => e.tiposEmpresa?.includes('7eec9cbb')) || [];
+  const filClientesMercancia = empresas?.filter((e:any) => e.tiposEmpresa?.includes('51246232')) || [];
+  const filProveedoresServicios = empresas?.filter((e:any) => e.tiposEmpresa?.includes('11894dfd')) || [];
+  const filOrigenesDestinos = empresas?.filter((e:any) => e.tiposEmpresa?.includes('6e7af5ab')) || [];
+  const filProveedoresTransporte = empresas?.filter((e:any) => e.tiposEmpresa?.includes('ca21ab07')) || []; 
 
-  // Resultados de Búsqueda
-  const resultadosOrigen = filOrigenesDestinos.filter(e => e.nombre?.toLowerCase().includes(searchOrigen.toLowerCase()) || e.direccion?.toLowerCase().includes(searchOrigen.toLowerCase()));
-  const resultadosDestino = filOrigenesDestinos.filter(e => e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || e.direccion?.toLowerCase().includes(searchDestino.toLowerCase()));
-  const resultadosClientePaga = filClientesPaga.filter(e => e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase()));
-  const resultadosRemolque = remolques.filter(e => e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase()));
-  const resultadosClienteMercancia = filClientesMercancia.filter(e => e.nombre?.toLowerCase().includes(searchClienteMercancia.toLowerCase()));
-  
-  // ✅ RESULTADOS BUSCADOR DE PROVEEDORES DE SERVICIO
-  const resultadosProvServicios = filProveedoresServicios.filter(e => e.nombre?.toLowerCase().includes(searchProvServicios.toLowerCase()));
+  const resultadosOrigen = filOrigenesDestinos.filter((e:any) => e.nombre?.toLowerCase().includes(searchOrigen.toLowerCase()) || e.direccion?.toLowerCase().includes(searchOrigen.toLowerCase()));
+  const resultadosDestino = filOrigenesDestinos.filter((e:any) => e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || e.direccion?.toLowerCase().includes(searchDestino.toLowerCase()));
+  const resultadosClientePaga = filClientesPaga.filter((e:any) => e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase()));
+  const resultadosRemolque = remolques?.filter((e:any) => e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase())) || [];
+  const resultadosClienteMercancia = filClientesMercancia.filter((e:any) => e.nombre?.toLowerCase().includes(searchClienteMercancia.toLowerCase()));
+  const resultadosProvServicios = filProveedoresServicios.filter((e:any) => e.nombre?.toLowerCase().includes(searchProvServicios.toLowerCase()));
+  const resultadosProvTransporte = filProveedoresTransporte.filter((e:any) => e.nombre?.toLowerCase().includes(searchProvTransporte.toLowerCase()));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -326,7 +264,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
       const configId = `${formData.tipoServicio}_${formData.trafico}_${formData.carga}`;
       const statusCalculado = await calcularStatusDinamico(configId, formData, initialData?.status);
 
-      const detalleDoc = listaConveniosCliente.find(c => c.id === formData.convenio);
+      const detalleDoc = listaConveniosCliente.find((c:any) => c.id === formData.convenio);
 
       const { pdfCartaPorte, pdfDoda, pdfManifiesto, pdfsEntrys, ...datosLimpios } = formData;
 
@@ -352,7 +290,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   };
 
-  if (cargandoCatalogos) return <div className={`modal-overlay`}><div className="form-card" style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Cargando módulos y catálogos...</div></div>;
+  if (!catalogosCacheados || !catalogosCacheados.empresas) return <div className={`modal-overlay`}><div className="form-card" style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Cargando catálogos de Roelca...</div></div>;
 
   return (
     <div className={`modal-overlay ${estado === 'minimizado' ? 'minimized' : ''}`}>
@@ -386,7 +324,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <label className="form-label orange">Tipo de Operación</label>
                     <select name="tipoOperacionId" className="form-control" value={formData.tipoOperacionId} onChange={handleChange} required>
                       <option value="">-- Seleccionar --</option>
-                      {tiposOperacion.map(op => <option key={op.id} value={op.id}>{op.tipo_operacion}</option>)}
+                      {tiposOperacion?.map((op:any) => <option key={op.id} value={op.id}>{op.tipo_operacion}</option>)}
                     </select>
                   </div>
 
@@ -410,7 +348,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     />
                     {showDropdownClientePaga && searchClientePaga && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosClientePaga.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosClientePaga.map(c => (
+                        {resultadosClientePaga.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosClientePaga.map((c:any) => (
                           <div key={c.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}
                             onClick={() => { setFormData(prev => ({ ...prev, clientePaga: c.id, convenio: '' })); setSearchClientePaga(c.nombre); setShowDropdownClientePaga(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{c.nombre}</div>
@@ -424,7 +362,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <label className="form-label">Convenio (Tarifa)</label>
                     <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required disabled={listaConveniosCliente.length === 0}>
                       <option value="">-- Seleccione un Convenio --</option>
-                      {listaConveniosCliente.map(c => (
+                      {listaConveniosCliente.map((c:any) => (
                         <option key={c.id} value={c.id}>{c.descripcion}</option>
                       ))}
                     </select>
@@ -445,7 +383,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     />
                     {showDropdownRemolque && searchRemolque && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosRemolque.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosRemolque.map(r => (
+                        {resultadosRemolque.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosRemolque.map((r:any) => (
                           <div key={r.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}
                             onClick={() => { setFormData(prev => ({ ...prev, numeroRemolque: r.id })); setSearchRemolque(r.nombre); setShowDropdownRemolque(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{r.nombre}</div>
@@ -462,7 +400,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <input type="text" className="form-control" placeholder="Buscar origen..." value={searchOrigen} onChange={e => { setSearchOrigen(e.target.value); setShowDropdownOrigen(true); }} onFocus={() => setShowDropdownOrigen(true)} />
                     {showDropdownOrigen && searchOrigen && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosOrigen.map(o => (
+                        {resultadosOrigen.map((o:any) => (
                           <div key={o.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} onClick={() => { setFormData(prev => ({ ...prev, origen: o.id })); setSearchOrigen(o.nombre); setShowDropdownOrigen(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{o.nombre}</div>
                             <div style={{ fontSize: '0.8rem', color: '#8b949e' }}>{o.direccion}</div>
@@ -477,7 +415,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <input type="text" className="form-control" placeholder="Buscar destino..." value={searchDestino} onChange={e => { setSearchDestino(e.target.value); setShowDropdownDestino(true); }} onFocus={() => setShowDropdownDestino(true)} />
                     {showDropdownDestino && searchDestino && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosDestino.map(d => (
+                        {resultadosDestino.map((d:any) => (
                           <div key={d.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} onClick={() => { setFormData(prev => ({ ...prev, destino: d.id })); setSearchDestino(d.nombre); setShowDropdownDestino(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{d.nombre}</div>
                             <div style={{ fontSize: '0.8rem', color: '#8b949e' }}>{d.direccion}</div>
@@ -510,7 +448,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     />
                     {showDropdownClienteMercancia && searchClienteMercancia && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosClienteMercancia.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosClienteMercancia.map(c => (
+                        {resultadosClienteMercancia.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosClienteMercancia.map((c:any) => (
                           <div key={c.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}
                             onClick={() => { setFormData(prev => ({ ...prev, clienteMercancia: c.id })); setSearchClienteMercancia(c.nombre); setShowDropdownClienteMercancia(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{c.nombre}</div>
@@ -526,7 +464,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <label className="form-label">Embalaje</label>
                     <select name="embalaje" className="form-control" value={formData.embalaje} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
-                      {embalajes.map(e => <option key={e.id} value={e.id}>{e.clave}</option>)}
+                      {embalajes?.map((e:any) => <option key={e.id} value={e.id}>{e.clave}</option>)}
                     </select>
                   </div>
                   <div className="form-group"><label className="form-label">Peso (Kg) Decimales</label><input type="number" step="0.01" name="pesoKg" className="form-control" value={formData.pesoKg} onChange={handleChange} /></div>
@@ -563,7 +501,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
 
                   <div className="form-group"><label className="form-label"># Manifiesto</label><input type="text" name="numManifiesto" className="form-control" value={formData.numManifiesto} onChange={handleChange} /></div>
                   
-                  {/* ✅ NUEVO BUSCADOR: PROVEEDOR DE SERVICIOS */}
                   <div className="form-group" style={{ position: 'relative' }}>
                     <label className="form-label">Proveedor de Servicios</label>
                     <input
@@ -578,7 +515,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     />
                     {showDropdownProvServicios && searchProvServicios && (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
-                        {resultadosProvServicios.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosProvServicios.map(c => (
+                        {resultadosProvServicios.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosProvServicios.map((c:any) => (
                           <div key={c.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}
                             onClick={() => { setFormData(prev => ({ ...prev, provServicios: c.id })); setSearchProvServicios(c.nombre); setShowDropdownProvServicios(false); }}>
                             <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{c.nombre}</div>
@@ -597,6 +534,31 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
               ========================================== */}
               {pestañaActiva === 'unidad' && (
                 <div className="form-grid">
+
+                  <div className="form-group" style={{ position: 'relative', gridColumn: 'span 3' }}>
+                    <label className="form-label">Proveedor de Transporte</label>
+                    <input
+                      type="text" className="form-control" placeholder="Escriba para buscar proveedor de transporte..."
+                      value={searchProvTransporte}
+                      onChange={e => {
+                        setSearchProvTransporte(e.target.value);
+                        setShowDropdownProvTransporte(true);
+                        if (formData.proveedorUnidad) setFormData(prev => ({ ...prev, proveedorUnidad: '' }));
+                      }}
+                      onFocus={() => setShowDropdownProvTransporte(true)}
+                    />
+                    {showDropdownProvTransporte && searchProvTransporte && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
+                        {resultadosProvTransporte.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosProvTransporte.map((p:any) => (
+                          <div key={p.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}
+                            onClick={() => { setFormData(prev => ({ ...prev, proveedorUnidad: p.id })); setSearchProvTransporte(p.nombre); setShowDropdownProvTransporte(false); }}>
+                            <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{p.nombre}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="form-group"><label className="form-label">Facturado En:</label>
                     <select name="facturadoEnUnidad" className="form-control" value={formData.facturadoEnUnidad} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
@@ -609,12 +571,12 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <label className="form-label">Convenio Proveedor</label>
                     <select name="convenioProveedor" className="form-control" value={formData.convenioProveedor}
                       onChange={(e) => {
-                        const conv = conveniosProv.find(c => c.id === e.target.value);
+                        const conv = conveniosProv?.find((c:any) => c.id === e.target.value);
                         setFormData(prev => ({ ...prev, convenioProveedor: e.target.value, monedaConvenioProv: conv?.moneda || ID_USD }));
                       }}
                     >
                       <option value="">-- Seleccionar --</option>
-                      {conveniosProv.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                      {conveniosProv?.map((c:any) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                     </select>
                   </div>
 

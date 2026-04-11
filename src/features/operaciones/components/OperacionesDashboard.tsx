@@ -13,8 +13,6 @@ const OperacionesDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
   
-  // ✅ Se eliminaron las variables sin uso (filtroActivo, mostrarFiltros)
-  
   const [operaciones, setOperaciones] = useState(datosIniciales);
   const [operacionViendo, setOperacionViendo] = useState<any | null>(null);
 
@@ -25,6 +23,43 @@ const OperacionesDashboard = () => {
   const [nuevaFechaHora, setNuevaFechaHora] = useState('');
   
   const [botonesDisponibles, setBotonesDisponibles] = useState<string[]>([]);
+
+  // ✅ NUEVO: Almacén de Catálogos para ahorrar lecturas de Firebase
+  const [catalogosGlobales, setCatalogosGlobales] = useState<any>({});
+
+  useEffect(() => {
+    // Descargamos todo UNA SOLA VEZ al entrar al módulo
+    const descargarTodo = async () => {
+      try {
+        const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap] = await Promise.all([
+          getDocs(collection(db, 'empresas')),
+          getDocs(collection(db, 'catalogo_tipo_operacion')),
+          getDocs(collection(db, 'catalogo_embalaje')),
+          getDocs(collection(db, 'remolques')),
+          getDocs(collection(db, 'catalogo_tarifas_referencia')), 
+          getDocs(collection(db, 'convenios_proveedores')),
+          getDocs(collection(db, 'tipo_cambio')),
+          getDocs(collection(db, 'convenios_clientes')),
+          getDocs(collection(db, 'convenios_clientes_detalles'))
+        ]);
+
+        setCatalogosGlobales({
+          empresas: empSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          tiposOperacion: opSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          embalajes: embSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          remolques: remSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          tarifas: tarSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          conveniosProv: convProvSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          catalogoTC: tcSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          catalogoConvClientes: convCliSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
+          catalogoConvDetalles: convDetSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
+        });
+      } catch (e) {
+        console.error("Error al pre-cargar catálogos globales:", e);
+      }
+    };
+    descargarTodo();
+  }, []);
 
   useEffect(() => {
     const cargarBotones = async () => {
@@ -62,11 +97,8 @@ const OperacionesDashboard = () => {
     try {
       const q = query(collection(db, 'horarios'), where('operacionId', '==', operacionViendo.id));
       const snap = await getDocs(q);
-      
       const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-      
       data.sort((a: any, b: any) => new Date(b.fechaHora).getTime() - new Date(a.fechaHora).getTime());
-      
       setHistorialList(data);
     } catch (e) {
       console.error(e);
@@ -80,10 +112,8 @@ const OperacionesDashboard = () => {
     setCargandoHorarios(true);
     try {
       const batch = writeBatch(db);
-
       const horarioRef = doc(collection(db, 'horarios'));
       batch.set(horarioRef, { operacionId: operacionViendo.id, status: nuevoStatus, fechaHora: nuevaFechaHora, registradoEn: new Date().toISOString() });
-
       const opRef = doc(db, 'operaciones', String(operacionViendo.id));
       batch.update(opRef, { status: nuevoStatus });
 
@@ -108,6 +138,7 @@ const OperacionesDashboard = () => {
           estado={estadoFormulario} initialData={operacionEditando}
           onClose={() => { setEstadoFormulario('cerrado'); setOperacionEditando(null); }}
           onMinimize={() => setEstadoFormulario('minimizado')} onRestore={() => setEstadoFormulario('abierto')}
+          catalogosCacheados={catalogosGlobales} // ✅ Pasamos el almacén al formulario
         />
       )}
 
@@ -116,7 +147,6 @@ const OperacionesDashboard = () => {
           <div className="form-card detail-card" style={{ maxWidth: '900px', maxHeight: '90vh' }}>
             <div className="form-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2 style={{ margin: 0 }}>Detalle de Operación <span style={{ color: '#D84315' }}>{operacionViendo.ref}</span></h2>
-              
               <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                 <button onClick={abrirRegistroHorario} title="Registrar Horario / Cambiar Status" style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
