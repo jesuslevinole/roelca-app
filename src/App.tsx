@@ -14,7 +14,7 @@ import { CombustibleDashboard } from './features/combustible/components/Combusti
 import ProveedoresUnidadDashboard from './features/proveedoresUnidad/components/ProveedoresUnidadDashboard';
 import { UnidadesProveedorDashboard } from './features/unidadesProveedor/components/UnidadesProveedorDashboard';
 import UnidadesDashboard from './features/unidades/components/UnidadesDashboard'; 
-import RemolquesDashboard from './features/remolques/components/RemolquesDashboard'; // ✅ NUEVO MÓDULO IMPORTADO
+import RemolquesDashboard from './features/remolques/components/RemolquesDashboard'; 
 import ConveniosClientesDashboard from './features/conveniosClientes/components/ConveniosClientesDashboard';
 import { ConveniosProveedoresDashboard } from './features/conveniosProveedores/components/ConveniosProveedoresDashboard';
 import { DireccionesDashboard } from './features/direcciones/components/DireccionesDashboard';
@@ -23,7 +23,9 @@ import { RolesDashboard } from './usuarios/components/RolesDashboard';
 import { UsuariosDashboard } from './usuarios/components/UsuariosDashboard';
 import { LogsDashboard } from './features/configuracion/components/LogsDashboard';
 
-// NUEVOS IMPORTES DEL RELOJ CHECADOR
+// ✅ IMPORTAMOS EL NUEVO CONFIGURADOR DE FLUJOS
+import { ConfiguradorStatus } from './features/configuracion/components/ConfiguradorStatus';
+
 import { RelojChecadorModal } from './features/relojChecador/components/RelojChecadorModal';
 import { HistorialChequeosDashboard } from './features/relojChecador/components/HistorialChequeosDashboard';
 
@@ -34,8 +36,8 @@ function App() {
   const [cargandoAuth, setCargandoAuth] = useState(true); 
   const [usuarioActualDB, setUsuarioActualDB] = useState<any>(null); 
   
-  // ✅ TIPADO AMPLIADO CON 'remolques'
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'unidades' | 'remolques' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs'>('operaciones');
+  // ✅ TIPADO AMPLIADO CON 'flujosOperacion'
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'unidades' | 'remolques' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs' | 'flujosOperacion'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -131,13 +133,13 @@ function App() {
     return <Login onLoginSuccess={() => setEstaAutenticado(true)} />;
   }
 
-  // ✅ ACORDEÓN DE BASE DE DATOS ACTUALIZADO (AÑADIDO 'remolques')
   const esBaseDeDatosActiva = moduloActivo === 'empresas' || moduloActivo === 'tipoCambio' || moduloActivo === 'combustible' || moduloActivo === 'proveedoresUnidad' || moduloActivo === 'unidadesProveedor' || moduloActivo === 'unidades' || moduloActivo === 'remolques' || moduloActivo === 'direcciones';
-  
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
   const esEmpleadosActivo = moduloActivo === 'colaboradores' || moduloActivo === 'historialAsistencia';
-  const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios' || moduloActivo === 'logs';
+  
+  // ✅ ACTUALIZAMOS ACTIVADOR PARA EL ACORDEÓN DE CONFIGURACIÓN
+  const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios' || moduloActivo === 'logs' || moduloActivo === 'flujosOperacion';
 
   return (
     <div className="app-wrapper">
@@ -199,7 +201,7 @@ function App() {
             <div className={`sidebar-subitem ${moduloActivo === 'tipoCambio' ? 'active' : ''}`} onClick={() => setModuloActivo('tipoCambio')}>Tipo de Cambio</div>
             <div className={`sidebar-subitem ${moduloActivo === 'combustible' ? 'active' : ''}`} onClick={() => setModuloActivo('combustible')}>Combustible</div>
             <div className={`sidebar-subitem ${moduloActivo === 'unidades' ? 'active' : ''}`} onClick={() => setModuloActivo('unidades')}>Unidades Propias</div> 
-            <div className={`sidebar-subitem ${moduloActivo === 'remolques' ? 'active' : ''}`} onClick={() => setModuloActivo('remolques')}>Remolques</div> {/* ✅ NUEVO BOTÓN DE MENÚ */}
+            <div className={`sidebar-subitem ${moduloActivo === 'remolques' ? 'active' : ''}`} onClick={() => setModuloActivo('remolques')}>Remolques</div> 
             <div className={`sidebar-subitem ${moduloActivo === 'proveedoresUnidad' ? 'active' : ''}`} onClick={() => setModuloActivo('proveedoresUnidad')}>Proveedores de Unidad</div>
             <div className={`sidebar-subitem ${moduloActivo === 'unidadesProveedor' ? 'active' : ''}`} onClick={() => setModuloActivo('unidadesProveedor')}>Unidades del Proveedor</div>
           </div>
@@ -218,6 +220,11 @@ function App() {
             <div className={`sidebar-subitem ${moduloActivo === 'usuarios' ? 'active' : ''}`} onClick={() => setModuloActivo('usuarios')}>Usuarios</div>
             <div className={`sidebar-subitem ${moduloActivo === 'roles' ? 'active' : ''}`} onClick={() => setModuloActivo('roles')}>Roles y Permisos</div>
             <div className={`sidebar-subitem ${moduloActivo === 'logs' ? 'active' : ''}`} onClick={() => setModuloActivo('logs')}>Historial de Actividad</div>
+            
+            {/* ✅ AQUÍ ESTÁ EL BOTÓN DE REGLAS DE ESTATUS */}
+            <div className={`sidebar-subitem ${moduloActivo === 'flujosOperacion' ? 'active' : ''}`} onClick={() => setModuloActivo('flujosOperacion')}>
+              Reglas de Estatus
+            </div>
           </div>
         )}
 
@@ -291,7 +298,7 @@ function App() {
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
         {moduloActivo === 'combustible' && <CombustibleDashboard />}
         {moduloActivo === 'unidades' && <UnidadesDashboard />} 
-        {moduloActivo === 'remolques' && <RemolquesDashboard />} {/* ✅ NUEVO MÓDULO RENDERIZADO */}
+        {moduloActivo === 'remolques' && <RemolquesDashboard />} 
         {moduloActivo === 'proveedoresUnidad' && <ProveedoresUnidadDashboard />}
         {moduloActivo === 'unidadesProveedor' && <UnidadesProveedorDashboard />}
         {moduloActivo === 'conveniosClientes' && <ConveniosClientesDashboard />}
@@ -302,6 +309,9 @@ function App() {
         {moduloActivo === 'roles' && <RolesDashboard />}
         {moduloActivo === 'usuarios' && <UsuariosDashboard />}
         {moduloActivo === 'logs' && <LogsDashboard />}
+        
+        {/* ✅ RENDERIZAMOS EL CONFIGURADOR AL ESTAR ACTIVO */}
+        {moduloActivo === 'flujosOperacion' && <ConfiguradorStatus />}
         
       </div>
     </div>
