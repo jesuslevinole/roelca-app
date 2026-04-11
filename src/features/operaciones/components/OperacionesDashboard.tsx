@@ -3,34 +3,33 @@ import { useState, useEffect } from 'react';
 import { FormularioOperacion } from './FormularioOperacion';
 import { collection, doc, writeBatch, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
-import { obtenerBotonesHorarioDinamicos } from '../config/statusRules'; 
+import { obtenerBotonesHorarioDinamicos } from '../config/statusRules';
 
 const datosIniciales = [
-  { id: '1', ref: 'IM-100326-001', fecha: '03/09/2026', tipo: 'Importación', status: '3. Documentado (Asignado)', clientePaga: 'A. Castañeda', convenio: 'Flete de Imp...', remolque: '672146', origen: 'ROAL', destino: 'AFN', descripcionMercancia: 'Autopartes', cantidad: 2, pesoKg: '1500', operador: 'Jose Maria' },
+  { id: '1', ref: 'IM-100326-001', fecha: '03/09/2026', tipoServicio: 'Logística', trafico: 'Importación', carga: 'Cargada', status: '3. Documentado (Asignado)', clientePaga: 'A. Castañeda', convenio: 'Flete de Imp...', remolque: '672146', origen: 'ROAL', destino: 'AFN', descripcionMercancia: 'Autopartes', cantidad: 2, pesoKg: '1500', operador: 'Jose Maria' },
 ];
 
 const OperacionesDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
-  const [filtroActivo, setFiltroActivo] = useState('Todo');
-  const [mostrarFiltros, setMostrarFiltros] = useState(false);
+  
+  // ✅ Se eliminaron las variables sin uso (filtroActivo, mostrarFiltros)
+  
   const [operaciones, setOperaciones] = useState(datosIniciales);
   const [operacionViendo, setOperacionViendo] = useState<any | null>(null);
 
-  // Estados de Horarios
   const [modalHorarios, setModalHorarios] = useState<'cerrado' | 'registrar' | 'historial'>('cerrado');
   const [historialList, setHistorialList] = useState<any[]>([]);
   const [cargandoHorarios, setCargandoHorarios] = useState(false);
   const [nuevoStatus, setNuevoStatus] = useState('');
   const [nuevaFechaHora, setNuevaFechaHora] = useState('');
   
-  // Estado para guardar los botones dinámicos
   const [botonesDisponibles, setBotonesDisponibles] = useState<string[]>([]);
 
   useEffect(() => {
     const cargarBotones = async () => {
-      if (operacionViendo && operacionViendo.tipo) {
-        const botones = await obtenerBotonesHorarioDinamicos(operacionViendo.tipo);
+      if (operacionViendo) {
+        const botones = await obtenerBotonesHorarioDinamicos(operacionViendo);
         setBotonesDisponibles(botones);
       }
     };
@@ -63,8 +62,11 @@ const OperacionesDashboard = () => {
     try {
       const q = query(collection(db, 'horarios'), where('operacionId', '==', operacionViendo.id));
       const snap = await getDocs(q);
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
-      data.sort((a, b) => new Date(b.fechaHora).getTime() - new Date(a.fechaHora).getTime());
+      
+      const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      
+      data.sort((a: any, b: any) => new Date(b.fechaHora).getTime() - new Date(a.fechaHora).getTime());
+      
       setHistorialList(data);
     } catch (e) {
       console.error(e);
@@ -130,7 +132,7 @@ const OperacionesDashboard = () => {
             <div className="detail-content" style={{ paddingRight: '12px' }}>
               <div className="detail-grid" style={{ marginBottom: '24px' }}>
                 <div className="detail-item"><span className="detail-label">Fecha del Servicio</span><span className="detail-value">{mostrarDato(operacionViendo.fecha)}</span></div>
-                <div className="detail-item"><span className="detail-label">Tipo de Operación</span><span className="detail-value"><span className={`dot ${operacionViendo.tipo === 'Importación' ? 'dot-green' : 'dot-orange'}`}></span>{mostrarDato(operacionViendo.tipo)}</span></div>
+                <div className="detail-item"><span className="detail-label">Configuración Combinada</span><span className="detail-value"><span className={`dot dot-orange`}></span>{mostrarDato(operacionViendo.tipoServicio)} | {mostrarDato(operacionViendo.trafico)} | {mostrarDato(operacionViendo.carga)}</span></div>
                 <div className="detail-item"><span className="detail-label">Status Actual</span><span className="detail-value" style={{ color: '#f0f6fc', fontWeight: 'bold' }}>{mostrarDato(operacionViendo.status)}</span></div>
               </div>
             </div>
@@ -207,43 +209,21 @@ const OperacionesDashboard = () => {
         </div>
       )}
 
-      {/* Bloque restaurado para evitar el error ts(6133) */}
       <div className="module-header" style={{ justifyContent: 'flex-end', paddingBottom: '16px' }}>
-        <div className="action-buttons" style={{ display: 'flex', gap: '12px', position: 'relative' }}>
-          <button className="btn btn-outline" onClick={() => setMostrarFiltros(!mostrarFiltros)}>
-            Filtro: {filtroActivo} ▼
-          </button>
-          
-          {mostrarFiltros && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '8px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', zIndex: 50, minWidth: '180px', boxShadow: '0 10px 30px rgba(0,0,0,0.8)', padding: '8px 0' }}>
-              {['Todo', 'Importación', 'Exportación'].map((f) => (
-                <div 
-                  key={f} 
-                  style={{ padding: '10px 16px', cursor: 'pointer', fontSize: '0.9rem', color: filtroActivo === f ? '#f0f6fc' : '#8b949e', backgroundColor: filtroActivo === f ? '#21262d' : 'transparent' }}
-                  onClick={() => { setFiltroActivo(f); setMostrarFiltros(false); }}
-                >
-                  {f}
-                </div>
-              ))}
-            </div>
-          )}
-          
-          <button className="btn btn-outline">Exportar CSV</button>
-          <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar Operación</button>
-        </div>
+        <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar Operación</button>
       </div>
 
       <div className="content-body" style={{ display: 'block' }}>
         <div className="table-container">
           <table className="data-table">
             <thead>
-              <tr><th># Ref</th><th>Fecha</th><th>Tipo</th><th>Status</th><th>Acciones</th></tr>
+              <tr><th># Ref</th><th>Fecha</th><th>Servicio / Tráfico</th><th>Status</th><th>Acciones</th></tr>
             </thead>
             <tbody>
               {operaciones.map((op) => (
                 <tr key={op.id} onClick={() => setOperacionViendo(op)}>
                   <td className="font-mono">{op.ref}</td><td>{op.fecha}</td>
-                  <td>{op.tipo}</td>
+                  <td>{op.tipoServicio} - {op.trafico}</td>
                   <td className="status-text">{op.status}</td>
                   <td onClick={(e) => e.stopPropagation()}>
                     <button className="btn-small btn-edit" onClick={() => editarOperacion(op)}>Editar</button>
