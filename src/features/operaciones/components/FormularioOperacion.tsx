@@ -48,6 +48,10 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [showDropdownClientePaga, setShowDropdownClientePaga] = useState(false);
   const [searchRemolque, setSearchRemolque] = useState('');
   const [showDropdownRemolque, setShowDropdownRemolque] = useState(false);
+  
+  // ✅ NUEVO: Buscador para Cliente Mercancía
+  const [searchClienteMercancia, setSearchClienteMercancia] = useState('');
+  const [showDropdownClienteMercancia, setShowDropdownClienteMercancia] = useState(false);
 
   const [formData, setFormData] = useState({
     tipoServicio: '', trafico: '', carga: '',
@@ -71,7 +75,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     unidad: '', operador: ''
   });
 
-  // 1. DESCARGA MASIVA DE CATÁLOGOS
   useEffect(() => {
     const fetchCatalogos = async () => {
       setCargandoCatalogos(true);
@@ -81,7 +84,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           getDocs(collection(db, 'catalogo_tipo_operacion')),
           getDocs(collection(db, 'catalogo_embalaje')),
           getDocs(collection(db, 'remolques')),
-          getDocs(collection(db, 'catalogo_tarifas_referencia')), 
+          getDocs(collection(db, 'catalogo_tarifas_referencia')),
           getDocs(collection(db, 'convenios_proveedores')),
           getDocs(collection(db, 'tipo_cambio')),
           getDocs(collection(db, 'convenios_clientes')),
@@ -113,7 +116,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     fetchCatalogos();
   }, []);
 
-  // 2. BÚSQUEDA DEL TIPO DE CAMBIO
   useEffect(() => {
     if (!formData.fechaServicio || catalogoTC.length === 0) return;
     setBuscandoTC(true);
@@ -149,7 +151,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     setBuscandoTC(false);
   }, [formData.fechaServicio, catalogoTC]);
 
-  // 3. ✅ CONSTRUCCIÓN DE LA LISTA DE CONVENIOS (Corregida con tipoConvenioId)
   useEffect(() => {
     let clientId = formData.clientePaga;
     if (!clientId && searchClientePaga) {
@@ -177,10 +178,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
       });
 
       const mapped = detalles.map(d => {
-        // ✅ CORRECCIÓN EXACTA: Buscar por tipoConvenioId y evitamos jalar el precio
         const tarifaId = d.tipoConvenioId || d.tipo_convenio_id || d.tipoConvenio || d.tipo_convenio || d['TIPO DE CONVENIO'];
-        
-        // Cruzar con catalogo_tarifas_referencia
         const tObj = tarifas.find(t => String(t.id).trim() === String(tarifaId).trim());
 
         const nombreVisible = tObj?.descripcion || tObj?.nombre || (tarifaId ? `Desconocido (${tarifaId})` : 'Sin Asignar');
@@ -199,7 +197,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   }, [formData.clientePaga, searchClientePaga, catalogoConvClientes, catalogoConvDetalles, tarifas, empresas]);
 
-  // 4. RESOLUCIÓN DE LLAVE COMPUESTA INVISIBLE (Calcula en 2do plano sin UI molesta)
   useEffect(() => {
     const resolverVariablesDeFlujo = async () => {
       if (!formData.convenio) return;
@@ -245,7 +242,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     resolverVariablesDeFlujo();
   }, [formData.convenio, listaConveniosCliente, tarifas]);
 
-  // 5. CÁLCULO DE MONEDAS
   useEffect(() => {
     const facturadoEn = formData.facturadoEnUnidad;
     const monedaConv = formData.monedaConvenioProv;
@@ -293,6 +289,9 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const resultadosDestino = filOrigenesDestinos.filter(e => e.nombre?.toLowerCase().includes(searchDestino.toLowerCase()) || e.direccion?.toLowerCase().includes(searchDestino.toLowerCase()));
   const resultadosClientePaga = filClientesPaga.filter(e => e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase()));
   const resultadosRemolque = remolques.filter(e => e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase()));
+  
+  // ✅ NUEVO: Filtro para el buscador inteligente de Cliente Mercancía
+  const resultadosClienteMercancia = filClientesMercancia.filter(e => e.nombre?.toLowerCase().includes(searchClienteMercancia.toLowerCase()));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -400,7 +399,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     )}
                   </div>
 
-                  {/* ✅ AQUÍ ESTÁ EL CONVENIO LIMPIO, SIN CUADROS EXTRAÑOS DEBAJO */}
                   <div className="form-group">
                     <label className="form-label">Convenio (Tarifa)</label>
                     <select name="convenio" className="form-control" value={formData.convenio} onChange={handleChange} required disabled={listaConveniosCliente.length === 0}>
@@ -477,20 +475,39 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
               ========================================== */}
               {pestañaActiva === 'pedimento' && (
                 <div className="form-grid">
-                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                  
+                  {/* ✅ NUEVO BUSCADOR: CLIENTE MERCANCÍA */}
+                  <div className="form-group" style={{ position: 'relative', gridColumn: 'span 2' }}>
                     <label className="form-label">Cliente (Mercancía)</label>
-                    <select name="clienteMercancia" className="form-control" value={formData.clienteMercancia} onChange={handleChange}>
-                      <option value="">-- Seleccionar (51246232) --</option>
-                      {filClientesMercancia.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                    </select>
+                    <input
+                      type="text" className="form-control" placeholder="Escriba para buscar cliente mercancía..."
+                      value={searchClienteMercancia}
+                      onChange={e => {
+                        setSearchClienteMercancia(e.target.value);
+                        setShowDropdownClienteMercancia(true);
+                        if (formData.clienteMercancia) setFormData(prev => ({ ...prev, clienteMercancia: '' }));
+                      }}
+                      onFocus={() => setShowDropdownClienteMercancia(true)}
+                    />
+                    {showDropdownClienteMercancia && searchClienteMercancia && (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '200px', overflowY: 'auto' }}>
+                        {resultadosClienteMercancia.length === 0 ? <div style={{ padding: '8px', color: '#8b949e' }}>Sin resultados</div> : resultadosClienteMercancia.map(c => (
+                          <div key={c.id} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}
+                            onClick={() => { setFormData(prev => ({ ...prev, clienteMercancia: c.id })); setSearchClienteMercancia(c.nombre); setShowDropdownClienteMercancia(false); }}>
+                            <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{c.nombre}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+
                   <div className="form-group"><label className="form-label">Descripción de la Mercancía</label><input type="text" name="descripcionMercancia" className="form-control" value={formData.descripcionMercancia} onChange={handleChange} /></div>
                   <div className="form-group"><label className="form-label">Cantidad (Enteros)</label><input type="number" step="1" name="cantidad" className="form-control" value={formData.cantidad} onChange={handleChange} /></div>
                   <div className="form-group">
                     <label className="form-label">Embalaje</label>
                     <select name="embalaje" className="form-control" value={formData.embalaje} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
-                      {embalajes.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+                      {embalajes.map(e => <option key={e.id} value={e.id}>{e.nombre || e.descripcion || e.id}</option>)}
                     </select>
                   </div>
                   <div className="form-group"><label className="form-label">Peso (Kg) Decimales</label><input type="number" step="0.01" name="pesoKg" className="form-control" value={formData.pesoKg} onChange={handleChange} /></div>
