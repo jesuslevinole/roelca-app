@@ -49,7 +49,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [searchRemolque, setSearchRemolque] = useState('');
   const [showDropdownRemolque, setShowDropdownRemolque] = useState(false);
   
-  // ✅ NUEVO: Buscador para Cliente Mercancía
   const [searchClienteMercancia, setSearchClienteMercancia] = useState('');
   const [showDropdownClienteMercancia, setShowDropdownClienteMercancia] = useState(false);
 
@@ -290,7 +289,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const resultadosClientePaga = filClientesPaga.filter(e => e.nombre?.toLowerCase().includes(searchClientePaga.toLowerCase()));
   const resultadosRemolque = remolques.filter(e => e.nombre?.toLowerCase().includes(searchRemolque.toLowerCase()));
   
-  // ✅ NUEVO: Filtro para el buscador inteligente de Cliente Mercancía
   const resultadosClienteMercancia = filClientesMercancia.filter(e => e.nombre?.toLowerCase().includes(searchClienteMercancia.toLowerCase()));
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -476,7 +474,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
               {pestañaActiva === 'pedimento' && (
                 <div className="form-grid">
                   
-                  {/* ✅ NUEVO BUSCADOR: CLIENTE MERCANCÍA */}
+                  {/* ✅ BUSCADOR: CLIENTE MERCANCÍA */}
                   <div className="form-group" style={{ position: 'relative', gridColumn: 'span 2' }}>
                     <label className="form-label">Cliente (Mercancía)</label>
                     <input
@@ -507,7 +505,8 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <label className="form-label">Embalaje</label>
                     <select name="embalaje" className="form-control" value={formData.embalaje} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
-                      {embalajes.map(e => <option key={e.id} value={e.id}>{e.nombre || e.descripcion || e.id}</option>)}
+                      {/* ✅ CAMBIO: Ahora carga la clave (PALLET, PAQUETE, Piezas) */}
+                      {embalajes.map(e => <option key={e.id} value={e.id}>{e.clave || e.nombre || e.id}</option>)}
                     </select>
                   </div>
                   <div className="form-group"><label className="form-label">Peso (Kg) Decimales</label><input type="number" step="0.01" name="pesoKg" className="form-control" value={formData.pesoKg} onChange={handleChange} /></div>
