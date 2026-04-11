@@ -71,6 +71,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     unidad: '', operador: ''
   });
 
+  // 1. DESCARGA DE TODOS LOS CATÁLOGOS
   useEffect(() => {
     const fetchCatalogos = async () => {
       setCargandoCatalogos(true);
@@ -112,7 +113,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     fetchCatalogos();
   }, []);
 
-  // ✅ BUSCADOR TC AGRESIVO (Fuerza Bruta para lidiar con AppSheet)
+  // 2. BÚSQUEDA DEL TIPO DE CAMBIO
   useEffect(() => {
     if (!formData.fechaServicio || catalogoTC.length === 0) return;
     setBuscandoTC(true);
@@ -125,11 +126,9 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     let tcEncontrado = null;
 
     for (const tc of catalogoTC) {
-      // Extraer todos los valores de la fila como texto plano para buscar la fecha
       const valoresFila = Object.values(tc).map(v => String(v).trim());
 
       if (valoresFila.includes(fechaLatina) || valoresFila.includes(fechaUS) || valoresFila.includes(fechaISO)) {
-        // Encontramos la fila de ese día. Ahora buscaremos agresivamente la columna de precio
         const keys = Object.keys(tc);
         const valKey = keys.find(k => {
           const low = k.toLowerCase();
@@ -139,7 +138,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
         if (valKey) {
           tcEncontrado = Number(String(tc[valKey]).replace(/[^0-9.-]+/g, ""));
         } else {
-          // Si por alguna razón la columna tiene un nombre raro, busca el primer decimal entre 15 y 25
           const posiblesRates = valoresFila.map(v => parseFloat(v.replace(/[^0-9.-]+/g, ""))).filter(n => !isNaN(n) && n > 15 && n < 25);
           if (posiblesRates.length > 0) tcEncontrado = posiblesRates[0];
         }
@@ -151,7 +149,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     setBuscandoTC(false);
   }, [formData.fechaServicio, catalogoTC]);
 
-  // ✅ BÚSQUEDA DE CONVENIOS (Soporta ID o Nombre literal)
+  // 3. BÚSQUEDA RED DE ARRASTRE PARA CONVENIOS DE CLIENTE (A PRUEBA DE FALLOS)
   useEffect(() => {
     if (!formData.clientePaga || catalogoConvClientes.length === 0) {
       setListaConveniosCliente([]);
@@ -162,29 +160,35 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     const clienteObj = empresas.find(e => e.id === clientId);
     const clientName = clienteObj?.nombre || '';
 
-    // Buscar si el campo cliente tiene el ID o si AppSheet guardó el Nombre en texto literal
-    const master = catalogoConvClientes.find(c => {
-      const refVal = String(c.cliente || c.Cliente || c.CLIENTE || c.id_cliente || c.empresa || '').trim();
+    // Encontrar TODOS los convenios maestros que pertenezcan a este cliente (por ID o por Nombre Literal)
+    const maestrosDelCliente = catalogoConvClientes.filter(c => {
+      const refVal = String(c.clienteId || c.cliente || c.Cliente || c.CLIENTE || c.id_cliente || c.empresa || '').trim();
       return refVal === clientId || (clientName && refVal === clientName);
     });
 
-    if (master) {
-      const masterId = master.id;
+    if (maestrosDelCliente.length > 0) {
+      // Extraemos los IDs de los convenios maestros y sus posibles números/nombres
+      const masterIds = maestrosDelCliente.map(m => m.id);
+      const masterNombres = maestrosDelCliente.map(m => String(m.nombre || m.id).trim());
 
-      // Buscar detalles que pertenezcan a ese master
+      // Filtrar detalles que apunten a CUALQUIERA de estos maestros
       const detalles = catalogoConvDetalles.filter(d => {
         const convRef = String(d.convenioId || d.convenio || d.id_convenio || d.Convenio || d.CONVENIO || '').trim();
-        return convRef === masterId || convRef === master.nombre || convRef === master.id_convenio;
+        return masterIds.includes(convRef) || masterNombres.includes(convRef);
       });
 
+      // Mapear al formato correcto para el Dropdown
       const mapped = detalles.map(d => {
-        const tarifaId = d.tipo_convenio || d.tarifaId || d.tarifa || d.Tipo_Convenio || d['TIPO DE CONVENIO'] || d.TIPO_DE_CONVENIO;
-        const tObj = tarifas.find(t => t.id === tarifaId);
+        // Encontrar la Tarifa Base a la que apunta el detalle
+        const tarifaRef = d.tipo_convenio || d.tarifaId || d.tarifa || d.Tipo_Convenio || d['TIPO DE CONVENIO'] || d.TIPO_DE_CONVENIO;
+        
+        // Buscar en la colección de Tarifas de Referencia
+        const tObj = tarifas.find(t => t.id === tarifaRef || t.descripcion === tarifaRef);
 
         return {
           id: d.id,
-          tarifaBaseId: tarifaId,
-          descripcion: tObj ? tObj.descripcion : `Detalle (${tarifaId || 'Sin Tarifa'})`,
+          tarifaBaseId: tObj ? tObj.id : tarifaRef,
+          descripcion: tObj ? tObj.descripcion : `Detalle (${tarifaRef || 'Sin Tarifa'})`,
           ...d
         };
       });
@@ -195,7 +199,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     }
   }, [formData.clientePaga, catalogoConvClientes, catalogoConvDetalles, tarifas, empresas]);
 
-  // Resolución de Llave Compuesta (Servicio_Trafico_Carga)
+  // 4. RESOLUCIÓN DE LLAVE COMPUESTA INVISIBLE
   useEffect(() => {
     const resolverVariablesDeFlujo = async () => {
       if (!formData.convenio) return;
@@ -241,6 +245,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     resolverVariablesDeFlujo();
   }, [formData.convenio, listaConveniosCliente, tarifas]);
 
+  // 5. CÁLCULO DE MONEDAS
   useEffect(() => {
     const facturadoEn = formData.facturadoEnUnidad;
     const monedaConv = formData.monedaConvenioProv;
@@ -352,6 +357,9 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
           <form onSubmit={handleSubmit}>
             <div className="tab-content" style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: '12px' }}>
 
+              {/* =========================================
+                  PESTAÑA 1: INFORMACIÓN GENERAL
+              ========================================== */}
               {pestañaActiva === 'general' && (
                 <div className="form-grid">
                   <div className="form-group">
@@ -401,21 +409,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                       ))}
                     </select>
                     {!formData.clientePaga && <small style={{ color: '#8b949e' }}>Seleccione Cliente Paga primero</small>}
-                  </div>
-
-                  <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                    <div style={{ backgroundColor: '#161b22', border: '1px solid #30363d', padding: '12px 16px', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <span style={{ color: '#8b949e', fontSize: '0.85rem' }}>Flujo Detectado:</span>
-                      {resolviendoConvenio ? (
-                        <span style={{ color: '#D84315', fontSize: '0.9rem' }}>Evaluando convenios...</span>
-                      ) : formData.tipoServicio && formData.tipoServicio !== 'N/A' ? (
-                        <span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '0.9rem' }}>
-                          {formData.tipoServicio} | {formData.trafico} | {formData.carga}
-                        </span>
-                      ) : (
-                        <span style={{ color: '#8b949e', fontStyle: 'italic', fontSize: '0.9rem' }}>Esperando selección de Convenio</span>
-                      )}
-                    </div>
                   </div>
 
                   <div className="form-group" style={{ position: 'relative' }}>
