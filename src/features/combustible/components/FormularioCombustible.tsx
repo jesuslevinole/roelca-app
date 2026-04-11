@@ -1,8 +1,92 @@
-// Archivo: src/features/combustible/components/FormularioCombustible.tsx
+// src/features/combustible/components/FormularioCombustible.tsx
 
 import React, { useState, useEffect } from 'react';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../../../config/firebase'; 
 import type { Moneda, CombustibleRecord } from '../../../types/combustible';
 import { getMonedasCatalogo, getTipoCambioPorFecha, saveCombustible } from '../services/combustibleService';
+
+// =========================================
+// SUB-COMPONENTE: SELECTOR CON BUSCADOR
+// =========================================
+const SearchableSelect: React.FC<{
+  options: { id: string, label: string }[];
+  value: string;
+  onChange: (id: string, label: string) => void;
+  placeholder?: string;
+  required?: boolean;
+}> = ({ options, value, onChange, placeholder = "Buscar...", required = false }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  const selectedLabel = options.find(o => o.id === value)?.label || '';
+
+  useEffect(() => {
+    setSearchTerm(selectedLabel);
+  }, [value, selectedLabel]);
+
+  const filteredOptions = options.filter(opt => 
+    opt.label.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <input
+        type="text"
+        className="form-control"
+        placeholder={placeholder}
+        value={isOpen ? searchTerm : selectedLabel}
+        onChange={(e) => {
+          setSearchTerm(e.target.value);
+          setIsOpen(true);
+        }}
+        onFocus={() => {
+          setSearchTerm(''); 
+          setIsOpen(true);
+        }}
+        onBlur={() => {
+          setTimeout(() => setIsOpen(false), 200);
+          setSearchTerm(selectedLabel); 
+        }}
+        required={required && !value} 
+        style={{ cursor: 'text', border: isOpen ? '1px solid #3b82f6' : '', backgroundColor: '#0d1117', color: '#c9d1d9' }}
+      />
+      
+      {isOpen && (
+        <ul style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, maxHeight: '200px', overflowY: 'auto',
+          backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '4px', marginTop: '4px', padding: '0', margin: '4px 0 0 0', listStyle: 'none', zIndex: 1000, boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.5)'
+        }}>
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map(opt => (
+              <li
+                key={opt.id}
+                onClick={() => {
+                  onChange(opt.id, opt.label);
+                  setSearchTerm(opt.label);
+                  setIsOpen(false);
+                }}
+                style={{ padding: '8px 12px', cursor: 'pointer', color: '#c9d1d9', borderBottom: '1px solid #21262d', fontSize: '0.85rem' }}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#21262d'}
+                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                {opt.label}
+              </li>
+            ))
+          ) : (
+            <li style={{ padding: '8px 12px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>
+              No se encontraron coincidencias
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+// =========================================
+// COMPONENTE PRINCIPAL
+// =========================================
 
 interface FormProps {
   estado?: 'abierto' | 'minimizado';
@@ -25,10 +109,12 @@ export const FormularioCombustible: React.FC<FormProps> = ({
   const [fecha, setFecha] = useState<string>(todayISO);
   const [tipoCombustible, setTipoCombustible] = useState<'Gasolina' | 'Diesel'>('Diesel');
   const [monedaSeleccionada, setMonedaSeleccionada] = useState<Moneda | null>(null);
-  
   const [tipoMedida, setTipoMedida] = useState<string>(''); 
   
-  const [proveedor, setProveedor] = useState<string>('');
+  const [proveedoresDB, setProveedoresDB] = useState<any[]>([]);
+  const [proveedorId, setProveedorId] = useState<string>('');
+  const [proveedorNombre, setProveedorNombre] = useState<string>('');
+
   const [costo, setCosto] = useState<number>(0);
   const [tipoCambio, setTipoCambio] = useState<number>(0);
   const [cargandoApi, setCargandoApi] = useState<boolean>(false);
@@ -46,10 +132,35 @@ export const FormularioCombustible: React.FC<FormProps> = ({
   }, []);
 
   useEffect(() => {
+    const cargarProveedores = async () => {
+      try {
+        const empSnapshot = await getDocs(collection(db, 'empresas'));
+        const todasEmpresas = empSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        const ID_PROVEEDOR = '11894dfd';
+        
+        const proveedoresFiltrados = todasEmpresas.filter((emp: any) => {
+          if (Array.isArray(emp.tiposEmpresa)) {
+            return emp.tiposEmpresa.some((tipo: string) => 
+              tipo === ID_PROVEEDOR || tipo.toLowerCase().includes('proveedor')
+            );
+          }
+          const stringData = JSON.stringify(emp).toLowerCase();
+          return stringData.includes(ID_PROVEEDOR.toLowerCase()) || stringData.includes('proveedor');
+        });
+        
+        setProveedoresDB(proveedoresFiltrados);
+      } catch (error) {
+        console.error("Error al obtener proveedores:", error);
+      }
+    };
+    cargarProveedores();
+  }, []);
+
+  useEffect(() => {
     const fetchTipoCambio = async () => {
       if (monedaSeleccionada?.esDolar && fecha) {
         setCargandoApi(true);
-        // CORRECCIÓN: Se eliminó la variable "fecha" de los paréntesis para coincidir con el servicio
         const tc = await getTipoCambioPorFecha();
         setTipoCambio(tc);
         setCargandoApi(false);
@@ -66,6 +177,10 @@ export const FormularioCombustible: React.FC<FormProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!monedaSeleccionada) return;
+    if (!proveedorId) {
+        alert("Por favor seleccione un proveedor válido de la lista.");
+        return;
+    }
 
     const record: CombustibleRecord = {
       fecha,
@@ -73,7 +188,8 @@ export const FormularioCombustible: React.FC<FormProps> = ({
       monedaId: monedaSeleccionada.id,
       monedaNombre: monedaSeleccionada.nombre,
       tipoMedida: tipoMedida as 'Litros' | 'Galones',
-      proveedor,
+      proveedor: proveedorNombre, 
+      proveedorId: proveedorId, // Ya no marcará error si actualizaste los Tipos
       costo,
       ...(esDolar && { tipoCambio, totalPesos })
     };
@@ -87,11 +203,13 @@ export const FormularioCombustible: React.FC<FormProps> = ({
     const id = e.target.value;
     const encontrada = monedas.find(m => m.id === id) || null;
     setMonedaSeleccionada(encontrada);
-    
-    if (encontrada) {
-      setTipoMedida(encontrada.esDolar ? 'Galones' : 'Litros');
-    }
+    if (encontrada) setTipoMedida(encontrada.esDolar ? 'Galones' : 'Litros');
   };
+
+  const opcionesProveedores = proveedoresDB.map(prov => ({
+    id: prov.id,
+    label: prov.nombre || prov.nombreCorto || prov.empresa || `Proveedor ID: ${prov.id.slice(0,4)}`
+  }));
 
   return (
     <div className={`modal-overlay ${estado === 'minimizado' ? 'minimized' : ''}`}>
@@ -111,38 +229,28 @@ export const FormularioCombustible: React.FC<FormProps> = ({
         <div style={{ display: estado === 'minimizado' ? 'none' : 'block', padding: '10px 0' }}>
           <form onSubmit={handleSubmit}>
             <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-              
               <div className="form-group">
                 <label className="form-label">Fecha *</label>
-                <input 
-                  type="date" 
-                  className="form-control" 
-                  value={fecha} 
-                  onChange={(e) => setFecha(e.target.value)} 
-                  required 
-                />
+                <input type="date" className="form-control" value={fecha} onChange={(e) => setFecha(e.target.value)} required />
               </div>
 
               <div className="form-group">
                 <label className="form-label">Proveedor *</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
-                  value={proveedor} 
-                  onChange={(e) => setProveedor(e.target.value)} 
-                  required 
-                  placeholder="Ej: Fuel America"
+                <SearchableSelect 
+                  options={opcionesProveedores}
+                  value={proveedorId}
+                  onChange={(id, label) => {
+                    setProveedorId(id);
+                    setProveedorNombre(label);
+                  }}
+                  placeholder="Ej: Fuel America..."
+                  required
                 />
               </div>
 
               <div className="form-group">
                 <label className="form-label">Tipo de Combustible *</label>
-                <select 
-                  className="form-control" 
-                  value={tipoCombustible} 
-                  onChange={(e) => setTipoCombustible(e.target.value as 'Gasolina' | 'Diesel')}
-                  required
-                >
+                <select className="form-control" value={tipoCombustible} onChange={(e) => setTipoCombustible(e.target.value as 'Gasolina' | 'Diesel')} required>
                   <option value="Gasolina">Gasolina</option>
                   <option value="Diesel">Diesel</option>
                 </select>
@@ -159,49 +267,23 @@ export const FormularioCombustible: React.FC<FormProps> = ({
 
               <div className="form-group">
                 <label className="form-label">Tipo de Medida *</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
-                  value={tipoMedida} 
-                  onChange={(e) => setTipoMedida(e.target.value)}
-                  required 
-                />
+                <input type="text" className="form-control" value={tipoMedida} onChange={(e) => setTipoMedida(e.target.value)} required />
               </div>
 
               <div className="form-group">
                 <label className="form-label">Costo ({monedaSeleccionada?.nombre || ''}) *</label>
-                <input 
-                  type="number" 
-                  step="0.001" 
-                  className="form-control" 
-                  value={costo} 
-                  onChange={(e) => setCosto(parseFloat(e.target.value) || 0)} 
-                  required 
-                />
+                <input type="number" step="0.001" className="form-control" value={costo} onChange={(e) => setCosto(parseFloat(e.target.value) || 0)} required />
               </div>
 
               {esDolar && (
                 <>
                   <div className="form-group">
                     <label className="form-label orange">T.C. DOF (al {fecha})</label>
-                    <input 
-                      type="text" 
-                      className="form-control" 
-                      value={cargandoApi ? 'Consultando...' : tipoCambio.toFixed(4)} 
-                      disabled 
-                      style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} 
-                    />
+                    <input type="text" className="form-control" value={cargandoApi ? 'Consultando...' : tipoCambio.toFixed(4)} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} />
                   </div>
-                  
                   <div className="form-group">
                     <label className="form-label orange">Total en Pesos MXN</label>
-                    <input 
-                      type="number" 
-                      className="form-control" 
-                      value={totalPesos.toFixed(4)} 
-                      disabled 
-                      style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} 
-                    />
+                    <input type="number" className="form-control" value={totalPesos.toFixed(4)} disabled style={{ backgroundColor: '#21262d', color: '#8b949e', cursor: 'not-allowed' }} />
                   </div>
                 </>
               )}
