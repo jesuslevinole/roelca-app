@@ -59,7 +59,7 @@ const OperacionesDashboard = () => {
       const q = query(collection(db, 'horarios'), where('operacionId', '==', operacionViendo.id));
       const snap = await getDocs(q);
       
-      // ✅ CORRECCIÓN APLICADA: Uso de "as any" para evitar el error de TypeScript
+      // ✅ Corrección aplicada: Uso de "as any" para evitar el error de TypeScript
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
       
       // Ordenar localmente del más reciente al más antiguo
@@ -88,8 +88,6 @@ const OperacionesDashboard = () => {
       });
 
       // 2. Actualizar Maestro (Operación) con el nuevo Estatus
-      // NOTA: Si operacionViendo es local (datosIniciales) esto fallará silenciosamente, 
-      // pero actualizará el UI. Cuando pases 'operaciones' a Firebase 100%, funcionará perfecto.
       const opRef = doc(db, 'operaciones', String(operacionViendo.id));
       batch.update(opRef, { status: nuevoStatus });
 
@@ -123,9 +121,44 @@ const OperacionesDashboard = () => {
       {operacionViendo && (
         <div className="modal-overlay">
           <div className="form-card detail-card" style={{ maxWidth: '900px', maxHeight: '90vh' }}>
-            <div className="form-header">
-              <h2>Detalle de Operación <span style={{ color: '#D84315' }}>{operacionViendo.ref}</span></h2>
-              <button onClick={() => setOperacionViendo(null)} className="btn-window close">✕</button>
+            <div className="form-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ margin: 0 }}>Detalle de Operación <span style={{ color: '#D84315' }}>{operacionViendo.ref}</span></h2>
+              
+              {/* ✅ NUEVO: BOTONES DE HORARIO CON ICONOS EN LA CABECERA */}
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                <button 
+                  onClick={abrirRegistroHorario} 
+                  title="Registrar Horario / Cambiar Status"
+                  style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = '#3b82f6'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = '#8b949e'}
+                >
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                </button>
+                
+                <button 
+                  onClick={verHistorial} 
+                  title="Ver Bitácora (Historial)"
+                  style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }}
+                  onMouseEnter={(e) => e.currentTarget.style.color = '#10b981'}
+                  onMouseLeave={(e) => e.currentTarget.style.color = '#8b949e'}
+                >
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                  </svg>
+                </button>
+                
+                <div style={{ width: '1px', height: '24px', backgroundColor: '#30363d', margin: '0 4px' }}></div>
+                
+                <button onClick={() => setOperacionViendo(null)} className="btn-window close">✕</button>
+              </div>
             </div>
             
             <div className="detail-content" style={{ paddingRight: '12px' }}>
@@ -133,26 +166,10 @@ const OperacionesDashboard = () => {
               <div className="detail-grid" style={{ marginBottom: '24px' }}>
                 <div className="detail-item"><span className="detail-label">Fecha del Servicio</span><span className="detail-value">{mostrarDato(operacionViendo.fecha)}</span></div>
                 <div className="detail-item"><span className="detail-label">Tipo de Operación</span><span className="detail-value"><span className={`dot ${operacionViendo.tipo === 'Fletes' ? 'dot-green' : 'dot-orange'}`}></span>{mostrarDato(operacionViendo.tipo)}</span></div>
-                
-                {/* STATUS VISUAL DESTACADO */}
                 <div className="detail-item"><span className="detail-label">Status Actual</span><span className="detail-value" style={{ color: '#f0f6fc', fontWeight: 'bold' }}>{mostrarDato(operacionViendo.status)}</span></div>
-                
                 <div className="detail-item"><span className="detail-label">Cliente (Paga)</span><span className="detail-value">{mostrarDato(operacionViendo.clientePaga)}</span></div>
                 <div className="detail-item"><span className="detail-label">Convenio</span><span className="detail-value">{mostrarDato(operacionViendo.convenio)}</span></div>
                 <div className="detail-item"><span className="detail-label"># de Remolque</span><span className="detail-value">{mostrarDato(operacionViendo.remolque)}</span></div>
-                
-                {/* BOTONES DE CONTROL DE HORARIOS (Abarca 2 columnas para no apretarse) */}
-                <div className="detail-item" style={{ gridColumn: 'span 2', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', marginTop: '8px' }}>
-                  <span className="detail-label" style={{ display: 'block', marginBottom: '12px', color: '#f0f6fc' }}>⌚ Control de Horarios y Estatus</span>
-                  <div style={{ display: 'flex', gap: '12px' }}>
-                    <button onClick={abrirRegistroHorario} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
-                      Registrar Horario / Cambiar Status
-                    </button>
-                    <button onClick={verHistorial} className="btn btn-outline" style={{ padding: '8px 16px', fontSize: '0.85rem', backgroundColor: '#21262d' }}>
-                      Ver Bitácora (Historial)
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
 
