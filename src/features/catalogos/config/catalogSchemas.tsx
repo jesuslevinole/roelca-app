@@ -212,12 +212,18 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     id: 'status_servicio', titulo: 'Status del Servicio',
     icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />,
     fields: [
-      { name: 'boton_status', label: 'Botón/Status', type: 'select', required: true, options: ['Botón', 'Status'] },
-      { name: 'nombre', label: 'Name', type: 'text', required: true },
+      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
       { name: 'descripcion', label: 'Descripción', type: 'text' },
-      { name: 'operacion', label: 'Operación', type: 'text' },
-      { name: 'tipo', label: 'Type', type: 'text' },
-      { name: 'obligatorio', label: 'Obligatorio', type: 'select', options: ['Sí', 'No'] }
+      { name: 'tipo', label: 'Type', type: 'select', required: true, options: ['Importación', 'Exportación', 'Movimiento'] },
+      { name: 'boton_status', label: 'Botón/Status', type: 'select', required: true, options: ['Botón', 'Status'] },
+      { 
+        name: 'operacion', 
+        label: 'Operación', 
+        type: 'select', 
+        required: true,
+        dynamicOptions: { collection: 'catalogo_tipo_operacion', labelField: 'tipo_operacion', valueField: 'id' }
+      },
+      { name: 'obligatorio', label: 'Obligatorio', type: 'select', required: true, options: ['Sí', 'No'] }
     ]
   },
   tipo_empresa: {
@@ -263,7 +269,6 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     ]
   },
   
-  // ✅ MODIFICACIÓN AQUÍ: ESQUEMA DE TARIFAS DE REFERENCIA ACTUALIZADO
   tarifas_referencia: {
     id: 'tarifas_referencia', titulo: 'Tarifas de Referencia',
     icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />,
@@ -275,7 +280,6 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
         required: true, 
         dynamicOptions: { collection: 'catalogo_tipos_tarifarios', labelField: 'descripcion', valueField: 'id' } 
       },
-      // 1. Convertido a selector dinámico
       { 
         name: 'tipo_remolque', 
         label: 'Tipo de Remolque', 
@@ -285,9 +289,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       },
       { name: 'estado_carga', label: 'Cargada / Vacía', type: 'select', required: true, options: ['Cargada', 'Vacía'] },
       { name: 'trompo', label: 'Trompo', type: 'select', required: true, options: ['Sí', 'No'] },
-      // 2. Nuevo campo Regular/Hazmat
       { name: 'regular_hazmat', label: 'Regular / Hazmat', type: 'select', required: true, options: ['Regular', 'Hazmat'] },
-      // 3. Nuevo campo Aduana (Foráneo)
       { 
         name: 'aduana', 
         label: 'Aduana', 
