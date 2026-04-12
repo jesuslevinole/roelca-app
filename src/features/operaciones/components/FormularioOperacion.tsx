@@ -55,6 +55,8 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
   const [showDropdownClienteMercancia, setShowDropdownClienteMercancia] = useState(false);
   const [searchProvServicios, setSearchProvServicios] = useState('');
   const [showDropdownProvServicios, setShowDropdownProvServicios] = useState(false);
+  
+  // Buscador de Proveedor de Transporte
   const [searchProvTransporte, setSearchProvTransporte] = useState('');
   const [showDropdownProvTransporte, setShowDropdownProvTransporte] = useState(false);
 
@@ -464,6 +466,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
                     <label className="form-label">Embalaje</label>
                     <select name="embalaje" className="form-control" value={formData.embalaje} onChange={handleChange}>
                       <option value="">-- Seleccionar --</option>
+                      {/* ✅ ESTRICTAMENTE MUESTRA LA CLAVE (PALLET, PAQUETE, Piezas) */}
                       {embalajes?.map((e:any) => <option key={e.id} value={e.id}>{e.clave}</option>)}
                     </select>
                   </div>
@@ -535,6 +538,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
               {pestañaActiva === 'unidad' && (
                 <div className="form-grid">
 
+                  {/* ✅ NUEVO BUSCADOR: PROVEEDOR DE TRANSPORTE (ca21ab07) */}
                   <div className="form-group" style={{ position: 'relative', gridColumn: 'span 3' }}>
                     <label className="form-label">Proveedor de Transporte</label>
                     <input
