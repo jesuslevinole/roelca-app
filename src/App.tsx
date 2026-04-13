@@ -234,12 +234,11 @@ function App() {
       </div>
 
       <div className="main-area">
-        <div className="topbar">
+        {/* ✅ TOPBAR LIMPIA (SIN BUSCADOR) */}
+        <div className="topbar" style={{ justifyContent: 'space-between' }}>
+          
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <button className="menu-toggle-btn" onClick={() => setMenuAbierto(!menuAbierto)} title="Ocultar/Mostrar Menú">☰</button>
-            <div className="search-container">
-              <input type="text" className="search-input" placeholder="Buscar..." />
-            </div>
           </div>
           
           <div className="topbar-right" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '20px' }}>

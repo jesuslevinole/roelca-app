@@ -1,7 +1,7 @@
 // src/features/operaciones/components/OperacionesDashboard.tsx
 import { useState, useEffect } from 'react';
 import { FormularioOperacion } from './FormularioOperacion';
-import { collection, doc, writeBatch, query, where, getDocs, orderBy, limit } from 'firebase/firestore'; // ✅ IMPORTAMOS LIMIT
+import { collection, doc, writeBatch, query, where, getDocs, orderBy, limit } from 'firebase/firestore'; 
 import { db } from '../../../config/firebase';
 import { obtenerBotonesHorarioDinamicos } from '../config/statusRules';
 
@@ -9,7 +9,7 @@ const OperacionesDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
   
-  const [operaciones, setOperaciones] = useState<any[]>([]);
+  const [operacionesGlobales, setOperacionesGlobales] = useState<any[]>([]);
   const [cargandoOperaciones, setCargandoOperaciones] = useState(true);
   const [operacionViendo, setOperacionViendo] = useState<any | null>(null);
 
@@ -22,22 +22,27 @@ const OperacionesDashboard = () => {
   const [botonesDisponibles, setBotonesDisponibles] = useState<string[]>([]);
   const [catalogosGlobales, setCatalogosGlobales] = useState<any>({});
 
-  // ✅ DESCARGA BLINDADA (Sobrevive al F5)
+  const [busqueda, setBusqueda] = useState('');
+
+  // ✅ ESTADOS DE PAGINACIÓN
+  const [paginaActual, setPaginaActual] = useState(1);
+  const registrosPorPagina = 50;
+
+  // Estado para el hover de las filas (solución fondo sólido en móvil)
+  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
+
+  // ✅ DESCARGA BLINDADA (Sobrevive al F5 y limita a 100 registros)
   useEffect(() => {
     const descargarTodo = async () => {
       setCargandoOperaciones(true);
       try {
         let catGuardados = null;
-        
-        // 1. Verificamos si el navegador YA tiene los catálogos pesados guardados (Evita cobros al hacer F5)
         const cacheCatStr = sessionStorage.getItem('roelca_catalogos_v1');
 
         if (cacheCatStr) {
-          // Si existen en el navegador, los usamos gratis
           catGuardados = JSON.parse(cacheCatStr);
           setCatalogosGlobales(catGuardados);
         } else {
-          // Si no existen, los bajamos de Firebase (solo pasará la primera vez que abras el navegador en el día)
           const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap] = await Promise.all([
             getDocs(collection(db, 'empresas')),
             getDocs(collection(db, 'catalogo_tipo_operacion')),
@@ -62,12 +67,10 @@ const OperacionesDashboard = () => {
             catalogoConvDetalles: convDetSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }))
           };
           
-          // Guardamos en el disco del navegador
           sessionStorage.setItem('roelca_catalogos_v1', JSON.stringify(catGuardados));
           setCatalogosGlobales(catGuardados);
         }
 
-        // 2. Descargamos las Operaciones. ✅ PUSIMOS LÍMITE DE 100 PARA FRENAR EL CONSUMO.
         const operacionesSnap = await getDocs(query(collection(db, 'operaciones'), orderBy('fechaServicio', 'desc'), limit(100)));
 
         const opData = operacionesSnap.docs.map((d: any) => {
@@ -80,7 +83,7 @@ const OperacionesDashboard = () => {
           };
         });
 
-        setOperaciones(opData);
+        setOperacionesGlobales(opData);
 
       } catch (e) {
         console.error("Error al pre-cargar datos:", e);
@@ -89,6 +92,10 @@ const OperacionesDashboard = () => {
     };
     descargarTodo();
   }, []);
+
+  useEffect(() => {
+    setPaginaActual(1);
+  }, [busqueda]);
 
   useEffect(() => {
     const cargarBotones = async () => {
@@ -105,7 +112,7 @@ const OperacionesDashboard = () => {
   
   const eliminarOperacion = (id: string) => {
     if (window.confirm('¿Eliminar registro permanentemente?')) {
-      setOperaciones(prev => prev.filter((op: any) => op.id !== id));
+      setOperacionesGlobales(prev => prev.filter((op: any) => op.id !== id));
       setOperacionViendo(null);
     }
   };
@@ -153,7 +160,7 @@ const OperacionesDashboard = () => {
       const operacionActualizada = { ...operacionViendo, status: nuevoStatus };
       setOperacionViendo(operacionActualizada);
       
-      setOperaciones(prev => prev.map((op: any) => op.id === operacionActualizada.id ? operacionActualizada : op));
+      setOperacionesGlobales(prev => prev.map((op: any) => op.id === operacionActualizada.id ? operacionActualizada : op));
       
       alert('Horario registrado y Estatus actualizado.');
       setModalHorarios('cerrado');
@@ -168,23 +175,65 @@ const OperacionesDashboard = () => {
     const opConNombre = { ...opNueva, nombreCliente: clienteObj ? clienteObj.nombre : 'Desconocido' };
 
     if (operacionEditando) {
-      setOperaciones(prev => prev.map((op: any) => op.id === opConNombre.id ? opConNombre : op));
+      setOperacionesGlobales(prev => prev.map((op: any) => op.id === opConNombre.id ? opConNombre : op));
     } else {
-      setOperaciones(prev => [opConNombre, ...prev]);
+      setOperacionesGlobales(prev => [opConNombre, ...prev]);
     }
     
     setEstadoFormulario('cerrado');
     setOperacionEditando(null);
   };
 
-  // Botón para forzar la actualización de los catálogos en caso de que agregues un cliente nuevo hoy mismo
   const forzarRecarga = () => {
     sessionStorage.removeItem('roelca_catalogos_v1');
     window.location.reload();
   };
 
+  // ✅ Filtrado GLOBAL por buscador inteligente (A prueba de números)
+  const operacionesFiltradas = operacionesGlobales.filter(op => {
+    const b = busqueda.toLowerCase();
+    return (
+      String(op.ref || op.id || '').toLowerCase().includes(b) ||
+      String(op.fechaServicio || '').toLowerCase().includes(b) ||
+      String(op.nombreCliente || '').toLowerCase().includes(b) ||
+      String(op.tipoServicio || '').toLowerCase().includes(b) ||
+      String(op.trafico || '').toLowerCase().includes(b) ||
+      String(op.status || '').toLowerCase().includes(b)
+    );
+  });
+
+  // ✅ LOGICA DE PAGINACIÓN
+  const totalPaginas = Math.ceil(operacionesFiltradas.length / registrosPorPagina);
+  const indiceUltimoRegistro = paginaActual * registrosPorPagina;
+  const indicePrimerRegistro = indiceUltimoRegistro - registrosPorPagina;
+  const operacionesEnPantalla = operacionesFiltradas.slice(indicePrimerRegistro, indiceUltimoRegistro);
+
+  const irPaginaSiguiente = () => setPaginaActual(prev => Math.min(prev + 1, totalPaginas));
+  const irPaginaAnterior = () => setPaginaActual(prev => Math.max(prev - 1, 1));
+
+  // ✅ Función para Exportar a CSV
+  const exportarCSV = () => {
+    if (operacionesFiltradas.length === 0) return alert("No hay datos para exportar.");
+    const encabezados = ['# Ref', 'Fecha', 'Cliente', 'Servicio', 'Tráfico', 'Status'];
+    const lineas = operacionesFiltradas.map(op => [
+      `"${op.ref || op.id?.substring(0,6) || ''}"`, `"${op.fechaServicio || ''}"`, 
+      `"${op.nombreCliente || ''}"`, `"${op.tipoServicio || ''}"`, 
+      `"${op.trafico || ''}"`, `"${op.status || ''}"`
+    ].join(','));
+    const csvContent = [encabezados.join(','), ...lineas].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Operaciones_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
-    <>
+    <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease', width: '100%', boxSizing: 'border-box' }}>
+      
       {estadoFormulario !== 'cerrado' && (
         <FormularioOperacion 
           estado={estadoFormulario} initialData={operacionEditando}
@@ -195,11 +244,149 @@ const OperacionesDashboard = () => {
         />
       )}
 
+      {/* CONTENEDOR MAESTRO */}
+     <div style={{ width: '100%', margin: '0 auto' }}>
+        
+        {/* TÍTULO LIMPIO */}
+        <h1 className="module-title" style={{ fontSize: '1.5rem', color: '#f0f6fc', margin: '0 0 24px 0', fontWeight: 'bold' }}>
+          Operaciones
+        </h1>
+
+        {/* BARRA DE CONTROLES: Responsive y Alineada */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px', width: '100%' }}>
+          
+          {/* Izquierda: Filtro Estático */}
+          <div style={{ flex: '1 1 auto', maxWidth: '200px', minWidth: '120px' }}>
+            <select className="form-control" style={{ width: '100%', backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9' }}>
+              <option>Filtro: Todo</option>
+            </select>
+          </div>
+
+          {/* Centro: Buscador Inteligente */}
+          <div style={{ flex: '2 1 250px', display: 'flex', justifyContent: 'center' }}>
+            <div style={{ position: 'relative', width: '100%', maxWidth: '500px' }}>
+              <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input 
+                type="text" 
+                placeholder="Buscar por Ref, Cliente, Status..." 
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                style={{ width: '100%', padding: '10px 10px 10px 40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.95rem', boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+
+          {/* Derecha: Botones */}
+          <div style={{ flex: '1 1 auto', display: 'flex', gap: '12px', justifyContent: 'flex-end', minWidth: '280px' }}>
+            <button className="btn btn-outline" onClick={forzarRecarga} style={{ fontSize: '0.8rem', padding: '4px 12px' }} title="Recargar Catálogos">
+              ↻ Actualizar
+            </button>
+            <button className="btn btn-outline" onClick={exportarCSV} style={{ display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Exportar CSV
+            </button>
+            <button className="btn btn-primary" onClick={handleNuevo} style={{ whiteSpace: 'nowrap' }}>+ Agregar Operación</button>
+          </div>
+        </div>
+
+        {/* TABLA RESPONSIVE */}
+        <div className="content-body" style={{ display: 'block', width: '100%' }}>
+          <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)', width: '100%' }}>
+            {cargandoOperaciones ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Descargando base de datos de Operaciones...</div>
+            ) : (
+              <table className="data-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                <thead style={{ backgroundColor: '#161b22', position: 'sticky', top: 0, zIndex: 10 }}>
+                  <tr>
+                    <th style={{ padding: '16px', width: '100px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d', borderBottom: '1px solid #30363d' }}>
+                      Acciones
+                    </th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}># Ref</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Fecha</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Cliente</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Servicio / Tráfico</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {operacionesEnPantalla.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+                        {busqueda ? 'No se encontraron operaciones para tu búsqueda.' : 'No hay operaciones registradas.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    operacionesEnPantalla.map((op: any) => (
+                      <tr 
+                        key={op.id} 
+                        style={{ borderBottom: '1px solid #21262d', backgroundColor: hoveredRowId === op.id ? '#21262d' : '#0d1117', transition: 'background-color 0.2s', cursor: 'pointer' }}
+                        onMouseEnter={() => setHoveredRowId(op.id)} 
+                        onMouseLeave={() => setHoveredRowId(null)}
+                        onClick={() => setOperacionViendo(op)}
+                      >
+                        {/* CELDA ACCIONES FIJA Y SÓLIDA */}
+                        <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
+                          <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                            <button 
+                              className="btn-small btn-edit" 
+                              onClick={(e) => { e.stopPropagation(); editarOperacion(op); }}
+                              style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                              onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)'}
+                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                            >
+                              Editar
+                            </button>
+                          </div>
+                        </td>
+
+                        <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.ref || op.id?.substring(0,6)}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.fechaServicio}</td>
+                        <td style={{ padding: '16px', fontWeight: '500', color: '#f0f6fc', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.nombreCliente}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.tipoServicio} - {op.trafico}</td>
+                        <td className="status-text" style={{ padding: '16px', color: '#10b981', fontWeight: 'bold', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.status}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* CONTROLES DE PAGINACIÓN */}
+          {operacionesFiltradas.length > 0 && !cargandoOperaciones && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', padding: '0 8px', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ color: '#8b949e', fontSize: '0.9rem' }}>
+                Mostrando {indicePrimerRegistro + 1} - {Math.min(indiceUltimoRegistro, operacionesFiltradas.length)} de {operacionesFiltradas.length} operaciones (Últimas 100)
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  onClick={irPaginaAnterior} 
+                  disabled={paginaActual === 1}
+                  style={{ padding: '6px 12px', backgroundColor: paginaActual === 1 ? '#0d1117' : '#21262d', color: paginaActual === 1 ? '#484f58' : '#c9d1d9', border: '1px solid #30363d', borderRadius: '6px', cursor: paginaActual === 1 ? 'not-allowed' : 'pointer' }}
+                >
+                  Anterior
+                </button>
+                <span style={{ padding: '6px 12px', color: '#f0f6fc', fontWeight: 'bold' }}>{paginaActual} / {totalPaginas || 1}</span>
+                <button 
+                  onClick={irPaginaSiguiente} 
+                  disabled={paginaActual === totalPaginas || totalPaginas === 0}
+                  style={{ padding: '6px 12px', backgroundColor: paginaActual === totalPaginas || totalPaginas === 0 ? '#0d1117' : '#21262d', color: paginaActual === totalPaginas || totalPaginas === 0 ? '#484f58' : '#c9d1d9', border: '1px solid #30363d', borderRadius: '6px', cursor: paginaActual === totalPaginas || totalPaginas === 0 ? 'not-allowed' : 'pointer' }}
+                >
+                  Siguiente
+                </button>
+              </div>
+            </div>
+          )}
+
+        </div>
+      </div>
+
+      {/* MODALES ADICIONALES */}
       {operacionViendo && (
         <div className="modal-overlay">
           <div className="form-card detail-card" style={{ maxWidth: '900px', maxHeight: '90vh' }}>
             <div className="form-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ margin: 0 }}>Detalle de Operación <span style={{ color: '#D84315' }}>{operacionViendo.ref}</span></h2>
+              <h2 style={{ margin: 0 }}>Detalle de Operación <span style={{ color: '#D84315' }}>{operacionViendo.ref || operacionViendo.id?.substring(0,6)}</span></h2>
               <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                 <button onClick={abrirRegistroHorario} title="Registrar Horario / Cambiar Status" style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
@@ -292,43 +479,7 @@ const OperacionesDashboard = () => {
         </div>
       )}
 
-      <div className="module-header" style={{ justifyContent: 'space-between', paddingBottom: '16px' }}>
-        <button className="btn btn-outline" onClick={forzarRecarga} style={{ fontSize: '0.8rem' }}>↻ Actualizar Catálogos</button>
-        <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar Operación</button>
-      </div>
-
-      <div className="content-body" style={{ display: 'block' }}>
-        <div className="table-container">
-          {cargandoOperaciones ? (
-             <div style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Descargando base de datos de Operaciones...</div>
-          ) : (
-            <table className="data-table">
-              <thead>
-                <tr><th># Ref</th><th>Fecha</th><th>Cliente</th><th>Servicio / Tráfico</th><th>Status</th><th>Acciones</th></tr>
-              </thead>
-              <tbody>
-                {operaciones.length === 0 ? (
-                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: '20px' }}>No hay operaciones registradas</td></tr>
-                ) : (
-                  operaciones.map((op: any) => (
-                    <tr key={op.id} onClick={() => setOperacionViendo(op)}>
-                      <td className="font-mono">{op.ref || op.id?.substring(0,6)}</td>
-                      <td>{op.fechaServicio}</td>
-                      <td>{op.nombreCliente}</td>
-                      <td>{op.tipoServicio} - {op.trafico}</td>
-                      <td className="status-text">{op.status}</td>
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <button className="btn-small btn-edit" onClick={() => editarOperacion(op)}>Editar</button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </>
+    </div>
   );
 };
 

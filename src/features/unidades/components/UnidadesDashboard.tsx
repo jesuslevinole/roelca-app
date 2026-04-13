@@ -3,24 +3,39 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, eliminarRegistro } from '../../../config/firebase'; 
 import { FormularioUnidad } from './FormularioUnidad';
-import type { UnidadRecord } from '../../../types/unidad'; // Asegúrate de que la ruta sea correcta según tu proyecto
+import type { UnidadRecord } from '../../../types/unidad'; 
 
 export const UnidadesDashboard: React.FC = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [registroEditando, setRegistroEditando] = useState<UnidadRecord | null>(null);
-  const [registros, setRegistros] = useState<UnidadRecord[]>([]);
-
-  // Nuevo estado para el filtro
+  
+  // Lista de TODOS los registros bajados de la BD
+  const [registrosGlobales, setRegistrosGlobales] = useState<UnidadRecord[]>([]);
+  const [busqueda, setBusqueda] = useState('');
   const [filtroTipo, setFiltroTipo] = useState<string>('Todos');
+
+  // ✅ ESTADOS DE PAGINACIÓN (Frontend - 0 Costos de Lectura)
+  const [paginaActual, setPaginaActual] = useState(1);
+  const registrosPorPagina = 50;
+
+  // Estado para el hover de las filas (solución para fondo sólido en móvil)
+  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
 
   // Suscripción en tiempo real a Firebase
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'unidades'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UnidadRecord[];
-      setRegistros(data);
+      // Ordenar alfabéticamente por Unidad
+      data.sort((a, b) => a.unidad.localeCompare(b.unidad));
+      setRegistrosGlobales(data);
     });
     return () => unsubscribe();
   }, []);
+
+  // Si el usuario busca o filtra algo, reseteamos a la página 1
+  useEffect(() => {
+    setPaginaActual(1);
+  }, [busqueda, filtroTipo]);
 
   const handleNuevo = () => { 
     setRegistroEditando(null); 
@@ -45,26 +60,68 @@ export const UnidadesDashboard: React.FC = () => {
   };
 
   // --- LÓGICA DE FILTRADO DINÁMICO ---
-  // 1. Extraer los tipos de unidad únicos que existen en los registros actuales
+  // 1. Extraer los tipos de unidad únicos
   const tiposDisponibles = useMemo(() => {
-    const tipos = registros.map(reg => reg.tipoUnidadNombre || 'Sin Asignar');
+    const tipos = registrosGlobales.map(reg => reg.tipoUnidadNombre || 'Sin Asignar');
     return Array.from(new Set(tipos)).sort();
-  }, [registros]);
+  }, [registrosGlobales]);
 
-  // 2. Filtrar y ordenar la tabla plana
+  // 2. Filtrado por Selector y Buscador Global
   const registrosFiltrados = useMemo(() => {
-    let resultado = registros;
+    let resultado = registrosGlobales;
     
+    // Aplicar Filtro Select
     if (filtroTipo !== 'Todos') {
       resultado = resultado.filter(reg => (reg.tipoUnidadNombre || 'Sin Asignar') === filtroTipo);
     }
 
-    // Ordenar alfabéticamente por el nombre de la unidad
-    return resultado.sort((a, b) => a.unidad.localeCompare(b.unidad));
-  }, [registros, filtroTipo]);
+    // Aplicar Buscador de texto
+    if (busqueda.trim() !== '') {
+      const b = busqueda.toLowerCase();
+      resultado = resultado.filter(reg => 
+        (reg.unidad || '').toLowerCase().includes(b) ||
+        (reg.tipoUnidadNombre || '').toLowerCase().includes(b) ||
+        (reg.placas || '').toLowerCase().includes(b) ||
+        (reg.serie || '').toLowerCase().includes(b) ||
+        (reg.marca || '').toLowerCase().includes(b) ||
+        (reg.modelo || '').toLowerCase().includes(b)
+      );
+    }
+
+    return resultado;
+  }, [registrosGlobales, filtroTipo, busqueda]);
+
+  // ✅ LOGICA DE PAGINACIÓN
+  const totalPaginas = Math.ceil(registrosFiltrados.length / registrosPorPagina);
+  const indiceUltimoRegistro = paginaActual * registrosPorPagina;
+  const indicePrimerRegistro = indiceUltimoRegistro - registrosPorPagina;
+  const registrosEnPantalla = registrosFiltrados.slice(indicePrimerRegistro, indiceUltimoRegistro);
+
+  const irPaginaSiguiente = () => setPaginaActual(prev => Math.min(prev + 1, totalPaginas));
+  const irPaginaAnterior = () => setPaginaActual(prev => Math.max(prev - 1, 1));
+
+  // ✅ Función para Exportar a CSV
+  const exportarCSV = () => {
+    if (registrosFiltrados.length === 0) return alert("No hay datos para exportar.");
+    const encabezados = ['Unidad', 'Tipo', 'Estatus', 'Placas', 'Serie', 'Marca', 'Modelo', 'Tanque 1', 'Tanque 2', 'Porcentaje'];
+    const lineas = registrosFiltrados.map(r => [
+      `"${r.unidad || ''}"`, `"${r.tipoUnidadNombre || 'Sin Asignar'}"`, `"${r.activo ? 'Activo' : 'Inactivo'}"`,
+      `"${r.placas || ''}"`, `"${r.serie || ''}"`, `"${r.marca || ''}"`, `"${r.modelo || ''}"`,
+      `"${r.tanqueUno || 0}"`, `"${r.tanqueDos || 0}"`, `"${Number(r.porcentajeRecarga || 0).toFixed(2)}"`
+    ].join(','));
+    const csvContent = [encabezados.join(','), ...lineas].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Unidades_Propias_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   return (
-    <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
+    <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease', width: '100%', boxSizing: 'border-box' }}>
       
       {estadoFormulario !== 'cerrado' && (
         <FormularioUnidad 
@@ -76,114 +133,168 @@ export const UnidadesDashboard: React.FC = () => {
         />
       )}
 
-      {/* HEADER CON TÍTULO Y BOTÓN AGREGAR */}
-      <div className="module-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '16px' }}>
-        <h1 className="module-title" style={{ fontSize: '1.25rem', color: '#8b949e', margin: 0, fontWeight: '400' }}>
-          Bases de Datos &gt; <span style={{ color: '#f0f6fc', fontWeight: 'bold' }}>Unidades Propias ({registrosFiltrados.length})</span>
+      {/* ✅ CONTENEDOR MAESTRO */}
+     <div style={{ width: '100%', margin: '0 auto' }}>
+        
+        {/* TÍTULO LIMPIO */}
+        <h1 className="module-title" style={{ fontSize: '1.5rem', color: '#f0f6fc', margin: '0 0 24px 0', fontWeight: 'bold' }}>
+          Unidades Propias
         </h1>
-        <button className="btn btn-primary" onClick={handleNuevo} style={{ backgroundColor: '#D84315', border: 'none', padding: '8px 16px', borderRadius: '6px', color: 'white', fontWeight: '600' }}>
-          + Agregar
-        </button>
-      </div>
 
-      {/* BARRA DE CONTROLES (FILTROS) */}
-      <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', paddingBottom: '20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <label style={{ color: '#8b949e', fontSize: '0.9rem', fontWeight: '500' }}>Filtrar por Tipo:</label>
-          <select 
-            value={filtroTipo} 
-            onChange={(e) => setFiltroTipo(e.target.value)}
-            style={{ 
-              backgroundColor: '#010409', color: '#c9d1d9', border: '1px solid #30363d', 
-              padding: '8px 12px', borderRadius: '6px', fontSize: '0.9rem', outline: 'none', cursor: 'pointer', minWidth: '200px'
-            }}
-          >
-            <option value="Todos">Todos los tipos</option>
-            {tiposDisponibles.map(tipo => (
-              <option key={tipo} value={tipo}>{tipo}</option>
-            ))}
-          </select>
+        {/* BARRA DE CONTROLES: Responsive y Alineada */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px', width: '100%' }}>
+          
+          {/* Izquierda: Filtro Selectivo */}
+          <div style={{ flex: '1 1 auto', maxWidth: '200px', minWidth: '150px' }}>
+            <select 
+              value={filtroTipo} 
+              onChange={(e) => setFiltroTipo(e.target.value)}
+              className="form-control" 
+              style={{ width: '100%', backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer' }}
+            >
+              <option value="Todos">Filtro: Todos</option>
+              {tiposDisponibles.map(tipo => (
+                <option key={tipo} value={tipo}>{tipo}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Centro: Buscador Inteligente */}
+          <div style={{ flex: '2 1 250px', display: 'flex', justifyContent: 'center' }}>
+            <div style={{ position: 'relative', width: '100%', maxWidth: '500px' }}>
+              <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input 
+                type="text" 
+                placeholder="Buscar por Unidad, Placas, Serie, Modelo..." 
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                style={{ width: '100%', padding: '10px 10px 10px 40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.95rem', boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+
+          {/* Derecha: Botones */}
+          <div style={{ flex: '1 1 auto', display: 'flex', gap: '12px', justifyContent: 'flex-end', minWidth: '280px' }}>
+            <button className="btn btn-outline" onClick={exportarCSV} style={{ display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Exportar Excel
+            </button>
+            <button className="btn btn-primary" onClick={handleNuevo} style={{ whiteSpace: 'nowrap' }}>+ Agregar Unidad</button>
+          </div>
         </div>
-      </div>
 
-      {/* TABLA PLANA Y FILTRADA */}
-      <div className="content-body" style={{ display: 'block' }}>
-        <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
-          <table className="data-table" style={{ width: '100%', minWidth: '1200px', borderCollapse: 'collapse', textAlign: 'left' }}>
-            <thead style={{ backgroundColor: '#161b22', position: 'sticky', top: 0, zIndex: 10 }}>
-              <tr>
-                <th style={{ padding: '12px 16px', width: '140px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d', borderBottom: '1px solid #30363d' }}>
-                  ACCIONES
-                </th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>UNIDAD</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>TIPO</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>STATUS</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>PLACAS</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>SERIE</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>MARCA</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>MODELO</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>TANQUE 1</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>TANQUE 2</th>
-                <th style={{ padding: '12px 16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d' }}>PORCENTAJE</th>
-              </tr>
-            </thead>
-            
-            <tbody>
-              {registrosFiltrados.length === 0 ? (
+        {/* TABLA RESPONSIVE */}
+        <div className="content-body" style={{ display: 'block', width: '100%' }}>
+          <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)', width: '100%' }}>
+            <table className="data-table" style={{ width: '100%', minWidth: '1200px', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead style={{ backgroundColor: '#161b22', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
-                  <td colSpan={11} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
-                    No hay unidades registradas para este filtro.
-                  </td>
+                  {/* Acciones al principio */}
+                  <th style={{ padding: '16px', width: '160px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d', borderBottom: '1px solid #30363d' }}>
+                    Acciones
+                  </th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>UNIDAD</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>TIPO</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>STATUS</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>PLACAS</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>SERIE</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>MARCA</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>MODELO</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>TANQUE 1</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>TANQUE 2</th>
+                  <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>% RECARGA</th>
                 </tr>
-              ) : (
-                registrosFiltrados.map(reg => (
-                  <tr 
-                    key={reg.id} 
-                    style={{ borderBottom: '1px solid #21262d', transition: 'background-color 0.2s', cursor: 'pointer' }}
-                    onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#161b22'} 
-                    onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
-                    onClick={() => editarRegistro(reg)}
-                  >
-                    <td style={{ padding: '12px 16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
-                      <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-                        <button 
-                          className="btn-small btn-edit" 
-                          onClick={(e) => { e.stopPropagation(); editarRegistro(reg); }}
-                          style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '4px 10px', fontSize: '0.8rem' }}
-                        >
-                          Editar
-                        </button>
-                        <button 
-                          className="btn-small btn-danger" 
-                          onClick={(e) => handleEliminar(e, reg.id!)}
-                          style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 10px', fontSize: '0.8rem' }}
-                        >
-                          Eliminar
-                        </button>
-                      </div>
+              </thead>
+              
+              <tbody>
+                {registrosEnPantalla.length === 0 ? (
+                  <tr>
+                    <td colSpan={11} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+                      {busqueda || filtroTipo !== 'Todos' ? 'No se encontraron unidades con estos filtros.' : 'Aún no hay unidades registradas.'}
                     </td>
-
-                    <td style={{ padding: '12px 16px', fontWeight: '500', color: '#f0f6fc' }}>{reg.unidad}</td>
-                    <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tipoUnidadNombre || 'Sin Asignar'}</td>
-                    <td style={{ padding: '12px 16px' }}>
-                      {reg.activo ? (
-                        <span style={{ backgroundColor: 'rgba(63, 185, 80, 0.2)', color: '#3fb950', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Activo</span>
-                      ) : (
-                        <span style={{ backgroundColor: 'rgba(139, 148, 158, 0.2)', color: '#8b949e', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Inactivo</span>
-                      )}
-                    </td>
-                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.placas || '-'}</td>
-                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.serie || '-'}</td>
-                    <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.marca || '-'}</td>
-                    <td style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.modelo || '-'}</td>
-                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tanqueUno || 0}</td>
-                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{reg.tanqueDos || 0}</td>
-                    <td className="font-mono" style={{ padding: '12px 16px', color: '#c9d1d9' }}>{Number(reg.porcentajeRecarga || 0).toFixed(2)}</td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  registrosEnPantalla.map(reg => (
+                    <tr 
+                      key={reg.id} 
+                      style={{ borderBottom: '1px solid #21262d', backgroundColor: hoveredRowId === reg.id ? '#21262d' : '#0d1117', transition: 'background-color 0.2s', cursor: 'pointer' }}
+                      onMouseEnter={() => setHoveredRowId(reg.id!)} 
+                      onMouseLeave={() => setHoveredRowId(null)}
+                      onClick={() => editarRegistro(reg)}
+                    >
+                      {/* Celda de Acciones fija a la izquierda */}
+                      <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
+                        <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                          <button 
+                            className="btn-small btn-edit" 
+                            onClick={(e) => { e.stopPropagation(); editarRegistro(reg); }}
+                            style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                            onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)'}
+                            onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            Editar
+                          </button>
+                          <button 
+                            className="btn-small btn-danger" 
+                            onClick={(e) => handleEliminar(e, reg.id!)}
+                            style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                            onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                            onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: '16px', fontWeight: '500', color: '#f0f6fc', whiteSpace: 'nowrap' }}>{reg.unidad}</td>
+                      <td style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{reg.tipoUnidadNombre || 'Sin Asignar'}</td>
+                      <td style={{ padding: '16px', whiteSpace: 'nowrap' }}>
+                        {reg.activo ? (
+                          <span style={{ backgroundColor: 'rgba(63, 185, 80, 0.1)', color: '#3fb950', border: '1px solid #3fb950', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Activo</span>
+                        ) : (
+                          <span style={{ backgroundColor: 'rgba(248, 81, 73, 0.1)', color: '#f85149', border: '1px solid #f85149', padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>Inactivo</span>
+                        )}
+                      </td>
+                      <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{reg.placas || '-'}</td>
+                      <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{reg.serie || '-'}</td>
+                      <td style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{reg.marca || '-'}</td>
+                      <td style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{reg.modelo || '-'}</td>
+                      <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{reg.tanqueUno || 0}</td>
+                      <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{reg.tanqueDos || 0}</td>
+                      <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>{Number(reg.porcentajeRecarga || 0).toFixed(2)} %</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* CONTROLES DE PAGINACIÓN */}
+          {registrosFiltrados.length > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', padding: '0 8px', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ color: '#8b949e', fontSize: '0.9rem' }}>
+                Mostrando {indicePrimerRegistro + 1} - {Math.min(indiceUltimoRegistro, registrosFiltrados.length)} de {registrosFiltrados.length} registros
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  onClick={irPaginaAnterior} 
+                  disabled={paginaActual === 1}
+                  style={{ padding: '6px 12px', backgroundColor: paginaActual === 1 ? '#0d1117' : '#21262d', color: paginaActual === 1 ? '#484f58' : '#c9d1d9', border: '1px solid #30363d', borderRadius: '6px', cursor: paginaActual === 1 ? 'not-allowed' : 'pointer' }}
+                >
+                  Anterior
+                </button>
+                <span style={{ padding: '6px 12px', color: '#f0f6fc', fontWeight: 'bold' }}>{paginaActual} / {totalPaginas || 1}</span>
+                <button 
+                  onClick={irPaginaSiguiente} 
+                  disabled={paginaActual === totalPaginas || totalPaginas === 0}
+                  style={{ padding: '6px 12px', backgroundColor: paginaActual === totalPaginas || totalPaginas === 0 ? '#0d1117' : '#21262d', color: paginaActual === totalPaginas || totalPaginas === 0 ? '#484f58' : '#c9d1d9', border: '1px solid #30363d', borderRadius: '6px', cursor: paginaActual === totalPaginas || totalPaginas === 0 ? 'not-allowed' : 'pointer' }}
+                >
+                  Siguiente
+                </button>
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
     </div>
