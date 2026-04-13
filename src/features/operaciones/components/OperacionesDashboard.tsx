@@ -5,14 +5,15 @@ import { collection, doc, writeBatch, query, where, getDocs, orderBy } from 'fir
 import { db } from '../../../config/firebase';
 import { obtenerBotonesHorarioDinamicos } from '../config/statusRules';
 
+let cacheCatalogos: any = null;
+let cacheOperaciones: any[] | null = null;
+
 const OperacionesDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
   
-  // Estado para almacenar las operaciones de FIREBASE
   const [operaciones, setOperaciones] = useState<any[]>([]);
   const [cargandoOperaciones, setCargandoOperaciones] = useState(true);
-
   const [operacionViendo, setOperacionViendo] = useState<any | null>(null);
 
   const [modalHorarios, setModalHorarios] = useState<'cerrado' | 'registrar' | 'historial'>('cerrado');
@@ -22,13 +23,17 @@ const OperacionesDashboard = () => {
   const [nuevaFechaHora, setNuevaFechaHora] = useState('');
   
   const [botonesDisponibles, setBotonesDisponibles] = useState<string[]>([]);
-
-  // Almacén de Catálogos para ahorrar lecturas de Firebase
   const [catalogosGlobales, setCatalogosGlobales] = useState<any>({});
 
-  // DESCARGA INICIAL DE CATÁLOGOS Y OPERACIONES REALES (Solo gasta lecturas 1 vez al entrar)
   useEffect(() => {
     const descargarTodo = async () => {
+      if (cacheCatalogos && cacheOperaciones) {
+        setCatalogosGlobales(cacheCatalogos);
+        setOperaciones(cacheOperaciones);
+        setCargandoOperaciones(false);
+        return;
+      }
+
       setCargandoOperaciones(true);
       try {
         const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap, operacionesSnap] = await Promise.all([
@@ -44,10 +49,9 @@ const OperacionesDashboard = () => {
           getDocs(query(collection(db, 'operaciones'), orderBy('fechaServicio', 'desc')))
         ]);
 
-        // ✅ CORRECCIÓN TypeScript: (d: any)
         const empresasMap = empSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }));
 
-        setCatalogosGlobales({
+        const catGuardados = {
           empresas: empresasMap,
           tiposOperacion: opSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
           embalajes: embSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
@@ -57,9 +61,8 @@ const OperacionesDashboard = () => {
           catalogoTC: tcSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
           catalogoConvClientes: convCliSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
           catalogoConvDetalles: convDetSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }))
-        });
+        };
 
-        // Mapeamos las operaciones y cruzamos el cliente para no mostrar el ID sino el Nombre
         const opData = operacionesSnap.docs.map((d: any) => {
           const data = d.data() as any;
           const clienteObj = empresasMap.find((e: any) => e.id === data.clientePaga);
@@ -70,6 +73,10 @@ const OperacionesDashboard = () => {
           };
         });
 
+        cacheCatalogos = catGuardados;
+        cacheOperaciones = opData;
+
+        setCatalogosGlobales(catGuardados);
         setOperaciones(opData);
 
       } catch (e) {
@@ -95,8 +102,9 @@ const OperacionesDashboard = () => {
   
   const eliminarOperacion = (id: string) => {
     if (window.confirm('¿Eliminar registro permanentemente?')) {
-      // ✅ CORRECCIÓN TypeScript: (op: any)
-      setOperaciones(prev => prev.filter((op: any) => op.id !== id));
+      const nuevasOperaciones = operaciones.filter((op: any) => op.id !== id);
+      setOperaciones(nuevasOperaciones);
+      cacheOperaciones = nuevasOperaciones; 
       setOperacionViendo(null);
     }
   };
@@ -144,8 +152,9 @@ const OperacionesDashboard = () => {
       const operacionActualizada = { ...operacionViendo, status: nuevoStatus };
       setOperacionViendo(operacionActualizada);
       
-      // ✅ CORRECCIÓN TypeScript: (op: any)
-      setOperaciones(prev => prev.map((op: any) => op.id === operacionActualizada.id ? operacionActualizada : op));
+      const nuevasOperaciones = operaciones.map((op: any) => op.id === operacionActualizada.id ? operacionActualizada : op);
+      setOperaciones(nuevasOperaciones);
+      cacheOperaciones = nuevasOperaciones; 
       
       alert('Horario registrado y Estatus actualizado.');
       setModalHorarios('cerrado');
@@ -153,6 +162,24 @@ const OperacionesDashboard = () => {
       alert("Error al actualizar la base de datos.");
     }
     setCargandoHorarios(false);
+  };
+
+  // ✅ AHORA SÍ CONECTADO: Actualiza la tabla sin hacer lecturas
+  const handleOperacionGuardada = (opNueva: any) => {
+    const clienteObj = catalogosGlobales.empresas?.find((e:any) => e.id === opNueva.clientePaga);
+    const opConNombre = { ...opNueva, nombreCliente: clienteObj ? clienteObj.nombre : 'Desconocido' };
+
+    let nuevasOps = [];
+    if (operacionEditando) {
+      nuevasOps = operaciones.map((op: any) => op.id === opConNombre.id ? opConNombre : op);
+    } else {
+      nuevasOps = [opConNombre, ...operaciones];
+    }
+    
+    setOperaciones(nuevasOps);
+    cacheOperaciones = nuevasOps; 
+    setEstadoFormulario('cerrado');
+    setOperacionEditando(null);
   };
 
   return (
@@ -163,6 +190,7 @@ const OperacionesDashboard = () => {
           onClose={() => { setEstadoFormulario('cerrado'); setOperacionEditando(null); }}
           onMinimize={() => setEstadoFormulario('minimizado')} onRestore={() => setEstadoFormulario('abierto')}
           catalogosCacheados={catalogosGlobales} 
+          onSave={handleOperacionGuardada} // ✅ CONECTADO AL FORMULARIO AQUÍ
         />
       )}
 
@@ -217,7 +245,6 @@ const OperacionesDashboard = () => {
               <div className="form-group">
                 <label className="form-label">Estatus / Hito</label>
                 <select className="form-control" value={nuevoStatus} onChange={e => setNuevoStatus(e.target.value)}>
-                  {/* ✅ CORRECCIÓN TypeScript: (botonStr: string) */}
                   {botonesDisponibles.map((botonStr: string) => (
                     <option key={botonStr} value={botonStr}>{botonStr}</option>
                   ))}
@@ -247,7 +274,6 @@ const OperacionesDashboard = () => {
                     <tr><th style={{ padding: '12px', textAlign: 'left' }}>Fecha y Hora</th><th style={{ padding: '12px', textAlign: 'left' }}>Estatus Marcado</th></tr>
                   </thead>
                   <tbody>
-                    {/* ✅ CORRECCIÓN TypeScript: (h: any) */}
                     {historialList.map((h: any) => (
                       <tr key={h.id} style={{ borderTop: '1px solid #30363d' }}>
                         <td style={{ padding: '12px', color: '#c9d1d9' }}>{new Date(h.fechaHora).toLocaleString('es-MX')}</td>
@@ -282,10 +308,9 @@ const OperacionesDashboard = () => {
                 {operaciones.length === 0 ? (
                   <tr><td colSpan={6} style={{ textAlign: 'center', padding: '20px' }}>No hay operaciones registradas</td></tr>
                 ) : (
-                  // ✅ CORRECCIÓN TypeScript: (op: any)
                   operaciones.map((op: any) => (
                     <tr key={op.id} onClick={() => setOperacionViendo(op)}>
-                      <td className="font-mono">{op.ref || op.id.substring(0,6)}</td>
+                      <td className="font-mono">{op.ref || op.id?.substring(0,6)}</td>
                       <td>{op.fechaServicio}</td>
                       <td>{op.nombreCliente}</td>
                       <td>{op.tipoServicio} - {op.trafico}</td>
