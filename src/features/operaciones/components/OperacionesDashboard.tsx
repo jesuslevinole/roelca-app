@@ -1,12 +1,9 @@
 // src/features/operaciones/components/OperacionesDashboard.tsx
 import { useState, useEffect } from 'react';
 import { FormularioOperacion } from './FormularioOperacion';
-import { collection, doc, writeBatch, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, doc, writeBatch, query, where, getDocs, orderBy, limit } from 'firebase/firestore'; // ✅ IMPORTAMOS LIMIT
 import { db } from '../../../config/firebase';
 import { obtenerBotonesHorarioDinamicos } from '../config/statusRules';
-
-let cacheCatalogos: any = null;
-let cacheOperaciones: any[] | null = null;
 
 const OperacionesDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
@@ -25,47 +22,57 @@ const OperacionesDashboard = () => {
   const [botonesDisponibles, setBotonesDisponibles] = useState<string[]>([]);
   const [catalogosGlobales, setCatalogosGlobales] = useState<any>({});
 
+  // ✅ DESCARGA BLINDADA (Sobrevive al F5)
   useEffect(() => {
     const descargarTodo = async () => {
-      if (cacheCatalogos && cacheOperaciones) {
-        setCatalogosGlobales(cacheCatalogos);
-        setOperaciones(cacheOperaciones);
-        setCargandoOperaciones(false);
-        return;
-      }
-
       setCargandoOperaciones(true);
       try {
-        const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap, operacionesSnap] = await Promise.all([
-          getDocs(collection(db, 'empresas')),
-          getDocs(collection(db, 'catalogo_tipo_operacion')),
-          getDocs(collection(db, 'catalogo_embalaje')),
-          getDocs(collection(db, 'remolques')),
-          getDocs(collection(db, 'catalogo_tarifas_referencia')), 
-          getDocs(collection(db, 'convenios_proveedores')),
-          getDocs(collection(db, 'tipo_cambio')),
-          getDocs(collection(db, 'convenios_clientes')),
-          getDocs(collection(db, 'convenios_clientes_detalles')),
-          getDocs(query(collection(db, 'operaciones'), orderBy('fechaServicio', 'desc')))
-        ]);
+        let catGuardados = null;
+        
+        // 1. Verificamos si el navegador YA tiene los catálogos pesados guardados (Evita cobros al hacer F5)
+        const cacheCatStr = sessionStorage.getItem('roelca_catalogos_v1');
 
-        const empresasMap = empSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }));
+        if (cacheCatStr) {
+          // Si existen en el navegador, los usamos gratis
+          catGuardados = JSON.parse(cacheCatStr);
+          setCatalogosGlobales(catGuardados);
+        } else {
+          // Si no existen, los bajamos de Firebase (solo pasará la primera vez que abras el navegador en el día)
+          const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap] = await Promise.all([
+            getDocs(collection(db, 'empresas')),
+            getDocs(collection(db, 'catalogo_tipo_operacion')),
+            getDocs(collection(db, 'catalogo_embalaje')),
+            getDocs(collection(db, 'remolques')),
+            getDocs(collection(db, 'catalogo_tarifas_referencia')), 
+            getDocs(collection(db, 'convenios_proveedores')),
+            getDocs(collection(db, 'tipo_cambio')),
+            getDocs(collection(db, 'convenios_clientes')),
+            getDocs(collection(db, 'convenios_clientes_detalles'))
+          ]);
 
-        const catGuardados = {
-          empresas: empresasMap,
-          tiposOperacion: opSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-          embalajes: embSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-          remolques: remSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-          tarifas: tarSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-          conveniosProv: convProvSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-          catalogoTC: tcSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-          catalogoConvClientes: convCliSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-          catalogoConvDetalles: convDetSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }))
-        };
+          catGuardados = {
+            empresas: empSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            tiposOperacion: opSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            embalajes: embSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            remolques: remSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            tarifas: tarSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            conveniosProv: convProvSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            catalogoTC: tcSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            catalogoConvClientes: convCliSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            catalogoConvDetalles: convDetSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }))
+          };
+          
+          // Guardamos en el disco del navegador
+          sessionStorage.setItem('roelca_catalogos_v1', JSON.stringify(catGuardados));
+          setCatalogosGlobales(catGuardados);
+        }
+
+        // 2. Descargamos las Operaciones. ✅ PUSIMOS LÍMITE DE 100 PARA FRENAR EL CONSUMO.
+        const operacionesSnap = await getDocs(query(collection(db, 'operaciones'), orderBy('fechaServicio', 'desc'), limit(100)));
 
         const opData = operacionesSnap.docs.map((d: any) => {
           const data = d.data() as any;
-          const clienteObj = empresasMap.find((e: any) => e.id === data.clientePaga);
+          const clienteObj = catGuardados.empresas.find((e: any) => e.id === data.clientePaga);
           return {
             id: d.id,
             ...data,
@@ -73,10 +80,6 @@ const OperacionesDashboard = () => {
           };
         });
 
-        cacheCatalogos = catGuardados;
-        cacheOperaciones = opData;
-
-        setCatalogosGlobales(catGuardados);
         setOperaciones(opData);
 
       } catch (e) {
@@ -102,9 +105,7 @@ const OperacionesDashboard = () => {
   
   const eliminarOperacion = (id: string) => {
     if (window.confirm('¿Eliminar registro permanentemente?')) {
-      const nuevasOperaciones = operaciones.filter((op: any) => op.id !== id);
-      setOperaciones(nuevasOperaciones);
-      cacheOperaciones = nuevasOperaciones; 
+      setOperaciones(prev => prev.filter((op: any) => op.id !== id));
       setOperacionViendo(null);
     }
   };
@@ -152,9 +153,7 @@ const OperacionesDashboard = () => {
       const operacionActualizada = { ...operacionViendo, status: nuevoStatus };
       setOperacionViendo(operacionActualizada);
       
-      const nuevasOperaciones = operaciones.map((op: any) => op.id === operacionActualizada.id ? operacionActualizada : op);
-      setOperaciones(nuevasOperaciones);
-      cacheOperaciones = nuevasOperaciones; 
+      setOperaciones(prev => prev.map((op: any) => op.id === operacionActualizada.id ? operacionActualizada : op));
       
       alert('Horario registrado y Estatus actualizado.');
       setModalHorarios('cerrado');
@@ -164,22 +163,24 @@ const OperacionesDashboard = () => {
     setCargandoHorarios(false);
   };
 
-  // ✅ AHORA SÍ CONECTADO: Actualiza la tabla sin hacer lecturas
   const handleOperacionGuardada = (opNueva: any) => {
     const clienteObj = catalogosGlobales.empresas?.find((e:any) => e.id === opNueva.clientePaga);
     const opConNombre = { ...opNueva, nombreCliente: clienteObj ? clienteObj.nombre : 'Desconocido' };
 
-    let nuevasOps = [];
     if (operacionEditando) {
-      nuevasOps = operaciones.map((op: any) => op.id === opConNombre.id ? opConNombre : op);
+      setOperaciones(prev => prev.map((op: any) => op.id === opConNombre.id ? opConNombre : op));
     } else {
-      nuevasOps = [opConNombre, ...operaciones];
+      setOperaciones(prev => [opConNombre, ...prev]);
     }
     
-    setOperaciones(nuevasOps);
-    cacheOperaciones = nuevasOps; 
     setEstadoFormulario('cerrado');
     setOperacionEditando(null);
+  };
+
+  // Botón para forzar la actualización de los catálogos en caso de que agregues un cliente nuevo hoy mismo
+  const forzarRecarga = () => {
+    sessionStorage.removeItem('roelca_catalogos_v1');
+    window.location.reload();
   };
 
   return (
@@ -190,7 +191,7 @@ const OperacionesDashboard = () => {
           onClose={() => { setEstadoFormulario('cerrado'); setOperacionEditando(null); }}
           onMinimize={() => setEstadoFormulario('minimizado')} onRestore={() => setEstadoFormulario('abierto')}
           catalogosCacheados={catalogosGlobales} 
-          onSave={handleOperacionGuardada} // ✅ CONECTADO AL FORMULARIO AQUÍ
+          onSave={handleOperacionGuardada}
         />
       )}
 
@@ -291,7 +292,8 @@ const OperacionesDashboard = () => {
         </div>
       )}
 
-      <div className="module-header" style={{ justifyContent: 'flex-end', paddingBottom: '16px' }}>
+      <div className="module-header" style={{ justifyContent: 'space-between', paddingBottom: '16px' }}>
+        <button className="btn btn-outline" onClick={forzarRecarga} style={{ fontSize: '0.8rem' }}>↻ Actualizar Catálogos</button>
         <button className="btn btn-primary" onClick={handleNuevo}>+ Agregar Operación</button>
       </div>
 
