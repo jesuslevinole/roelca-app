@@ -1,19 +1,18 @@
 // src/features/operaciones/components/OperacionesDashboard.tsx
 import { useState, useEffect } from 'react';
 import { FormularioOperacion } from './FormularioOperacion';
-import { collection, doc, writeBatch, query, where, getDocs } from 'firebase/firestore';
+import { collection, doc, writeBatch, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
 import { obtenerBotonesHorarioDinamicos } from '../config/statusRules';
-
-const datosIniciales = [
-  { id: '1', ref: 'IM-100326-001', fecha: '03/09/2026', tipoServicio: 'Logística', trafico: 'Importación', carga: 'Cargada', status: '3. Documentado (Asignado)', clientePaga: 'A. Castañeda', convenio: 'Flete de Imp...', remolque: '672146', origen: 'ROAL', destino: 'AFN', descripcionMercancia: 'Autopartes', cantidad: 2, pesoKg: '1500', operador: 'Jose Maria' },
-];
 
 const OperacionesDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
   
-  const [operaciones, setOperaciones] = useState(datosIniciales);
+  // Estado para almacenar las operaciones de FIREBASE
+  const [operaciones, setOperaciones] = useState<any[]>([]);
+  const [cargandoOperaciones, setCargandoOperaciones] = useState(true);
+
   const [operacionViendo, setOperacionViendo] = useState<any | null>(null);
 
   const [modalHorarios, setModalHorarios] = useState<'cerrado' | 'registrar' | 'historial'>('cerrado');
@@ -24,14 +23,15 @@ const OperacionesDashboard = () => {
   
   const [botonesDisponibles, setBotonesDisponibles] = useState<string[]>([]);
 
-  // ✅ NUEVO: Almacén de Catálogos para ahorrar lecturas de Firebase
+  // Almacén de Catálogos para ahorrar lecturas de Firebase
   const [catalogosGlobales, setCatalogosGlobales] = useState<any>({});
 
+  // DESCARGA INICIAL DE CATÁLOGOS Y OPERACIONES REALES (Solo gasta lecturas 1 vez al entrar)
   useEffect(() => {
-    // Descargamos todo UNA SOLA VEZ al entrar al módulo
     const descargarTodo = async () => {
+      setCargandoOperaciones(true);
       try {
-        const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap] = await Promise.all([
+        const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap, operacionesSnap] = await Promise.all([
           getDocs(collection(db, 'empresas')),
           getDocs(collection(db, 'catalogo_tipo_operacion')),
           getDocs(collection(db, 'catalogo_embalaje')),
@@ -40,23 +40,42 @@ const OperacionesDashboard = () => {
           getDocs(collection(db, 'convenios_proveedores')),
           getDocs(collection(db, 'tipo_cambio')),
           getDocs(collection(db, 'convenios_clientes')),
-          getDocs(collection(db, 'convenios_clientes_detalles'))
+          getDocs(collection(db, 'convenios_clientes_detalles')),
+          getDocs(query(collection(db, 'operaciones'), orderBy('fechaServicio', 'desc')))
         ]);
 
+        // ✅ CORRECCIÓN TypeScript: (d: any)
+        const empresasMap = empSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }));
+
         setCatalogosGlobales({
-          empresas: empSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          tiposOperacion: opSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          embalajes: embSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          remolques: remSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          tarifas: tarSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          conveniosProv: convProvSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          catalogoTC: tcSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          catalogoConvClientes: convCliSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })),
-          catalogoConvDetalles: convDetSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
+          empresas: empresasMap,
+          tiposOperacion: opSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+          embalajes: embSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+          remolques: remSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+          tarifas: tarSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+          conveniosProv: convProvSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+          catalogoTC: tcSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+          catalogoConvClientes: convCliSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+          catalogoConvDetalles: convDetSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }))
         });
+
+        // Mapeamos las operaciones y cruzamos el cliente para no mostrar el ID sino el Nombre
+        const opData = operacionesSnap.docs.map((d: any) => {
+          const data = d.data() as any;
+          const clienteObj = empresasMap.find((e: any) => e.id === data.clientePaga);
+          return {
+            id: d.id,
+            ...data,
+            nombreCliente: clienteObj ? clienteObj.nombre : (data.clientePaga || 'Desconocido')
+          };
+        });
+
+        setOperaciones(opData);
+
       } catch (e) {
-        console.error("Error al pre-cargar catálogos globales:", e);
+        console.error("Error al pre-cargar datos:", e);
       }
+      setCargandoOperaciones(false);
     };
     descargarTodo();
   }, []);
@@ -73,12 +92,15 @@ const OperacionesDashboard = () => {
 
   const handleNuevo = () => { setOperacionEditando(null); setEstadoFormulario('abierto'); };
   const editarOperacion = (operacion: any) => { setOperacionEditando(operacion); setOperacionViendo(null); setEstadoFormulario('abierto'); };
+  
   const eliminarOperacion = (id: string) => {
     if (window.confirm('¿Eliminar registro permanentemente?')) {
-      setOperaciones(operaciones.filter(op => op.id !== id));
+      // ✅ CORRECCIÓN TypeScript: (op: any)
+      setOperaciones(prev => prev.filter((op: any) => op.id !== id));
       setOperacionViendo(null);
     }
   };
+  
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
   
   const abrirRegistroHorario = () => {
@@ -97,7 +119,7 @@ const OperacionesDashboard = () => {
     try {
       const q = query(collection(db, 'horarios'), where('operacionId', '==', operacionViendo.id));
       const snap = await getDocs(q);
-      const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+      const data = snap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }));
       data.sort((a: any, b: any) => new Date(b.fechaHora).getTime() - new Date(a.fechaHora).getTime());
       setHistorialList(data);
     } catch (e) {
@@ -121,7 +143,9 @@ const OperacionesDashboard = () => {
 
       const operacionActualizada = { ...operacionViendo, status: nuevoStatus };
       setOperacionViendo(operacionActualizada);
-      setOperaciones(operaciones.map(op => op.id === operacionActualizada.id ? operacionActualizada : op));
+      
+      // ✅ CORRECCIÓN TypeScript: (op: any)
+      setOperaciones(prev => prev.map((op: any) => op.id === operacionActualizada.id ? operacionActualizada : op));
       
       alert('Horario registrado y Estatus actualizado.');
       setModalHorarios('cerrado');
@@ -138,7 +162,7 @@ const OperacionesDashboard = () => {
           estado={estadoFormulario} initialData={operacionEditando}
           onClose={() => { setEstadoFormulario('cerrado'); setOperacionEditando(null); }}
           onMinimize={() => setEstadoFormulario('minimizado')} onRestore={() => setEstadoFormulario('abierto')}
-          catalogosCacheados={catalogosGlobales} // ✅ Pasamos el almacén al formulario
+          catalogosCacheados={catalogosGlobales} 
         />
       )}
 
@@ -161,7 +185,7 @@ const OperacionesDashboard = () => {
             
             <div className="detail-content" style={{ paddingRight: '12px' }}>
               <div className="detail-grid" style={{ marginBottom: '24px' }}>
-                <div className="detail-item"><span className="detail-label">Fecha del Servicio</span><span className="detail-value">{mostrarDato(operacionViendo.fecha)}</span></div>
+                <div className="detail-item"><span className="detail-label">Fecha del Servicio</span><span className="detail-value">{mostrarDato(operacionViendo.fechaServicio)}</span></div>
                 <div className="detail-item"><span className="detail-label">Configuración Combinada</span><span className="detail-value"><span className={`dot dot-orange`}></span>{mostrarDato(operacionViendo.tipoServicio)} | {mostrarDato(operacionViendo.trafico)} | {mostrarDato(operacionViendo.carga)}</span></div>
                 <div className="detail-item"><span className="detail-label">Status Actual</span><span className="detail-value" style={{ color: '#f0f6fc', fontWeight: 'bold' }}>{mostrarDato(operacionViendo.status)}</span></div>
               </div>
@@ -193,7 +217,8 @@ const OperacionesDashboard = () => {
               <div className="form-group">
                 <label className="form-label">Estatus / Hito</label>
                 <select className="form-control" value={nuevoStatus} onChange={e => setNuevoStatus(e.target.value)}>
-                  {botonesDisponibles.map((botonStr) => (
+                  {/* ✅ CORRECCIÓN TypeScript: (botonStr: string) */}
+                  {botonesDisponibles.map((botonStr: string) => (
                     <option key={botonStr} value={botonStr}>{botonStr}</option>
                   ))}
                 </select>
@@ -222,7 +247,8 @@ const OperacionesDashboard = () => {
                     <tr><th style={{ padding: '12px', textAlign: 'left' }}>Fecha y Hora</th><th style={{ padding: '12px', textAlign: 'left' }}>Estatus Marcado</th></tr>
                   </thead>
                   <tbody>
-                    {historialList.map(h => (
+                    {/* ✅ CORRECCIÓN TypeScript: (h: any) */}
+                    {historialList.map((h: any) => (
                       <tr key={h.id} style={{ borderTop: '1px solid #30363d' }}>
                         <td style={{ padding: '12px', color: '#c9d1d9' }}>{new Date(h.fechaHora).toLocaleString('es-MX')}</td>
                         <td style={{ padding: '12px', color: '#f0f6fc', fontWeight: 'bold' }}>{h.status}</td>
@@ -245,23 +271,34 @@ const OperacionesDashboard = () => {
 
       <div className="content-body" style={{ display: 'block' }}>
         <div className="table-container">
-          <table className="data-table">
-            <thead>
-              <tr><th># Ref</th><th>Fecha</th><th>Servicio / Tráfico</th><th>Status</th><th>Acciones</th></tr>
-            </thead>
-            <tbody>
-              {operaciones.map((op) => (
-                <tr key={op.id} onClick={() => setOperacionViendo(op)}>
-                  <td className="font-mono">{op.ref}</td><td>{op.fecha}</td>
-                  <td>{op.tipoServicio} - {op.trafico}</td>
-                  <td className="status-text">{op.status}</td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <button className="btn-small btn-edit" onClick={() => editarOperacion(op)}>Editar</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {cargandoOperaciones ? (
+             <div style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Descargando base de datos de Operaciones...</div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr><th># Ref</th><th>Fecha</th><th>Cliente</th><th>Servicio / Tráfico</th><th>Status</th><th>Acciones</th></tr>
+              </thead>
+              <tbody>
+                {operaciones.length === 0 ? (
+                  <tr><td colSpan={6} style={{ textAlign: 'center', padding: '20px' }}>No hay operaciones registradas</td></tr>
+                ) : (
+                  // ✅ CORRECCIÓN TypeScript: (op: any)
+                  operaciones.map((op: any) => (
+                    <tr key={op.id} onClick={() => setOperacionViendo(op)}>
+                      <td className="font-mono">{op.ref || op.id.substring(0,6)}</td>
+                      <td>{op.fechaServicio}</td>
+                      <td>{op.nombreCliente}</td>
+                      <td>{op.tipoServicio} - {op.trafico}</td>
+                      <td className="status-text">{op.status}</td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <button className="btn-small btn-edit" onClick={() => editarOperacion(op)}>Editar</button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </>
