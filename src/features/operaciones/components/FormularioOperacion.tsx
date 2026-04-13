@@ -84,7 +84,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     totalAPagarProv: 0, dolaresProv: 0, pesosProv: 0, conversionProv: 0,
     unidad: '', operador: '',
 
-    // ✅ Tab 5: Por Cobrar (Cliente)
+    // Tab 5: Por Cobrar (Cliente)
     facturadoEnCobrar: '', monedaConvenioCliente: '', montoConvenioCliente: 0,
     cargosAdicionales: 0, subtotalCliente: 0,
     dolaresCliente: 0, pesosCliente: 0, conversionCliente: 0,
@@ -251,7 +251,7 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
     setFormData(prev => ({ ...prev, dolaresProv: dolares, pesosProv: pesos, conversionProv: conversion }));
   }, [formData.facturadoEnUnidad, formData.monedaConvenioProv, formData.totalAPagarProv, tipoCambioDia]);
 
-  // ✅ NUEVO: Cálculos Monedas CLIENTE y UTILIDAD
+  // ✅ Cálculos Monedas CLIENTE y UTILIDAD
   useEffect(() => {
     const fact = formData.facturadoEnCobrar; 
     const mon = formData.monedaConvenioCliente; 
@@ -362,7 +362,6 @@ export const FormularioOperacion = ({ estado, initialData, onClose, onMinimize, 
             <button type="button" className={`tab-button ${pestañaActiva === 'pedimento' ? 'active' : ''}`} onClick={() => setPestañaActiva('pedimento')}>Pedimento y CT</button>
             <button type="button" className={`tab-button ${pestañaActiva === 'manifiesto' ? 'active' : ''}`} onClick={() => setPestañaActiva('manifiesto')}>Entry's y Manifiestos</button>
             <button type="button" className={`tab-button ${pestañaActiva === 'unidad' ? 'active' : ''}`} onClick={() => setPestañaActiva('unidad')}>Unidad y Operador</button>
-            {/* ✅ PESTAÑA COBRAR */}
             <button type="button" className={`tab-button ${pestañaActiva === 'cobrar' ? 'active' : ''}`} onClick={() => setPestañaActiva('cobrar')}>Por Cobrar</button>
           </div>
 
