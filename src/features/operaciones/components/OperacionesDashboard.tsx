@@ -253,7 +253,7 @@ const OperacionesDashboard = () => {
     );
   });
 
-  // ✅ LOGICA DE PAGINACIÓN - (¡AQUÍ ESTÁN LAS FUNCIONES FALTANTES!)
+  // ✅ LOGICA DE PAGINACIÓN
   const totalPaginas = Math.ceil(operacionesFiltradas.length / registrosPorPagina);
   const indiceUltimoRegistro = paginaActual * registrosPorPagina;
   const indicePrimerRegistro = indiceUltimoRegistro - registrosPorPagina;
@@ -266,15 +266,16 @@ const OperacionesDashboard = () => {
   const exportarCSV = () => {
     if (operacionesFiltradas.length === 0) return alert("No hay datos para exportar.");
     const encabezados = [
-      '# Ref', 'Fecha', 'Tipo de Operación', 'Convenio (Cliente)', '# de Remolque', 
+      '# Ref', 'Fecha', 'Tipo de Operación', 'Status', 'Convenio (Tarifa)', '# de Remolque', 
       'Proveedor', 'Unidad', 'Cliente (Paga)', 'Convenio (Prov)', 'Cargos Adicionales', 
-      'Subtotal', 'Status'
+      'Subtotal'
     ];
     
     const lineas = operacionesFiltradas.map(op => [
       `"${op.ref || op.id?.substring(0,6) || ''}"`,
       `"${op.fechaServicio || ''}"`, 
       `"${mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion')}"`,
+      `"${op.status || ''}"`,
       `"${op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}"`,
       `"${mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'placa')}"`,
       `"${mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}"`,
@@ -282,8 +283,7 @@ const OperacionesDashboard = () => {
       `"${op.nombreCliente || ''}"`,
       `"${obtenerNombreConvenioProv(op.convenioProveedor)}"`,
       `"${formatoMoneda(op.cargosAdicionales)}"`,
-      `"${formatoMoneda(op.subtotalCliente)}"`,
-      `"${op.status || ''}"`
+      `"${formatoMoneda(op.subtotalCliente)}"`
     ].join(','));
 
     const csvContent = [encabezados.join(','), ...lineas].join('\n');
@@ -375,6 +375,7 @@ const OperacionesDashboard = () => {
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}># Ref</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Fecha</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Tipo de Operación</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Status</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Convenio (Tarifa)</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}># Remolque</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Proveedor</th>
@@ -383,7 +384,6 @@ const OperacionesDashboard = () => {
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Convenio (Prov)</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Cargos Adic.</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Subtotal</th>
-                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -430,6 +430,7 @@ const OperacionesDashboard = () => {
                         <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.ref || op.id?.substring(0,6)}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.fechaServicio}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion')}</td>
+                        <td className="status-text" style={{ padding: '16px', color: '#10b981', fontWeight: 'bold', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.status}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}>{op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'placa')}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}>{mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}</td>
@@ -438,7 +439,6 @@ const OperacionesDashboard = () => {
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={obtenerNombreConvenioProv(op.convenioProveedor)}>{obtenerNombreConvenioProv(op.convenioProveedor)}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{formatoMoneda(op.cargosAdicionales)}</td>
                         <td style={{ padding: '16px', color: '#f0f6fc', fontWeight: 'bold', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{formatoMoneda(op.subtotalCliente)}</td>
-                        <td className="status-text" style={{ padding: '16px', color: '#10b981', fontWeight: 'bold', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.status}</td>
                       </tr>
                     ))
                   )}
