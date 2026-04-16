@@ -526,8 +526,12 @@ const OperacionesDashboard = () => {
               {pestañaDetalleActiva === 'general' && (
                 <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                   
-                  {/* YA NO HAY TIPO DE SERVICIO AQUÍ */}
-                  
+                  {/* TIPO DE OPERACION DE VUELTA AQUÍ */}
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Operación</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.tipoOperacionId, 'tiposOperacion', 'tipo_operacion')}</span>
+                  </div>
+
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tráfico (Movimiento)</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.trafico)}</span>
