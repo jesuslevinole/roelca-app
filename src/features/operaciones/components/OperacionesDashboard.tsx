@@ -5,6 +5,9 @@ import { collection, doc, writeBatch, query, where, getDocs, orderBy, limit } fr
 import { db } from '../../../config/firebase';
 import { obtenerBotonesHorarioDinamicos } from '../config/statusRules';
 
+const ID_USD = '7dca62b3';
+const ID_MXN = 'f95d8894';
+
 const OperacionesDashboard = () => {
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
@@ -24,11 +27,12 @@ const OperacionesDashboard = () => {
 
   const [busqueda, setBusqueda] = useState('');
 
-  // ✅ ESTADOS DE PAGINACIÓN
+  // ✅ ESTADOS DE PAGINACIÓN Y PESTAÑAS
   const [paginaActual, setPaginaActual] = useState(1);
+  const [pestañaDetalleActiva, setPestañaDetalleActiva] = useState<string>('general');
   const registrosPorPagina = 50;
 
-  // Estado para el hover de las filas (solución fondo sólido en móvil)
+  // Estado para el hover de las filas
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
 
   // ✅ DESCARGA BLINDADA (Sobrevive al F5 y limita a 100 registros)
@@ -119,6 +123,53 @@ const OperacionesDashboard = () => {
   
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
   
+  // ✅ Función para mapear Monedas
+  const mostrarMoneda = (val: string | null | undefined) => {
+    if (val === ID_USD) return 'USD';
+    if (val === ID_MXN) return 'MXN';
+    return val || '-';
+  };
+
+  // ✅ Función para mapear IDs simples a Nombres 
+  const mostrarDatoMapeado = (id: string | null | undefined, catalogo: keyof typeof catalogosGlobales, campoRetorno: string = 'nombre') => {
+    if (!id) return '-';
+    if (!catalogosGlobales[catalogo] || !Array.isArray(catalogosGlobales[catalogo])) return id;
+    
+    const elementoEncontrado = catalogosGlobales[catalogo].find((item: any) => item.id === id);
+    if (!elementoEncontrado) return id;
+
+    return elementoEncontrado[campoRetorno] || elementoEncontrado.nombre || elementoEncontrado.descripcion || elementoEncontrado.placa || id;
+  };
+
+  // ✅ Funciones especializadas para mapear Convenios
+  const obtenerNombreConvenioCliente = (id: string) => {
+    if (operacionViendo?.convenioNombre) return operacionViendo.convenioNombre;
+    if (!id) return '-';
+    const detalle = catalogosGlobales.catalogoConvDetalles?.find((d:any) => d.id === id);
+    if (detalle) {
+        const tarifaId = detalle.tipoConvenioId || detalle.tipo_convenio_id || detalle.tipoConvenio || detalle.tipo_convenio || detalle['TIPO DE CONVENIO'];
+        const tObj = catalogosGlobales.tarifas?.find((t:any) => String(t.id).trim() === String(tarifaId).trim());
+        return tObj?.descripcion || tObj?.nombre || id;
+    }
+    return id;
+  };
+
+  const obtenerNombreConvenioProv = (id: string) => {
+    if (!id) return '-';
+    const detalle = catalogosGlobales.catalogoConvProvDetalles?.find((d:any) => d.id === id);
+    if (detalle) {
+        const tarifaId = detalle.tipoConvenioId || detalle.tipo_convenio || detalle.tarifaId || detalle['TIPO DE CONVENIO'];
+        const tObj = catalogosGlobales.tarifas?.find((t:any) => String(t.id).trim() === String(tarifaId).trim());
+        return tObj?.descripcion || tObj?.nombre || detalle.descripcion || id;
+    }
+    return id;
+  };
+
+  const formatoMoneda = (monto: any) => {
+    if (!monto) return '$ 0.00';
+    return `$ ${parseFloat(monto).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+  
   const abrirRegistroHorario = () => {
     const now = new Date();
     const tzOffset = now.getTimezoneOffset() * 60000;
@@ -189,7 +240,7 @@ const OperacionesDashboard = () => {
     window.location.reload();
   };
 
-  // ✅ Filtrado GLOBAL por buscador inteligente (A prueba de números)
+  // ✅ Filtrado GLOBAL por buscador inteligente
   const operacionesFiltradas = operacionesGlobales.filter(op => {
     const b = busqueda.toLowerCase();
     return (
@@ -202,7 +253,7 @@ const OperacionesDashboard = () => {
     );
   });
 
-  // ✅ LOGICA DE PAGINACIÓN
+  // ✅ LOGICA DE PAGINACIÓN - (¡AQUÍ ESTÁN LAS FUNCIONES FALTANTES!)
   const totalPaginas = Math.ceil(operacionesFiltradas.length / registrosPorPagina);
   const indiceUltimoRegistro = paginaActual * registrosPorPagina;
   const indicePrimerRegistro = indiceUltimoRegistro - registrosPorPagina;
@@ -211,15 +262,30 @@ const OperacionesDashboard = () => {
   const irPaginaSiguiente = () => setPaginaActual(prev => Math.min(prev + 1, totalPaginas));
   const irPaginaAnterior = () => setPaginaActual(prev => Math.max(prev - 1, 1));
 
-  // ✅ Función para Exportar a CSV
+  // ✅ Función para Exportar a CSV Actualizada
   const exportarCSV = () => {
     if (operacionesFiltradas.length === 0) return alert("No hay datos para exportar.");
-    const encabezados = ['# Ref', 'Fecha', 'Cliente', 'Servicio', 'Tráfico', 'Status'];
+    const encabezados = [
+      '# Ref', 'Fecha', 'Tipo de Operación', 'Convenio (Cliente)', '# de Remolque', 
+      'Proveedor', 'Unidad', 'Cliente (Paga)', 'Convenio (Prov)', 'Cargos Adicionales', 
+      'Subtotal', 'Status'
+    ];
+    
     const lineas = operacionesFiltradas.map(op => [
-      `"${op.ref || op.id?.substring(0,6) || ''}"`, `"${op.fechaServicio || ''}"`, 
-      `"${op.nombreCliente || ''}"`, `"${op.tipoServicio || ''}"`, 
-      `"${op.trafico || ''}"`, `"${op.status || ''}"`
+      `"${op.ref || op.id?.substring(0,6) || ''}"`,
+      `"${op.fechaServicio || ''}"`, 
+      `"${mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion')}"`,
+      `"${op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}"`,
+      `"${mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'placa')}"`,
+      `"${mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}"`,
+      `"${op.unidad || ''}"`,
+      `"${op.nombreCliente || ''}"`,
+      `"${obtenerNombreConvenioProv(op.convenioProveedor)}"`,
+      `"${formatoMoneda(op.cargosAdicionales)}"`,
+      `"${formatoMoneda(op.subtotalCliente)}"`,
+      `"${op.status || ''}"`
     ].join(','));
+
     const csvContent = [encabezados.join(','), ...lineas].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -230,6 +296,14 @@ const OperacionesDashboard = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  const tabsDetalle = [
+    { id: 'general', label: 'Información General' },
+    { id: 'pedimento', label: 'Pedimento y CT' },
+    { id: 'manifiestos', label: "Entry's y Manifiestos" },
+    { id: 'unidad', label: 'Unidad y Operador' },
+    { id: 'cobrar', label: 'Por Cobrar' }
+  ];
 
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease', width: '100%', boxSizing: 'border-box' }}>
@@ -252,17 +326,15 @@ const OperacionesDashboard = () => {
           Operaciones
         </h1>
 
-        {/* BARRA DE CONTROLES: Responsive y Alineada */}
+        {/* BARRA DE CONTROLES */}
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px', width: '100%' }}>
           
-          {/* Izquierda: Filtro Estático */}
           <div style={{ flex: '1 1 auto', maxWidth: '200px', minWidth: '120px' }}>
             <select className="form-control" style={{ width: '100%', backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9' }}>
               <option>Filtro: Todo</option>
             </select>
           </div>
 
-          {/* Centro: Buscador Inteligente */}
           <div style={{ flex: '2 1 250px', display: 'flex', justifyContent: 'center' }}>
             <div style={{ position: 'relative', width: '100%', maxWidth: '500px' }}>
               <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -276,7 +348,6 @@ const OperacionesDashboard = () => {
             </div>
           </div>
 
-          {/* Derecha: Botones */}
           <div style={{ flex: '1 1 auto', display: 'flex', gap: '12px', justifyContent: 'flex-end', minWidth: '280px' }}>
             <button className="btn btn-outline" onClick={forzarRecarga} style={{ fontSize: '0.8rem', padding: '4px 12px' }} title="Recargar Catálogos">
               ↻ Actualizar
@@ -289,29 +360,36 @@ const OperacionesDashboard = () => {
           </div>
         </div>
 
-        {/* TABLA RESPONSIVE */}
+        {/* TABLA RESPONSIVE ACTUALIZADA CON EL NUEVO ORDEN */}
         <div className="content-body" style={{ display: 'block', width: '100%' }}>
           <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)', width: '100%' }}>
             {cargandoOperaciones ? (
               <div style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Descargando base de datos de Operaciones...</div>
             ) : (
-              <table className="data-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <table className="data-table" style={{ width: '100%', minWidth: '1300px', borderCollapse: 'collapse', textAlign: 'left' }}>
                 <thead style={{ backgroundColor: '#161b22', position: 'sticky', top: 0, zIndex: 10 }}>
                   <tr>
-                    <th style={{ padding: '16px', width: '100px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d', borderBottom: '1px solid #30363d' }}>
+                    <th style={{ padding: '16px', width: '140px', textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', position: 'sticky', left: 0, backgroundColor: '#161b22', zIndex: 12, borderRight: '1px solid #30363d', borderBottom: '1px solid #30363d' }}>
                       Acciones
                     </th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}># Ref</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Fecha</th>
-                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Cliente</th>
-                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Servicio / Tráfico</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Tipo de Operación</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Convenio (Tarifa)</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}># Remolque</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Proveedor</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Unidad</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Cliente (Paga)</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Convenio (Prov)</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Cargos Adic.</th>
+                    <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Subtotal</th>
                     <th style={{ padding: '16px', color: '#8b949e', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', whiteSpace: 'nowrap', borderBottom: '1px solid #30363d' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {operacionesEnPantalla.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+                      <td colSpan={13} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
                         {busqueda ? 'No se encontraron operaciones para tu búsqueda.' : 'No hay operaciones registradas.'}
                       </td>
                     </tr>
@@ -322,27 +400,44 @@ const OperacionesDashboard = () => {
                         style={{ borderBottom: '1px solid #21262d', backgroundColor: hoveredRowId === op.id ? '#21262d' : '#0d1117', transition: 'background-color 0.2s', cursor: 'pointer' }}
                         onMouseEnter={() => setHoveredRowId(op.id)} 
                         onMouseLeave={() => setHoveredRowId(null)}
-                        onClick={() => setOperacionViendo(op)}
+                        onClick={() => { setOperacionViendo(op); setPestañaDetalleActiva('general'); }}
                       >
-                        {/* CELDA ACCIONES FIJA Y SÓLIDA */}
                         <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
                           <div className="actions-cell" style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                             <button 
                               className="btn-small btn-edit" 
                               onClick={(e) => { e.stopPropagation(); editarOperacion(op); }}
-                              style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px 12px', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                              style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '4px 8px', fontSize: '0.8rem', transition: 'all 0.2s' }}
                               onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.1)'}
                               onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                              title="Editar Operación"
                             >
                               Editar
+                            </button>
+                            <button 
+                              className="btn-small btn-danger-outline" 
+                              onClick={(e) => { e.stopPropagation(); eliminarOperacion(op.id); }}
+                              style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '4px 8px', fontSize: '0.8rem', transition: 'all 0.2s' }}
+                              onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'}
+                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                              title="Eliminar Operación"
+                            >
+                              Eliminar
                             </button>
                           </div>
                         </td>
 
                         <td className="font-mono" style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.ref || op.id?.substring(0,6)}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.fechaServicio}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion')}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}>{op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'placa')}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}>{mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDato(op.unidad)}</td>
                         <td style={{ padding: '16px', fontWeight: '500', color: '#f0f6fc', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.nombreCliente}</td>
-                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.tipoServicio} - {op.trafico}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={obtenerNombreConvenioProv(op.convenioProveedor)}>{obtenerNombreConvenioProv(op.convenioProveedor)}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{formatoMoneda(op.cargosAdicionales)}</td>
+                        <td style={{ padding: '16px', color: '#f0f6fc', fontWeight: 'bold', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{formatoMoneda(op.subtotalCliente)}</td>
                         <td className="status-text" style={{ padding: '16px', color: '#10b981', fontWeight: 'bold', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.status}</td>
                       </tr>
                     ))
@@ -381,12 +476,13 @@ const OperacionesDashboard = () => {
         </div>
       </div>
 
-      {/* MODALES ADICIONALES */}
+      {/* MODAL DETALLE DE OPERACIÓN */}
       {operacionViendo && (
         <div className="modal-overlay">
-          <div className="form-card detail-card" style={{ maxWidth: '900px', maxHeight: '90vh' }}>
-            <div className="form-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ margin: 0 }}>Detalle de Operación <span style={{ color: '#D84315' }}>{operacionViendo.ref || operacionViendo.id?.substring(0,6)}</span></h2>
+          <div className="form-card detail-card" style={{ maxWidth: '900px', maxHeight: '90vh', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', display: 'flex', flexDirection: 'column' }}>
+            
+            <div className="form-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px', borderBottom: 'none' }}>
+              <h2 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.25rem' }}>Detalle de Operación <span style={{ color: '#D84315', marginLeft: '8px' }}>{operacionViendo.nombreCliente || 'Sin Cliente Asignado'}</span></h2>
               <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                 <button onClick={abrirRegistroHorario} title="Registrar Horario / Cambiar Status" style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
@@ -399,25 +495,244 @@ const OperacionesDashboard = () => {
               </div>
             </div>
             
-            <div className="detail-content" style={{ paddingRight: '12px' }}>
-              <div className="detail-grid" style={{ marginBottom: '24px' }}>
-                <div className="detail-item"><span className="detail-label">Fecha del Servicio</span><span className="detail-value">{mostrarDato(operacionViendo.fechaServicio)}</span></div>
-                <div className="detail-item"><span className="detail-label">Configuración Combinada</span><span className="detail-value"><span className={`dot dot-orange`}></span>{mostrarDato(operacionViendo.tipoServicio)} | {mostrarDato(operacionViendo.trafico)} | {mostrarDato(operacionViendo.carga)}</span></div>
-                <div className="detail-item"><span className="detail-label">Status Actual</span><span className="detail-value" style={{ color: '#f0f6fc', fontWeight: 'bold' }}>{mostrarDato(operacionViendo.status)}</span></div>
-              </div>
+            {/* PESTAÑAS */}
+            <div style={{ display: 'flex', borderBottom: '1px solid #30363d', padding: '0 24px', overflowX: 'auto', flexShrink: 0 }}>
+              {tabsDetalle.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setPestañaDetalleActiva(tab.id)}
+                  style={{
+                    padding: '12px 16px',
+                    background: 'none',
+                    border: 'none',
+                    borderBottom: pestañaDetalleActiva === tab.id ? '2px solid #D84315' : '2px solid transparent',
+                    color: pestañaDetalleActiva === tab.id ? '#f0f6fc' : '#8b949e',
+                    cursor: 'pointer',
+                    fontWeight: pestañaDetalleActiva === tab.id ? '600' : 'normal',
+                    fontSize: '0.9rem',
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
-            <div className="form-actions detail-actions" style={{ marginTop: '24px', justifyContent: 'space-between', borderTop: '1px solid #21262d', paddingTop: '16px' }}>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button onClick={() => eliminarOperacion(operacionViendo.id)} className="btn btn-danger-solid">Eliminar Registro</button>
-                <button onClick={() => editarOperacion(operacionViendo)} className="btn btn-edit-solid">Editar Información</button>
-              </div>
-              <button onClick={() => setOperacionViendo(null)} className="btn btn-outline">Cerrar</button>
+            {/* CONTENIDO SCROLLABLE */}
+            <div className="detail-content" style={{ padding: '24px', overflowY: 'auto', flex: 1 }}>
+              
+              {/* 1. Información General */}
+              {pestañaDetalleActiva === 'general' && (
+                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Operación / Config</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.tipoServicio)} | {mostrarDato(operacionViendo.trafico)} | {mostrarDato(operacionViendo.carga)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Servicio / Status</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.fechaServicio)} - <span style={{color: '#10b981'}}>{mostrarDato(operacionViendo.status)}</span></span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Paga)</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.nombreCliente)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio (Tarifa)</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{obtenerNombreConvenioCliente(operacionViendo.convenio)}</span> 
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># de Remolque</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.numeroRemolque, 'remolques', 'placa')}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Ref Cliente</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.refCliente)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Origen</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.origen, 'empresas')}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Destino</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.destino, 'empresas')}</span>
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Observaciones Ejecutivo</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', display: 'block', backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d', minHeight: '40px' }}>{mostrarDato(operacionViendo.observacionesEjecutivo)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 2. Pedimento y CT */}
+              {pestañaDetalleActiva === 'pedimento' && (
+                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Mercancía)</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.clienteMercancia, 'empresas')}</span>
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Descripción de la Mercancía</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.descripcionMercancia)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cantidad (Enteros)</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.cantidad)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Embalaje</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.embalaje, 'embalajes')}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Peso (Kg) Decimales</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.pesoKg)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># DODA</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.numDoda)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Emisión (DODA)</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.fechaEmisionDoda)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Entry's y Manifiestos */}
+              {pestañaDetalleActiva === 'manifiestos' && (
+                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cantidad de Entry's</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.cantEntrys)}</span>
+                  </div>
+                  <div>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># Manifiesto</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.numManifiesto)}</span>
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Servicios</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.provServicios, 'empresas')}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 4. Unidad y Operador */}
+              {pestañaDetalleActiva === 'unidad' && (
+                <div style={{ animation: 'fadeIn 0.2s ease' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Transporte</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.proveedorUnidad, 'empresas')}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Unidad</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.unidad)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Operador</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.operador)}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '16px' }}>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Facturado En:</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarMoneda(operacionViendo.facturadoEnUnidad)}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio Proveedor</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{obtenerNombreConvenioProv(operacionViendo.convenioProveedor)}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Moneda del Convenio (Base)</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarMoneda(operacionViendo.monedaConvenioProv)}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Monto a Pagar (Base)</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{formatoMoneda(operacionViendo.totalAPagarProv)}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', paddingTop: '16px', borderTop: '1px solid #30363d' }}>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Dólares</span>
+                        <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.dolaresProv)}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Pesos</span>
+                        <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.pesosProv)}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Conversión Final (Contabilidad)</span>
+                        <span style={{ color: '#D84315', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.conversionProv)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 5. Por Cobrar */}
+              {pestañaDetalleActiva === 'cobrar' && (
+                <div style={{ animation: 'fadeIn 0.2s ease' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Facturado En:</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarMoneda(operacionViendo.facturadoEnCobrar)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Moneda Convenio (Cliente)</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarMoneda(operacionViendo.monedaConvenioCliente)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio Seleccionado (Monto Base)</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{formatoMoneda(operacionViendo.montoConvenioCliente)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cargos Adicionales</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{formatoMoneda(operacionViendo.cargosAdicionales)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Subtotal (Convenio + Cargos)</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.subtotalCliente)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Cambio del Día</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.tipoCambioAprobado)}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', paddingBottom: '24px', borderBottom: '1px solid #30363d' }}>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Dólares (Cliente)</span>
+                      <span style={{ color: '#10b981', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.dolaresCliente)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Pesos (Cliente)</span>
+                      <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.pesosCliente)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Conversión Final (Ingreso)</span>
+                      <span style={{ color: '#D84315', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.conversionCliente)}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: '24px', padding: '20px', backgroundColor: '#0d1117', border: '1px solid #10b981', borderRadius: '8px', textAlign: 'center' }}>
+                    <span style={{ display: 'block', fontSize: '0.85rem', color: '#8b949e', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>Utilidad Estimada de la Operación (Ingreso - Gasto)</span>
+                    <span style={{ fontSize: '1.75rem', color: '#10b981', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.utilidadEstimada)}</span>
+                  </div>
+                </div>
+              )}
+
+            </div>
+
+            <div className="form-actions detail-actions" style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #30363d', backgroundColor: '#161b22', borderBottomLeftRadius: '8px', borderBottomRightRadius: '8px', flexShrink: 0 }}>
+              <button onClick={() => setOperacionViendo(null)} className="btn btn-outline" style={{ padding: '8px 16px', borderRadius: '6px' }}>Cerrar</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* MODAL HISTORIAL Y STATUS */}
       {modalHorarios === 'registrar' && (
         <div className="modal-overlay" style={{ zIndex: 2000 }}>
           <div className="form-card" style={{ maxWidth: '400px', backgroundColor: '#0d1117', border: '1px solid #30363d' }}>

@@ -1,10 +1,9 @@
 // src/features/operaciones/services/operacionesService.ts
 import { doc, runTransaction, collection } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
-import type { Operacion } from '../../../types/operacion';
 import { generarReferencia } from '../../../utils/generarReferencia';
 
-export const guardarOperacionSegura = async (operacionData: Omit<Operacion, 'ref'>) => {
+export const guardarOperacionSegura = async (operacionData: any) => {
   const counterRef = doc(db, 'counters', 'operaciones');
   const nuevaOperacionRef = doc(collection(db, 'operaciones'));
 
@@ -20,8 +19,23 @@ export const guardarOperacionSegura = async (operacionData: Omit<Operacion, 'ref
         transaction.update(counterRef, { count: nuevoCorrelativo });
       }
 
-      // Generamos el ID único combinando la lógica de la regla con el contador real
-      const referenciaFinal = generarReferencia(operacionData.tipoOperacion, nuevoCorrelativo);
+      // ✅ CORRECCIÓN DEL "UNDEFINED" EN LA REFERENCIA:
+      let prefijoOperacion = "OP"; // Fallback por defecto
+      if (operacionData.tipoOperacionId) {
+        const tipoRef = doc(db, 'catalogo_tipo_operacion', operacionData.tipoOperacionId);
+        const tipoSnap = await transaction.get(tipoRef);
+        
+        if (tipoSnap.exists()) {
+          const dataTipo = tipoSnap.data();
+          // Intentamos extraer una sigla clave, o en su defecto el nombre (ej. "Logistica")
+          prefijoOperacion = dataTipo.clave || dataTipo.acronimo || dataTipo.tipo_operacion || "OP";
+        }
+      } else if (operacionData.tipoOperacion) {
+        prefijoOperacion = operacionData.tipoOperacion;
+      }
+
+      // Generamos el ID único (usamos 'as any' para saltar la restricción estricta de TypeScript)
+      const referenciaFinal = generarReferencia(prefijoOperacion as any, nuevoCorrelativo);
 
       transaction.set(nuevaOperacionRef, {
         ...operacionData,
@@ -33,6 +47,7 @@ export const guardarOperacionSegura = async (operacionData: Omit<Operacion, 'ref
     return true;
   } catch (error) {
     console.error("Transacción fallida: ", error);
-    throw new Error("No se pudo guardar la operación.");
+    // Propagamos el error exacto (para que salga la alerta de Bloqueo o de Firebase)
+    throw error; 
   }
 };
