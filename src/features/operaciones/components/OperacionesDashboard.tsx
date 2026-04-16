@@ -524,11 +524,10 @@ const OperacionesDashboard = () => {
               
               {/* 1. Información General */}
               {pestañaDetalleActiva === 'general' && (
-                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
-                  <div>
-                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Servicio</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.tipoServicio)}</span>
-                  </div>
+                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+                  
+                  {/* YA NO HAY TIPO DE SERVICIO AQUÍ */}
+                  
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tráfico (Movimiento)</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.trafico)}</span>
@@ -574,7 +573,7 @@ const OperacionesDashboard = () => {
 
               {/* 2. Pedimento y CT */}
               {pestañaDetalleActiva === 'pedimento' && (
-                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
+                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                   <div style={{ gridColumn: '1 / -1' }}>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Mercancía)</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.clienteMercancia, 'empresas')}</span>
@@ -608,7 +607,7 @@ const OperacionesDashboard = () => {
 
               {/* 3. Entry's y Manifiestos */}
               {pestañaDetalleActiva === 'manifiestos' && (
-                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px' }}>
+                <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cantidad de Entry's</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.cantEntrys)}</span>
@@ -627,7 +626,7 @@ const OperacionesDashboard = () => {
               {/* 4. Unidad y Operador */}
               {pestañaDetalleActiva === 'unidad' && (
                 <div style={{ animation: 'fadeIn 0.2s ease' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
                     <div style={{ gridColumn: '1 / -1' }}>
                       <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Transporte</span>
                       <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.proveedorUnidad, 'empresas')}</span>
@@ -643,7 +642,7 @@ const OperacionesDashboard = () => {
                   </div>
 
                   <div style={{ backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '16px' }}>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Facturado En:</span>
                         <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarMoneda(operacionViendo.facturadoEnUnidad)}</span>
@@ -661,7 +660,7 @@ const OperacionesDashboard = () => {
                         <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{formatoMoneda(operacionViendo.totalAPagarProv)}</span>
                       </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', paddingTop: '16px', borderTop: '1px solid #30363d' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', paddingTop: '16px', borderTop: '1px solid #30363d' }}>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Dólares</span>
                         <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.dolaresProv)}</span>
@@ -682,7 +681,7 @@ const OperacionesDashboard = () => {
               {/* 5. Por Cobrar */}
               {pestañaDetalleActiva === 'cobrar' && (
                 <div style={{ animation: 'fadeIn 0.2s ease' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
                     <div>
                       <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Facturado En:</span>
                       <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarMoneda(operacionViendo.facturadoEnCobrar)}</span>
@@ -709,7 +708,7 @@ const OperacionesDashboard = () => {
                     </div>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', paddingBottom: '24px', borderBottom: '1px solid #30363d' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', paddingBottom: '24px', borderBottom: '1px solid #30363d' }}>
                     <div>
                       <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Dólares (Cliente)</span>
                       <span style={{ color: '#10b981', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.dolaresCliente)}</span>
