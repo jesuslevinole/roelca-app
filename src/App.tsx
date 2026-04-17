@@ -22,12 +22,12 @@ import { EmpleadosDashboard } from './features/empleados/components/EmpleadosDas
 import { RolesDashboard } from './usuarios/components/RolesDashboard';
 import { UsuariosDashboard } from './usuarios/components/UsuariosDashboard';
 import { LogsDashboard } from './features/configuracion/components/LogsDashboard';
-
-// ✅ IMPORTAMOS EL NUEVO CONFIGURADOR DE FLUJOS
 import { ConfiguradorStatus } from './features/configuracion/components/ConfiguradorStatus';
-
 import { RelojChecadorModal } from './features/relojChecador/components/RelojChecadorModal';
 import { HistorialChequeosDashboard } from './features/relojChecador/components/HistorialChequeosDashboard';
+
+// ✅ IMPORTAMOS EL NUEVO MÓDULO MTTO
+import MttoDashboard from './features/gastos/components/mtto/MttoDashboard';
 
 import './App.css';
 
@@ -36,8 +36,8 @@ function App() {
   const [cargandoAuth, setCargandoAuth] = useState(true); 
   const [usuarioActualDB, setUsuarioActualDB] = useState<any>(null); 
   
-  // ✅ TIPADO AMPLIADO CON 'flujosOperacion'
-  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'unidades' | 'remolques' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs' | 'flujosOperacion'>('operaciones');
+  // ✅ AMPLIAMOS EL TIPADO CON 'mtto'
+  const [moduloActivo, setModuloActivo] = useState<'operaciones' | 'empresas' | 'tipoCambio' | 'catalogos' | 'combustible' | 'proveedoresUnidad' | 'unidadesProveedor' | 'unidades' | 'remolques' | 'conveniosClientes' | 'conveniosProveedores' | 'direcciones' | 'colaboradores' | 'historialAsistencia' | 'roles' | 'usuarios' | 'logs' | 'flujosOperacion' | 'mtto'>('operaciones');
   
   const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [menuAbierto, setMenuAbierto] = useState(true);
@@ -47,6 +47,9 @@ function App() {
   const [menuProveedoresAbierto, setMenuProveedoresAbierto] = useState(false);
   const [menuEmpleadosAbierto, setMenuEmpleadosAbierto] = useState(false);
   const [menuConfiguracionAbierto, setMenuConfiguracionAbierto] = useState(false);
+  
+  // ✅ NUEVO ESTADO PARA MENÚ GASTOS
+  const [menuGastosAbierto, setMenuGastosAbierto] = useState(false);
 
   const [modalChecadorAbierto, setModalChecadorAbierto] = useState(false);
 
@@ -86,23 +89,16 @@ function App() {
 
   useEffect(() => {
     if (!estaAutenticado) return;
-
     let timeoutId: ReturnType<typeof setTimeout>;
-
     const resetTimer = () => {
       clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        handleCerrarSesion('inactividad');
-      }, 300000); 
+      timeoutId = setTimeout(() => { handleCerrarSesion('inactividad'); }, 300000); 
     };
-
     window.addEventListener('mousemove', resetTimer);
     window.addEventListener('keydown', resetTimer);
     window.addEventListener('mousedown', resetTimer);
     window.addEventListener('touchstart', resetTimer);
-
     resetTimer(); 
-
     return () => {
       clearTimeout(timeoutId);
       window.removeEventListener('mousemove', resetTimer);
@@ -137,18 +133,15 @@ function App() {
   const esClientesActivo = moduloActivo === 'conveniosClientes';
   const esProveedoresActivo = moduloActivo === 'conveniosProveedores';
   const esEmpleadosActivo = moduloActivo === 'colaboradores' || moduloActivo === 'historialAsistencia';
-  
-  // ✅ ACTUALIZAMOS ACTIVADOR PARA EL ACORDEÓN DE CONFIGURACIÓN
   const esConfiguracionActivo = moduloActivo === 'roles' || moduloActivo === 'usuarios' || moduloActivo === 'logs' || moduloActivo === 'flujosOperacion';
+  
+  // ✅ EVALUADOR PARA EL NUEVO MENÚ
+  const esGastosActivo = moduloActivo === 'mtto';
 
   return (
     <div className="app-wrapper">
       
-      <RelojChecadorModal 
-        isOpen={modalChecadorAbierto} 
-        onClose={() => setModalChecadorAbierto(false)} 
-        usuario={usuarioActualDB} 
-      />
+      <RelojChecadorModal isOpen={modalChecadorAbierto} onClose={() => setModalChecadorAbierto(false)} usuario={usuarioActualDB} />
 
       <div className={`sidebar ${!menuAbierto ? 'collapsed' : ''}`}>
         <div className="sidebar-brand">
@@ -159,6 +152,18 @@ function App() {
           Operaciones
         </div>
 
+        {/* ✅ NUEVO MENÚ DESPLEGABLE: GASTOS */}
+        <div className={`sidebar-item sidebar-item-with-icon ${esGastosActivo && !menuGastosAbierto ? 'active' : ''}`} onClick={() => setMenuGastosAbierto(!menuGastosAbierto)}>
+          <span>Gastos</span>
+          <span style={{ fontSize: '0.7rem' }}>{menuGastosAbierto ? '▼' : '▶'}</span>
+        </div>
+        {menuGastosAbierto && (
+          <div className="sidebar-submenu">
+            <div className={`sidebar-subitem ${moduloActivo === 'mtto' ? 'active' : ''}`} onClick={() => setModuloActivo('mtto')}>MTTO</div>
+          </div>
+        )}
+
+        {/* --- RESTO DE TU MENÚ ORIGINAL --- */}
         <div className={`sidebar-item sidebar-item-with-icon ${esClientesActivo && !menuClientesAbierto ? 'active' : ''}`} onClick={() => setMenuClientesAbierto(!menuClientesAbierto)}>
           <span>Clientes</span>
           <span style={{ fontSize: '0.7rem' }}>{menuClientesAbierto ? '▼' : '▶'}</span>
@@ -220,11 +225,7 @@ function App() {
             <div className={`sidebar-subitem ${moduloActivo === 'usuarios' ? 'active' : ''}`} onClick={() => setModuloActivo('usuarios')}>Usuarios</div>
             <div className={`sidebar-subitem ${moduloActivo === 'roles' ? 'active' : ''}`} onClick={() => setModuloActivo('roles')}>Roles y Permisos</div>
             <div className={`sidebar-subitem ${moduloActivo === 'logs' ? 'active' : ''}`} onClick={() => setModuloActivo('logs')}>Historial de Actividad</div>
-            
-            {/* ✅ AQUÍ ESTÁ EL BOTÓN DE REGLAS DE ESTATUS */}
-            <div className={`sidebar-subitem ${moduloActivo === 'flujosOperacion' ? 'active' : ''}`} onClick={() => setModuloActivo('flujosOperacion')}>
-              Reglas de Estatus
-            </div>
+            <div className={`sidebar-subitem ${moduloActivo === 'flujosOperacion' ? 'active' : ''}`} onClick={() => setModuloActivo('flujosOperacion')}>Reglas de Estatus</div>
           </div>
         )}
 
@@ -234,15 +235,12 @@ function App() {
       </div>
 
       <div className="main-area">
-        {/* ✅ TOPBAR LIMPIA (SIN BUSCADOR) */}
         <div className="topbar" style={{ justifyContent: 'space-between' }}>
-          
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <button className="menu-toggle-btn" onClick={() => setMenuAbierto(!menuAbierto)} title="Ocultar/Mostrar Menú">☰</button>
           </div>
           
           <div className="topbar-right" style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '20px' }}>
-            
             {debeChecar && (
               <button 
                 onClick={() => setModalChecadorAbierto(true)}
@@ -292,6 +290,7 @@ function App() {
 
         {/* ✅ RENDERIZADO CONDICIONAL DE TODOS LOS MÓDULOS */}
         {moduloActivo === 'operaciones' && <OperacionesDashboard />}
+        {moduloActivo === 'mtto' && <MttoDashboard />}   {/* ✅ RENDER DEL NUEVO MÓDULO */}
         {moduloActivo === 'empresas' && <EmpresasDashboard />}
         {moduloActivo === 'direcciones' && <DireccionesDashboard />}
         {moduloActivo === 'tipoCambio' && <TipoCambioDashboard />}
@@ -308,8 +307,6 @@ function App() {
         {moduloActivo === 'roles' && <RolesDashboard />}
         {moduloActivo === 'usuarios' && <UsuariosDashboard />}
         {moduloActivo === 'logs' && <LogsDashboard />}
-        
-        {/* ✅ RENDERIZAMOS EL CONFIGURADOR AL ESTAR ACTIVO */}
         {moduloActivo === 'flujosOperacion' && <ConfiguradorStatus />}
         
       </div>
