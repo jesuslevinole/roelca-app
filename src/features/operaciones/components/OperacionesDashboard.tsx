@@ -35,7 +35,7 @@ const OperacionesDashboard = () => {
   // Estado para el hover de las filas
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
 
-  // ✅ DESCARGA BLINDADA (Sobrevive al F5 y limita a 100 registros)
+  // ✅ DESCARGA BLINDADA (Ahora incluye Unidades y Operadores)
   useEffect(() => {
     const descargarTodo = async () => {
       setCargandoOperaciones(true);
@@ -47,7 +47,7 @@ const OperacionesDashboard = () => {
           catGuardados = JSON.parse(cacheCatStr);
           setCatalogosGlobales(catGuardados);
         } else {
-          const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap] = await Promise.all([
+          const [empSnap, opSnap, embSnap, remSnap, tarSnap, convProvSnap, tcSnap, convCliSnap, convDetSnap, uniSnap, operSnap] = await Promise.all([
             getDocs(collection(db, 'empresas')),
             getDocs(collection(db, 'catalogo_tipo_operacion')),
             getDocs(collection(db, 'catalogo_embalaje')),
@@ -56,7 +56,9 @@ const OperacionesDashboard = () => {
             getDocs(collection(db, 'convenios_proveedores')),
             getDocs(collection(db, 'tipo_cambio')),
             getDocs(collection(db, 'convenios_clientes')),
-            getDocs(collection(db, 'convenios_clientes_detalles'))
+            getDocs(collection(db, 'convenios_clientes_detalles')),
+            getDocs(collection(db, 'unidades')),    // ✅ Nuevo
+            getDocs(collection(db, 'operadores'))   // ✅ Nuevo
           ]);
 
           catGuardados = {
@@ -68,7 +70,9 @@ const OperacionesDashboard = () => {
             conveniosProv: convProvSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
             catalogoTC: tcSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
             catalogoConvClientes: convCliSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
-            catalogoConvDetalles: convDetSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }))
+            catalogoConvDetalles: convDetSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            unidades: uniSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })),
+            operadores: operSnap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) }))
           };
           
           sessionStorage.setItem('roelca_catalogos_v1', JSON.stringify(catGuardados));
@@ -240,7 +244,7 @@ const OperacionesDashboard = () => {
     window.location.reload();
   };
 
-  // ✅ Filtrado GLOBAL por buscador inteligente
+  // ✅ Filtrado GLOBAL por buscador
   const operacionesFiltradas = operacionesGlobales.filter(op => {
     const b = busqueda.toLowerCase();
     return (
@@ -262,7 +266,7 @@ const OperacionesDashboard = () => {
   const irPaginaSiguiente = () => setPaginaActual(prev => Math.min(prev + 1, totalPaginas));
   const irPaginaAnterior = () => setPaginaActual(prev => Math.max(prev - 1, 1));
 
-  // ✅ Función para Exportar a CSV Actualizada
+  // ✅ Función para Exportar a CSV
   const exportarCSV = () => {
     if (operacionesFiltradas.length === 0) return alert("No hay datos para exportar.");
     const encabezados = [
@@ -279,7 +283,7 @@ const OperacionesDashboard = () => {
       `"${op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}"`,
       `"${mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'placa')}"`,
       `"${mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}"`,
-      `"${op.unidad || ''}"`,
+      `"${mostrarDatoMapeado(op.unidad, 'unidades')}"`,
       `"${op.nombreCliente || ''}"`,
       `"${obtenerNombreConvenioProv(op.convenioProveedor)}"`,
       `"${formatoMoneda(op.cargosAdicionales)}"`,
@@ -360,7 +364,7 @@ const OperacionesDashboard = () => {
           </div>
         </div>
 
-        {/* TABLA RESPONSIVE ACTUALIZADA CON EL NUEVO ORDEN */}
+        {/* TABLA RESPONSIVE */}
         <div className="content-body" style={{ display: 'block', width: '100%' }}>
           <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)', width: '100%' }}>
             {cargandoOperaciones ? (
@@ -434,7 +438,7 @@ const OperacionesDashboard = () => {
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}>{op.convenioNombre || obtenerNombreConvenioCliente(op.convenio)}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'placa')}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}>{mostrarDatoMapeado(op.proveedorUnidad, 'empresas')}</td>
-                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDato(op.unidad)}</td>
+                        <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{mostrarDatoMapeado(op.unidad, 'unidades')}</td>
                         <td style={{ padding: '16px', fontWeight: '500', color: '#f0f6fc', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{op.nombreCliente}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={obtenerNombreConvenioProv(op.convenioProveedor)}>{obtenerNombreConvenioProv(op.convenioProveedor)}</td>
                         <td style={{ padding: '16px', color: '#c9d1d9', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>{formatoMoneda(op.cargosAdicionales)}</td>
@@ -525,13 +529,10 @@ const OperacionesDashboard = () => {
               {/* 1. Información General */}
               {pestañaDetalleActiva === 'general' && (
                 <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
-                  
-                  {/* TIPO DE OPERACION DE VUELTA AQUÍ */}
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Operación</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.tipoOperacionId, 'tiposOperacion', 'tipo_operacion')}</span>
                   </div>
-
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tráfico (Movimiento)</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.trafico)}</span>
@@ -540,6 +541,7 @@ const OperacionesDashboard = () => {
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Estado de Carga</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.carga)}</span>
                   </div>
+
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Servicio / Status</span>
                     <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.fechaServicio)} - <span style={{color: '#10b981'}}>{mostrarDato(operacionViendo.status)}</span></span>
@@ -627,7 +629,7 @@ const OperacionesDashboard = () => {
                 </div>
               )}
 
-              {/* 4. Unidad y Operador */}
+              {/* 4. Unidad y Operador (✅ MODIFICADO: Agrega Sueldos) */}
               {pestañaDetalleActiva === 'unidad' && (
                 <div style={{ animation: 'fadeIn 0.2s ease' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
@@ -635,17 +637,9 @@ const OperacionesDashboard = () => {
                       <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Transporte</span>
                       <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.proveedorUnidad, 'empresas')}</span>
                     </div>
-                    <div>
-                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Unidad</span>
-                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.unidad)}</span>
-                    </div>
-                    <div>
-                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Operador</span>
-                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDato(operacionViendo.operador)}</span>
-                    </div>
                   </div>
 
-                  <div style={{ backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
+                  <div style={{ backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', marginBottom: '24px' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '16px' }}>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Facturado En:</span>
@@ -677,6 +671,31 @@ const OperacionesDashboard = () => {
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Conversión Final (Contabilidad)</span>
                         <span style={{ color: '#D84315', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.conversionProv)}</span>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* ✅ NUEVA SECCIÓN DE DATOS DE UNIDAD Y SUELDOS (Layout Exigido) */}
+                  <div style={{ gridColumn: '1 / -1' }}><hr style={{ borderColor: '#30363d', margin: '16px 0' }} /></div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Unidad</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.unidad, 'unidades', 'numeroEconomico') || mostrarDatoMapeado(operacionViendo.unidad, 'unidades', 'nombre')}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Operador</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{mostrarDatoMapeado(operacionViendo.operador, 'operadores')}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Sueldo del Operador</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{formatoMoneda(operacionViendo.sueldoOperador)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Sueldo Extra</span>
+                      <span style={{ color: '#c9d1d9', fontWeight: '500' }}>{formatoMoneda(operacionViendo.sueldoExtra)}</span>
+                    </div>
+                    <div>
+                      <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Sueldo Total</span>
+                      <span style={{ color: '#f0f6fc', fontWeight: 'bold', backgroundColor: '#161b22', padding: '6px 10px', borderRadius: '4px', border: '1px solid #30363d', display: 'inline-block' }}>{formatoMoneda(operacionViendo.sueldoTotal)}</span>
                     </div>
                   </div>
                 </div>

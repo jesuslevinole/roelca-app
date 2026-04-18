@@ -1,22 +1,29 @@
-// src/features/catalogos/config/catalogSchemas.tsx
+// src/features/catalogos/config/catalogSchemas.ts
 import React from 'react';
 
-export type FieldType = 'text' | 'number' | 'select';
+export type FieldType = 'text' | 'number' | 'select' | 'currency';
 
-// dynamicOptions maneja listas desplegables que vienen de Firebase (Llaves Foráneas)
 export interface CatalogField {
   name: string;
   label: string;
   type: FieldType;
   required?: boolean;
-  options?: string[]; // Para opciones estáticas
-  dynamicOptions?: {  // Para opciones dinámicas desde otra colección
+  options?: string[];
+  dynamicOptions?: {
     collection: string;
     labelField: string;
     valueField: string;
-    filterField?: string; // Campo por el cual filtrar (Ej. tiposEmpresa)
-    filterValue?: string; // Valor que debe tener para ser mostrado
+    filterField?: string;
+    filterValue?: string;
   };
+}
+
+export interface CatalogDetailSchema {
+  collection: string;
+  titulo: string;
+  icono: React.ReactNode;
+  foreignKey: string;
+  fields: CatalogField[];
 }
 
 export interface CatalogSchema {
@@ -24,6 +31,7 @@ export interface CatalogSchema {
   titulo: string;
   icono: React.ReactNode;
   fields: CatalogField[];
+  details?: CatalogDetailSchema[];
 }
 
 export const catalogosConfig: Record<string, CatalogSchema> = {
@@ -37,13 +45,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     icono: <path d="M4 10h3v7H4zM10.5 10h3v7h-3zM2 19h20v3H2zM17 10h3v7h-3zM12 1L2 6v2h20V6L12 1z" />,
     fields: [
       { name: 'banco', label: 'Banco', type: 'text', required: true },
-      { 
-        name: 'moneda', 
-        label: 'Moneda', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_moneda', labelField: 'moneda', valueField: 'id' }
-      }
+      { name: 'moneda', label: 'Moneda', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_moneda', labelField: 'moneda', valueField: 'id' } }
     ]
   },
   departamentos: {
@@ -63,13 +65,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     id: 'estados', titulo: 'Direcciones / Estado',
     icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
     fields: [
-      { 
-        name: 'pais', 
-        label: 'País', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_paises', labelField: 'nombre', valueField: 'id' } 
-      },
+      { name: 'pais', label: 'País', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_paises', labelField: 'nombre', valueField: 'id' } },
       { name: 'estado', label: 'Estado', type: 'text', required: true }
     ]
   },
@@ -77,13 +73,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     id: 'municipios', titulo: 'Direcciones / Municipios',
     icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
     fields: [
-      { 
-        name: 'estado', 
-        label: 'Estado', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_estados', labelField: 'estado', valueField: 'id' } 
-      },
+      { name: 'estado', label: 'Estado', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_estados', labelField: 'estado', valueField: 'id' } },
       { name: 'municipio', label: 'Municipio', type: 'text', required: true }
     ]
   },
@@ -91,13 +81,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     id: 'colonias', titulo: 'Direcciones / Colonia',
     icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
     fields: [
-      { 
-        name: 'municipio', 
-        label: 'Municipio', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_municipios', labelField: 'municipio', valueField: 'id' } 
-      },
+      { name: 'municipio', label: 'Municipio', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_municipios', labelField: 'municipio', valueField: 'id' } },
       { name: 'colonia', label: 'Colonia', type: 'text', required: true }
     ]
   },
@@ -105,13 +89,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     id: 'codigo_postal', titulo: 'Direcciones / Código Postal',
     icono: <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />,
     fields: [
-      { 
-        name: 'colonia', 
-        label: 'Colonia', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_colonias', labelField: 'colonia', valueField: 'id' } 
-      },
+      { name: 'colonia', label: 'Colonia', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_colonias', labelField: 'colonia', valueField: 'id' } },
       { name: 'codigo_postal', label: 'Codigo Postal', type: 'text', required: true }
     ]
   },
@@ -119,13 +97,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     id: 'calles', titulo: 'Direcciones / Calles',
     icono: <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />,
     fields: [
-      { 
-        name: 'codigo_postal', 
-        label: 'Código Postal', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_codigo_postal', labelField: 'codigo_postal', valueField: 'id' } 
-      },
+      { name: 'codigo_postal', label: 'Código Postal', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_codigo_postal', labelField: 'codigo_postal', valueField: 'id' } },
       { name: 'calle', label: 'Calle', type: 'text', required: true }
     ]
   },
@@ -178,26 +150,8 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     icono: <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />,
     fields: [
       { name: 'nombre_puesto', label: 'Nombre del puesto', type: 'text', required: true },
-      { 
-        name: 'departamento', 
-        label: 'Departamento', 
-        type: 'select', 
-        required: true,
-        dynamicOptions: { collection: 'catalogo_departamentos', labelField: 'departamento', valueField: 'id' } 
-      },
-      { 
-        name: 'empresa', 
-        label: 'Empresa', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { 
-          collection: 'empresas', 
-          labelField: 'nombre', 
-          valueField: 'id',
-          filterField: 'tiposEmpresa', 
-          filterValue: 'f21b15a4'
-        }
-      }
+      { name: 'departamento', label: 'Departamento', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_departamentos', labelField: 'departamento', valueField: 'id' } },
+      { name: 'empresa', label: 'Empresa', type: 'select', required: true, dynamicOptions: { collection: 'empresas', labelField: 'nombre', valueField: 'id', filterField: 'tiposEmpresa', filterValue: 'f21b15a4' } }
     ]
   },
   regimen_fiscal: {
@@ -216,22 +170,14 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'descripcion', label: 'Descripción', type: 'text' },
       { name: 'tipo', label: 'Type', type: 'select', required: true, options: ['Importación', 'Exportación', 'Movimiento'] },
       { name: 'boton_status', label: 'Botón/Status', type: 'select', required: true, options: ['Botón', 'Status'] },
-      { 
-        name: 'operacion', 
-        label: 'Operación', 
-        type: 'select', 
-        required: true,
-        dynamicOptions: { collection: 'catalogo_tipo_operacion', labelField: 'tipo_operacion', valueField: 'id' }
-      },
+      { name: 'operacion', label: 'Operación', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_tipo_operacion', labelField: 'tipo_operacion', valueField: 'id' } },
       { name: 'obligatorio', label: 'Obligatorio', type: 'select', required: true, options: ['Sí', 'No'] }
     ]
   },
   tipo_empresa: {
     id: 'tipo_empresa', titulo: 'Tipo de Empresa',
     icono: <path d="M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm10 12h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4h-2V5h2v2zm4 12h-2v-2h2v2zm0-4h-2v-2h2v2z"/>,
-    fields: [
-      { name: 'tipo', label: 'Tipo', type: 'text', required: true }
-    ]
+    fields: [{ name: 'tipo', label: 'Tipo', type: 'text', required: true }]
   },
   tipo_remolque: {
     id: 'tipo_remolque', titulo: 'Tipo de Remolque',
@@ -268,35 +214,24 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'movimiento', label: 'Importación/Exportación', type: 'select', required: true, options: ['Importación', 'Exportación', 'Movimiento', 'Trompo'] }
     ]
   },
-  
   tarifas_referencia: {
-    id: 'tarifas_referencia', titulo: 'Tarifas de Referencia',
-    icono: <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z" />,
+    id: 'tarifas_referencia', 
+    titulo: 'Tarifas de Referencia',
+    icono: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="5" width="14" height="14" rx="2" />
+        <path d="M16 16h6V8l-6-3" />
+        <circle cx="6" cy="19" r="2" />
+        <circle cx="18" cy="19" r="2" />
+      </svg>
+    ),
     fields: [
-      { 
-        name: 'tipo_operacion', 
-        label: 'Tipo de Operación', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'catalogo_tipos_tarifarios', labelField: 'descripcion', valueField: 'id' } 
-      },
-      { 
-        name: 'tipo_remolque', 
-        label: 'Tipo de Remolque', 
-        type: 'select', 
-        required: true,
-        dynamicOptions: { collection: 'catalogo_tipo_remolque', labelField: 'nombre', valueField: 'id' }
-      },
+      { name: 'tipo_operacion', label: 'Tipo de Operación', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_tipos_tarifarios', labelField: 'descripcion', valueField: 'id' } },
+      { name: 'tipo_remolque', label: 'Tipo de Remolque', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_tipo_remolque', labelField: 'nombre', valueField: 'id' } },
       { name: 'estado_carga', label: 'Cargada / Vacía', type: 'select', required: true, options: ['Cargada', 'Vacía'] },
       { name: 'trompo', label: 'Trompo', type: 'select', required: true, options: ['Sí', 'No'] },
       { name: 'regular_hazmat', label: 'Regular / Hazmat', type: 'select', required: true, options: ['Regular', 'Hazmat'] },
-      { 
-        name: 'aduana', 
-        label: 'Aduana', 
-        type: 'select', 
-        required: true,
-        dynamicOptions: { collection: 'catalogo_aduanas', labelField: 'aduana', valueField: 'id' }
-      },
+      { name: 'aduana', label: 'Aduana', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_aduanas', labelField: 'aduana', valueField: 'id' } },
       { name: 'descripcion', label: 'Descripción', type: 'text', required: true },
       { name: 'tarifa_cliente_1', label: 'Tarifa Cliente 1', type: 'number' },
       { name: 'tarifa_cliente_2', label: 'Tarifa Cliente 2', type: 'number' },
@@ -304,9 +239,43 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
       { name: 'tarifa_proveedor_1', label: 'Tarifa Proveedor 1', type: 'number' },
       { name: 'tarifa_proveedor_2', label: 'Tarifa Proveedor 2', type: 'number' },
       { name: 'tarifa_proveedor_3', label: 'Tarifa Proveedor 3', type: 'number' }
+    ],
+    details: [
+      {
+        collection: 'tarifas_gastos_incluidos',
+        titulo: 'Gastos Incluidos',
+        foreignKey: 'tarifa_referencia_id',
+        icono: (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="1" x2="12" y2="23" />
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+          </svg>
+        ),
+        fields: [
+          { name: 'gasto', label: 'Gasto', type: 'select', required: true, dynamicOptions: { collection: 'catalogo_tipos_gastos', labelField: 'nombre_gasto', valueField: 'id' } },
+          { name: 'monto', label: 'Monto', type: 'currency', required: true }
+        ]
+      },
+      {
+        collection: 'tarifas_rendimiento',
+        titulo: 'Rendimiento y Combustible',
+        foreignKey: 'tipo_servicio_id',
+        icono: (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="22" x2="15" y2="22" />
+            <line x1="4" y1="9" x2="14" y2="9" />
+            <path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18" />
+            <path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5" />
+          </svg>
+        ),
+        fields: [
+          { name: 'tipo_combustible', label: 'Gasolina / Diesel', type: 'select', required: true, options: ['Gasolina', 'Diesel'] },
+          { name: 'unidad_medida', label: 'Galones / Litros', type: 'select', required: true, options: ['Litros', 'Galones'] },
+          { name: 'cantidad', label: 'Cantidad', type: 'number', required: true }
+        ]
+      }
     ]
   },
-  
   tipo_factura: {
     id: 'tipo_factura',
     titulo: 'Tipo de Facturas',
@@ -322,13 +291,7 @@ export const catalogosConfig: Record<string, CatalogSchema> = {
     fields: [
       { name: 'nombre', label: 'Name', type: 'text', required: true },
       { name: 'moneda', label: 'Moneda', type: 'select', required: true, options: ['Dolares', 'Pesos'] },
-      { 
-        name: 'empresaId', 
-        label: 'Empresa', 
-        type: 'select', 
-        required: true, 
-        dynamicOptions: { collection: 'empresas', labelField: 'nombre', valueField: 'id' } 
-      }
+      { name: 'empresaId', label: 'Empresa', type: 'select', required: true, dynamicOptions: { collection: 'empresas', labelField: 'nombre', valueField: 'id' } }
     ]
   }
 };
