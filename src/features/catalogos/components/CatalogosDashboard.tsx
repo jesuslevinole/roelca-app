@@ -6,6 +6,12 @@ import { registrarLog } from '../../../utils/logger'; // ✅ Importación del lo
 
 import { listaCatalogos } from '../config/catalogSchemas';
 import type { CatalogSchema, CatalogField } from '../config/catalogSchemas';
+import { SelectBuscable } from './SelectBuscable';
+
+// ✅ Helper compartido: resuelve la etiqueta a mostrar de una opción dinámica
+//    (misma cadena de respaldos que usaban los <select> nativos)
+const etiquetaDeOpcion = (opt: any, labelField: string, valueField: string): string =>
+  String(opt[labelField] || opt.nombreCorto || opt.razonSocial || opt.nombre || opt.moneda || opt.descripcion || opt.tipo || opt[valueField] || opt.id);
 
 // 🔥 CACHÉ GLOBAL DE MÓDULO PARA ELIMINAR LECTURAS EXCESIVAS EN FIREBASE 🔥
 const CACHE_OPCIONES_DINAMICAS: Record<string, any[]> = {};
@@ -448,10 +454,12 @@ const CatalogosDashboard = () => {
 
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px', width: '100%' }}>
           <div style={{ flex: '1 1 auto', maxWidth: '250px', minWidth: '150px' }}>
-            <select className="form-control" value={filtroFijo} onChange={(e) => setFiltroFijo(e.target.value)} style={{ width: '100%', backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9', padding: '10px', borderRadius: '6px' }}>
-              <option value="">Filtro: Todas las colecciones</option>
-              {opcionesDeFiltroDropdown.map((opt, i) => <option key={i} value={`${opt.field}|||${opt.value}`}>{opt.label}</option>)}
-            </select>
+            <SelectBuscable
+              opciones={opcionesDeFiltroDropdown.map((opt) => ({ value: `${opt.field}|||${opt.value}`, label: opt.label }))}
+              value={filtroFijo}
+              onChange={setFiltroFijo}
+              placeholder="Filtro: Todas las colecciones"
+            />
           </div>
           <div style={{ flex: '2 1 250px', display: 'flex', justifyContent: 'center' }}>
             <div style={{ position: 'relative', width: '100%', maxWidth: '500px' }}>
@@ -701,19 +709,23 @@ const CatalogosDashboard = () => {
                     <div key={f.name}>
                       <label style={{ color: '#8b949e', fontSize: '0.9rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>{f.label} {isReq && <span style={{ color: '#ef4444' }}>*</span>}</label>
                       {f.dynamicOptions && opcionesDinamicas[f.dynamicOptions.collection] ? (
-                        <select className="form-input-elegante" value={formData[f.name] || ''} onChange={(e) => setFormData({ ...formData, [f.name]: e.target.value })}>
-                          <option value="">Seleccione una opción...</option>
-                          {opcionesDinamicas[f.dynamicOptions.collection].map((opt: any) => {
+                        <SelectBuscable
+                          opciones={opcionesDinamicas[f.dynamicOptions.collection].map((opt: any) => {
                             const vField = f.dynamicOptions!.valueField || 'id';
                             const lField = f.dynamicOptions!.labelField || 'nombre';
-                            return <option key={opt.id} value={opt[vField] || opt.id}>{opt[lField] || opt.nombreCorto || opt.razonSocial || opt.nombre || opt.moneda || opt.descripcion || opt.tipo || opt[vField]}</option>;
+                            return { value: String(opt[vField] || opt.id), label: etiquetaDeOpcion(opt, lField, vField) };
                           })}
-                        </select>
+                          value={formData[f.name] || ''}
+                          onChange={(v) => setFormData({ ...formData, [f.name]: v })}
+                          placeholder="Buscar y seleccionar..."
+                        />
                       ) : f.options ? (
-                        <select className="form-input-elegante" value={formData[f.name] || ''} onChange={(e) => setFormData({ ...formData, [f.name]: e.target.value })}>
-                          <option value="">Seleccione una opción...</option>
-                          {f.options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
+                        <SelectBuscable
+                          opciones={f.options.map((opt: string) => ({ value: opt, label: opt }))}
+                          value={formData[f.name] || ''}
+                          onChange={(v) => setFormData({ ...formData, [f.name]: v })}
+                          placeholder="Buscar y seleccionar..."
+                        />
                       ) : (
                         <input className="form-input-elegante" type={f.type === 'number' || f.type === 'currency' ? 'number' : 'text'} step={f.type === 'currency' ? '0.01' : undefined} value={formData[f.name] || ''} onChange={(e) => setFormData({ ...formData, [f.name]: e.target.value })} placeholder={`Ingrese ${f.label.toLowerCase()}`} />
                       )}
@@ -745,19 +757,23 @@ const CatalogosDashboard = () => {
                     <div key={f.name}>
                       <label style={{ color: '#8b949e', fontSize: '0.9rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>{f.label || f.name}</label>
                       {f.dynamicOptions && opcionesDinamicas[f.dynamicOptions.collection] ? (
-                        <select className="form-input-elegante" value={subFormData[f.name] || ''} onChange={(e) => setSubFormData({ ...subFormData, [f.name]: e.target.value })}>
-                          <option value="">Seleccione una opción...</option>
-                          {opcionesDinamicas[f.dynamicOptions.collection].map((opt: any) => {
+                        <SelectBuscable
+                          opciones={opcionesDinamicas[f.dynamicOptions.collection].map((opt: any) => {
                             const vField = f.dynamicOptions!.valueField || 'id';
                             const lField = f.dynamicOptions!.labelField || 'nombre';
-                            return <option key={opt.id} value={opt[vField] || opt.id}>{opt[lField] || opt.nombreCorto || opt.razonSocial || opt.nombre || opt.moneda || opt.descripcion || opt.tipo || opt[vField]}</option>;
+                            return { value: String(opt[vField] || opt.id), label: etiquetaDeOpcion(opt, lField, vField) };
                           })}
-                        </select>
+                          value={subFormData[f.name] || ''}
+                          onChange={(v) => setSubFormData({ ...subFormData, [f.name]: v })}
+                          placeholder="Buscar y seleccionar..."
+                        />
                       ) : f.options ? (
-                        <select className="form-input-elegante" value={subFormData[f.name] || ''} onChange={(e) => setSubFormData({ ...subFormData, [f.name]: e.target.value })}>
-                          <option value="">Seleccione una opción...</option>
-                          {f.options.map((opt:string) => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
+                        <SelectBuscable
+                          opciones={f.options.map((opt: string) => ({ value: opt, label: opt }))}
+                          value={subFormData[f.name] || ''}
+                          onChange={(v) => setSubFormData({ ...subFormData, [f.name]: v })}
+                          placeholder="Buscar y seleccionar..."
+                        />
                       ) : (
                         <input className="form-input-elegante" type={f.type === 'number' || f.type === 'currency' ? 'number' : 'text'} step={f.type === 'currency' ? '0.01' : undefined} value={subFormData[f.name] || ''} onChange={(e) => setSubFormData({ ...subFormData, [f.name]: e.target.value })} placeholder={`Ingrese ${f.label?.toLowerCase() || f.name.toLowerCase()}`} />
                       )}
