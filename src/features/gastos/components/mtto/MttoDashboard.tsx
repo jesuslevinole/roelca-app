@@ -37,6 +37,39 @@ const COLUMNAS_BASE = [
   { id: 'operacionAsignada', label: 'Asignar Operación', visible: true }
 ];
 
+// ✅ Consecutivo (última parte numérica del folio)
+const consecutivoDe = (m: any): number => {
+  const parte = String(m?.numeroGasto || '').split('-').pop() || '';
+  const n = parseInt(parte.replace(/\D/g, ''), 10);
+  return isNaN(n) ? 0 : n;
+};
+
+// ✅ Partes de una fecha ISO "YYYY-MM-DD" sin corrimiento de zona horaria
+const partesFechaISO = (v: any): { yyyy: string; mm: string; dd: string } | null => {
+  const s = String(v || '').slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return { yyyy: m[1], mm: m[2], dd: m[3] };
+};
+
+// ✅ Folio normalizado al formato MTTO-DDMMYY-NNN (p. ej. MTTO-290626-001).
+//    La fecha sale del campo `fecha` (respaldo `createdAt`); el consecutivo, del folio.
+const formatearFolio = (m: any): string => {
+  const consStr = String(consecutivoDe(m)).padStart(3, '0');
+  const p = partesFechaISO(m?.fecha) || partesFechaISO(m?.createdAt);
+  if (p) {
+    const ddmmyy = `${p.dd}${p.mm}${p.yyyy.slice(2)}`;
+    return `MTTO-${ddmmyy}-${consStr}`;
+  }
+  // Sin fecha ISO confiable: conserva el bloque de fecha del folio original,
+  // pero homologa el prefijo a MTTO y el consecutivo a 3 dígitos.
+  const original = String(m?.numeroGasto || '').trim();
+  if (!original) return '-';
+  const partes = original.split('-');
+  if (partes.length >= 3) return `MTTO-${partes[1]}-${consStr}`;
+  return original;
+};
+
 const MttoDashboard = () => {
   const [vistaActiva, setVistaActiva] = useState<VistaMaestra>('tabla');
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
@@ -49,6 +82,8 @@ const MttoDashboard = () => {
   const [pestañaDetalleActiva, setPestañaDetalleActiva] = useState<string>('general');
   const [paginaActual, setPaginaActual] = useState(1);
   const registrosPorPagina = 50;
+  // ✅ Pestaña por estatus: separa No facturados / Facturados
+  const [estatusVista, setEstatusVista] = useState<'no_facturado' | 'facturado'>('no_facturado');
 
   // Estados visuales y de acciones masivas
   const [gastosSeleccionados, setGastosSeleccionados] = useState<string[]>([]);
@@ -106,36 +141,19 @@ const MttoDashboard = () => {
         return { id: d.id, ...data };
       });
 
-      // ✅ ORDEN: No facturados arriba, luego ordenado del más nuevo al más viejo
+      // ✅ ORDEN: 1) Fecha de la más reciente a la más antigua. 2) Por referencia (folio).
+      const obtenerTiempo = (m: any) => {
+        if (m.fecha) { const t = new Date(m.fecha).getTime(); if (!isNaN(t)) return t; }
+        if (m.createdAt) { const t = new Date(m.createdAt).getTime(); if (!isNaN(t)) return t; }
+        return 0;
+      };
       mttoData.sort((a, b) => {
-        // Prioridad 1: "No facturado" siempre arriba
-        const aNoFacturado = a.estatus === 'No facturado';
-        const bNoFacturado = b.estatus === 'No facturado';
-        
-        if (aNoFacturado && !bNoFacturado) return -1;
-        if (!aNoFacturado && bNoFacturado) return 1;
-
-        // Prioridad 2: Orden cronológico (Más reciente arriba)
-        const parseGasto = (str: string) => {
-            if (!str) return 0;
-            const match = String(str).match(/[A-Za-z]+-(\d{2})(\d{2})(\d{4})-(\d+)/);
-            if (match) {
-                const [ , mm, dd, yyyy, seq ] = match;
-                return parseInt(`${yyyy}${mm}${dd}${seq.padStart(4, '0')}`, 10);
-            }
-            return 0;
-        };
-
-        const valA = parseGasto(a.numeroGasto);
-        const valB = parseGasto(b.numeroGasto);
-
-        if (valA !== valB) {
-            return valB - valA; 
-        }
-
-        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : new Date(a.fecha || 0).getTime();
-        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : new Date(b.fecha || 0).getTime();
-        return dateB - dateA;
+        // 1) Fecha del gasto (más reciente primero)
+        const tA = obtenerTiempo(a);
+        const tB = obtenerTiempo(b);
+        if (tA !== tB) return tB - tA;
+        // 2) Referencia / folio del mismo día: consecutivo más alto primero
+        return consecutivoDe(b) - consecutivoDe(a);
       });
 
       setMttoGlobales(mttoData);
@@ -153,7 +171,7 @@ const MttoDashboard = () => {
   useEffect(() => {
     setPaginaActual(1);
     setGastosSeleccionados([]); 
-  }, [busqueda]);
+  }, [busqueda, estatusVista]);
 
   const handleNuevo = () => { setMttoEditando(null); setEstadoFormulario('abierto'); };
   const editarMtto = (mtto: any) => { setMttoEditando(mtto); setEstadoFormulario('abierto'); };
@@ -262,6 +280,7 @@ const MttoDashboard = () => {
     const b = busqueda.toLowerCase();
     return mttoGlobales.filter(m => (
       String(m.numeroGasto || '').toLowerCase().includes(b) ||
+      String(formatearFolio(m)).toLowerCase().includes(b) ||
       String(m.invoice || '').toLowerCase().includes(b) ||
       String(m.estatus || '').toLowerCase().includes(b) ||
       String(m.operadorNombre || m.operador || '').toLowerCase().includes(b) ||
@@ -282,20 +301,28 @@ const MttoDashboard = () => {
         totalImporte += parseFloat(gasto.importe || 0);
         totalIva += parseFloat(gasto.ivaMonto || 0);
         granTotal += parseFloat(gasto.total || 0);
-        
-        if (gasto.numeroGasto) {
-           numerosGasto.push(gasto.numeroGasto);
-        }
+        numerosGasto.push(formatearFolio(gasto));
       }
     });
 
     return { totalImporte, totalIva, granTotal, cantidad: gastosSeleccionados.length, numerosGasto };
   }, [gastosSeleccionados, mttoGlobales]);
 
-  const totalPaginas = Math.ceil(registrosFiltrados.length / registrosPorPagina);
+  // ✅ Separación por estatus (respeta la búsqueda activa)
+  const esFacturado = (m: any) => m.estatus === 'Facturado' || (m.invoice && String(m.invoice).trim() !== '');
+  const registrosFacturados = useMemo(() => registrosFiltrados.filter(esFacturado), [registrosFiltrados]);
+  const registrosNoFacturados = useMemo(() => registrosFiltrados.filter(m => !esFacturado(m)), [registrosFiltrados]);
+  const sumaTotal = (lista: any[]) => lista.reduce((s, m) => s + (parseFloat(m.total) || 0), 0);
+  const totalFacturado = useMemo(() => sumaTotal(registrosFacturados), [registrosFacturados]);
+  const totalNoFacturado = useMemo(() => sumaTotal(registrosNoFacturados), [registrosNoFacturados]);
+
+  // Registros de la pestaña activa
+  const registrosVista = estatusVista === 'facturado' ? registrosFacturados : registrosNoFacturados;
+
+  const totalPaginas = Math.ceil(registrosVista.length / registrosPorPagina);
   const indiceUltimoRegistro = paginaActual * registrosPorPagina;
   const indicePrimerRegistro = indiceUltimoRegistro - registrosPorPagina;
-  const registrosEnPantalla = registrosFiltrados.slice(indicePrimerRegistro, indiceUltimoRegistro);
+  const registrosEnPantalla = registrosVista.slice(indicePrimerRegistro, indiceUltimoRegistro);
 
   const irPaginaSiguiente = () => setPaginaActual(prev => Math.min(prev + 1, totalPaginas));
   const irPaginaAnterior = () => setPaginaActual(prev => Math.max(prev - 1, 1));
@@ -324,7 +351,7 @@ const MttoDashboard = () => {
   // ✅ RENDERIZADOR DINÁMICO DE CELDAS MTTO
   const renderCellContent = (m: any, colId: string) => {
     switch (colId) {
-      case 'numeroGasto': return <span style={{ color: '#58a6ff', fontWeight: 'bold' }}>{m.numeroGasto || '-'}</span>;
+      case 'numeroGasto': return <span style={{ color: '#58a6ff', fontWeight: 'bold' }}>{formatearFolio(m)}</span>;
       case 'invoice': return <span style={{ color: '#c9d1d9' }}>{m.invoice || '-'}</span>;
       case 'estatus': return <span style={{ color: m.estatus === 'Facturado' ? '#3fb950' : '#f85149', fontWeight: 'bold' }}>{m.estatus || '-'}</span>;
       case 'fecha': return <span style={{ color: '#c9d1d9' }}>{m.fecha || '-'}</span>;
@@ -364,7 +391,7 @@ const MttoDashboard = () => {
       columnasVisibles.forEach(col => {
         let val: any = '-';
         switch (col.id) {
-          case 'numeroGasto': val = m.numeroGasto || ''; break;
+          case 'numeroGasto': val = formatearFolio(m); break;
           case 'invoice': val = m.invoice || ''; break;
           case 'estatus': val = m.estatus || ''; break;
           case 'fecha': val = m.fecha || ''; break;
@@ -448,6 +475,39 @@ const MttoDashboard = () => {
 
       {vistaActiva === 'agrupado' ? <MttoAgrupadosInvoice /> : (
         <div style={{ width: '100%', margin: '0 auto' }}>
+
+          {/* ✅ PESTAÑAS POR ESTATUS: No facturados / Facturados (con conteo y monto) */}
+          <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
+            {([
+              { id: 'no_facturado', label: 'No facturados', count: registrosNoFacturados.length, total: totalNoFacturado, color: '#f85149' },
+              { id: 'facturado', label: 'Facturados', count: registrosFacturados.length, total: totalFacturado, color: '#3fb950' },
+            ] as const).map(t => {
+              const activo = estatusVista === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setEstatusVista(t.id)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '12px',
+                    padding: '12px 18px', borderRadius: '10px', cursor: 'pointer',
+                    backgroundColor: activo ? '#161b22' : 'transparent',
+                    border: '1px solid ' + (activo ? t.color : '#30363d'),
+                    boxShadow: activo ? `inset 0 -3px 0 ${t.color}` : 'none',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: t.color, display: 'inline-block' }} />
+                    <span style={{ color: activo ? '#f0f6fc' : '#8b949e', fontWeight: activo ? 700 : 500, fontSize: '0.95rem' }}>{t.label}</span>
+                  </span>
+                  <span style={{ backgroundColor: activo ? t.color : '#21262d', color: activo ? '#fff' : '#c9d1d9', borderRadius: '999px', padding: '2px 10px', fontSize: '0.8rem', fontWeight: 700, minWidth: '24px', textAlign: 'center' }}>{t.count}</span>
+                  <span style={{ color: activo ? t.color : '#8b949e', fontSize: '0.85rem', fontWeight: 600, borderLeft: '1px solid #30363d', paddingLeft: '12px' }}>{formatoMoneda(t.total)}</span>
+                </button>
+              );
+            })}
+          </div>
+
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px', width: '100%' }}>
             
             <div style={{ display: 'flex', gap: '12px', flex: '1 1 auto', maxWidth: '600px' }}>
@@ -593,10 +653,10 @@ const MttoDashboard = () => {
           </div>
 
           {/* CONTROLES DE PAGINACIÓN */}
-          {registrosFiltrados.length > 0 && !cargando && (
+          {registrosVista.length > 0 && !cargando && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', padding: '0 8px', flexWrap: 'wrap', gap: '10px' }}>
               <div style={{ color: '#8b949e', fontSize: '0.9rem' }}>
-                Mostrando {indicePrimerRegistro + 1} - {Math.min(indiceUltimoRegistro, registrosFiltrados.length)} de {registrosFiltrados.length} gastos
+                Mostrando {indicePrimerRegistro + 1} - {Math.min(indiceUltimoRegistro, registrosVista.length)} de {registrosVista.length} gastos
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button 
@@ -693,7 +753,7 @@ const MttoDashboard = () => {
         <div className="modal-overlay" style={{ zIndex: 1500 }}>
           <div className="form-card detail-card" style={{ maxWidth: '1000px', width: '100%', maxHeight: '90vh', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', display: 'flex', flexDirection: 'column' }}>
             <div className="form-header" style={{ padding: '20px 24px', display: 'flex', justifyContent: 'space-between' }}>
-              <h2 style={{ margin: 0, color: '#f0f6fc' }}>Detalle de Gasto <span style={{ color: '#58a6ff' }}>{mttoViendo.numeroGasto}</span></h2>
+              <h2 style={{ margin: 0, color: '#f0f6fc' }}>Detalle de Gasto <span style={{ color: '#58a6ff' }}>{formatearFolio(mttoViendo)}</span></h2>
               <button onClick={() => setMttoViendo(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
             
@@ -706,7 +766,7 @@ const MttoDashboard = () => {
               {/* PESTAÑA 1: INFORMACIÓN GENERAL */}
               {pestañaDetalleActiva === 'general' && (
                 <div className="detail-grid-3">
-                   <div><label style={labelStyle}># DE GASTO</label><span style={valStyle}>{mttoViendo.numeroGasto || '-'}</span></div>
+                   <div><label style={labelStyle}># DE GASTO</label><span style={valStyle}>{formatearFolio(mttoViendo)}</span></div>
                    <div><label style={labelStyle}># DE INVOICE</label><span style={valStyle}>{mttoViendo.invoice || '-'}</span></div>
                    <div><label style={labelStyle}>ESTATUS</label><span style={{color: mttoViendo.estatus === 'Facturado' ? '#3fb950' : '#f85149', fontWeight: 'bold'}}>{mttoViendo.estatus || '-'}</span></div>
                    <div><label style={labelStyle}>FECHA</label><span style={valStyle}>{mttoViendo.fecha || '-'}</span></div>

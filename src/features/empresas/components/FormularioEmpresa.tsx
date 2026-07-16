@@ -4,6 +4,31 @@ import { collection, getDocs, onSnapshot, addDoc } from 'firebase/firestore';
 import { db, agregarRegistro, actualizarRegistro } from '../../../config/firebase';
 import { FormularioDireccion } from '../../direcciones/components/FormularioDireccion'; 
 import { registrarLog } from '../../../utils/logger'; 
+import { DocumentoUploadModal } from '../../documentos/DocumentoUploadModal';
+
+// Tipos de documento que se manejan para EMPRESAS / CLIENTES (edítalos a tu gusto)
+export const TIPOS_DOCUMENTO_EMPRESA = [
+  '1. Constancia de Situación Fiscal (RFC)',
+  '2. Comprobante de Domicilio',
+  '3. Acta Constitutiva',
+  '4. Poder Notarial del Representante',
+  '5. Identificación del Representante Legal',
+  '6. Cédula de Identificación Fiscal',
+  '7. Opinión de Cumplimiento (SAT)',
+  '8. Carátula Bancaria / Estado de Cuenta',
+  '9. Contrato de Servicio',
+  '10. Orden de Compra',
+  '11. Carta de Crédito',
+  '12. W-9 / W-8BEN-E (Tax ID USA)',
+  '13. Comprobante de Pago',
+  '14. Factura',
+  '15. Otro',
+];
+
+// ✅ ID del tipo de empresa "Cliente (Paga)" en el catálogo catalogo_tipo_empresa.
+//    En la base de datos, las empresas guardan su tiposEmpresa con ESTE id (no
+//    con el texto). Es el mismo id que usa FormularioOperacion.tsx.
+const ID_TIPO_CLIENTE_PAGA = '7eec9cbb';
 
 // =========================================
 // SUB-COMPONENTE: SELECTOR MULTIPLE CON CHECKBOXES
@@ -347,22 +372,31 @@ interface FormProps {
   onClose: () => void;
   onMinimize: () => void;
   onRestore: () => void;
+  // ✅ Tipo de empresa que llega pre-marcado cuando el formulario se abre desde
+  //   otro módulo (ej. el botón + de "Cliente (Mercancía)" en Operaciones).
+  tipoEmpresaPreseleccionado?: string;
 }
 
-export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, registros, onClose, onMinimize, onRestore }) => {
+export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, registros, onClose, onMinimize, onRestore, tipoEmpresaPreseleccionado }) => {
   const [cargando, setCargando] = useState(false);
   const [activeTab, setActiveTab] = useState<'general' | 'fiscal' | 'contacto'>('general');
   
   const [regimenesFiscales, setRegimenesFiscales] = useState<{id: string, label: string}[]>([]);
-  const [direccionesDB, setDireccionesDB] = useState<{id: string, label: string}[]>([]);
+  const [direccionesDB, setDireccionesDB] = useState<any[]>([]);
   const [monedas, setMonedas] = useState<any[]>([]);
   const [tiposFacturas, setTiposFacturas] = useState<any[]>([]);
   
   const [catalogoTiposEmpresa, setCatalogoTiposEmpresa] = useState<string[]>([]);
   const [catalogoTiposServicio, setCatalogoTiposServicio] = useState<string[]>([]);
+  // ✅ Catálogos completos {id, nombre}: en la interfaz se trabaja con NOMBRES,
+  //   pero en Firestore se guardan los IDs del catálogo (que es lo que filtran
+  //   los buscadores del formulario de Operaciones).
+  const [catTiposEmpresaFull, setCatTiposEmpresaFull] = useState<{ id: string; nombre: string }[]>([]);
+  const [catTiposServicioFull, setCatTiposServicioFull] = useState<{ id: string; nombre: string }[]>([]);
 
   const [modalDireccionAbierto, setModalDireccionAbierto] = useState(false);
   const [modalRegimenAbierto, setModalRegimenAbierto] = useState(false);
+  const [mostrarSubirDoc, setMostrarSubirDoc] = useState(false);
 
   const [formData, setFormData] = useState({
     numCliente: '',
@@ -404,8 +438,10 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
     const unsubDirecciones = onSnapshot(collection(db, 'direcciones'), (snap) => {
       setDireccionesDB(snap.docs.map(doc => {
-        const d = doc.data();
-        return { id: doc.id, label: d.direccionCompleta || 'Dirección sin formato' };
+        const d: any = doc.data();
+        // ✅ Se conservan TODOS los campos estructurados (país, estado, colonia,
+        //   calle, C.P., números) para mostrarlos separados en el formulario.
+        return { id: doc.id, label: d.direccionCompleta || 'Dirección sin formato', ...d };
       }));
     });
 
@@ -416,10 +452,18 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
     const fetchTiposLists = async () => {
       try {
         const tEmpresas = await getDocs(collection(db, 'catalogo_tipo_empresa'));
-        setCatalogoTiposEmpresa(tEmpresas.docs.map(doc => doc.data().tipo).filter(Boolean));
+        const emp = tEmpresas.docs
+          .map(doc => ({ id: doc.id, nombre: String((doc.data() as any).tipo || '') }))
+          .filter(x => x.nombre);
+        setCatTiposEmpresaFull(emp);
+        setCatalogoTiposEmpresa(emp.map(x => x.nombre));
 
         const tServicios = await getDocs(collection(db, 'catalogo_tipo_servicio'));
-        setCatalogoTiposServicio(tServicios.docs.map(doc => doc.data().nombre).filter(Boolean));
+        const serv = tServicios.docs
+          .map(doc => ({ id: doc.id, nombre: String((doc.data() as any).nombre || '') }))
+          .filter(x => x.nombre);
+        setCatTiposServicioFull(serv);
+        setCatalogoTiposServicio(serv.map(x => x.nombre));
 
         const monedaSnap = await getDocs(collection(db, 'catalogo_moneda'));
         setMonedas(monedaSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -436,6 +480,37 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
       unsubFacturas();
     };
   }, []);
+
+  // ✅ Conversión entre NOMBRES (interfaz) e IDs (Firestore) de los catálogos.
+  const idTipoEmpresaDeNombre = (nombre: string) => catTiposEmpresaFull.find(x => x.nombre === nombre)?.id || nombre;
+  const nombreTipoEmpresaDeId = (v: string) => catTiposEmpresaFull.find(x => x.id === String(v))?.nombre || v;
+  const idTipoServicioDeNombre = (nombre: string) => catTiposServicioFull.find(x => x.nombre === nombre)?.id || nombre;
+  const nombreTipoServicioDeId = (v: string) => catTiposServicioFull.find(x => x.id === String(v))?.nombre || v;
+
+  // ✅ Cuando cargan los catálogos, los tipos guardados como ID (formato de la
+  //   base) se convierten a nombre para que los checkboxes se marquen bien.
+  useEffect(() => {
+    if (catTiposEmpresaFull.length === 0 && catTiposServicioFull.length === 0) return;
+    setFormData(prev => {
+      const tiposEmp = (prev.tiposEmpresa || []).map(v => nombreTipoEmpresaDeId(String(v)));
+      const tiposServ = (prev.tiposServicio || []).map(v => nombreTipoServicioDeId(String(v)));
+      const cambioEmp = JSON.stringify(tiposEmp) !== JSON.stringify(prev.tiposEmpresa);
+      const cambioServ = JSON.stringify(tiposServ) !== JSON.stringify(prev.tiposServicio);
+      if (!cambioEmp && !cambioServ) return prev;
+      return { ...prev, tiposEmpresa: tiposEmp, tiposServicio: tiposServ };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catTiposEmpresaFull, catTiposServicioFull, initialData]);
+
+  // ✅ Si el formulario se abrió desde otro módulo con un tipo preseleccionado
+  //   (ej. "Cliente (Mercancía)" desde Operaciones), se marca de inicio.
+  useEffect(() => {
+    if (initialData || !tipoEmpresaPreseleccionado) return;
+    setFormData(prev => prev.tiposEmpresa.length === 0
+      ? { ...prev, tiposEmpresa: [tipoEmpresaPreseleccionado] }
+      : prev);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipoEmpresaPreseleccionado, initialData]);
 
   const generarSiguienteNumCliente = () => {
     if (registros.length === 0) return 'EMP-001';
@@ -556,12 +631,23 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
 
     setCargando(true);
     try {
+      // ✅ En Firestore los tipos se guardan como IDs del catálogo (el formato
+      //   que filtran los buscadores de Operaciones: Cliente Mercancía, Cliente
+      //   Paga, Proveedores, etc.). La interfaz trabaja con nombres, así que
+      //   aquí se convierten justo antes de guardar. Si algún nombre no está
+      //   en el catálogo, se conserva tal cual para no perder información.
+      const payload = {
+        ...formData,
+        tiposEmpresa: (formData.tiposEmpresa || []).map(n => idTipoEmpresaDeNombre(String(n))),
+        tiposServicio: (formData.tiposServicio || []).map(n => idTipoServicioDeNombre(String(n))),
+      };
+
       if (initialData && initialData.id) {
-        await actualizarRegistro('empresas', initialData.id, formData);
+        await actualizarRegistro('empresas', initialData.id, payload);
         await registrarLog('Empresas', 'Edición', `Actualizó los datos de la empresa: ${formData.nombre}`);
       } else {
         const correlativoFinal = generarSiguienteNumCliente();
-        await agregarRegistro('empresas', { ...formData, numCliente: correlativoFinal });
+        await agregarRegistro('empresas', { ...payload, numCliente: correlativoFinal });
         await registrarLog('Empresas', 'Creación', `Agregó la nueva empresa: ${formData.nombre} (${correlativoFinal})`);
       }
       onClose();
@@ -584,7 +670,15 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
   const monedaSeleccionadaString = monedas.find(m => m.id === formData.moneda)?.moneda || formData.moneda;
   const tiposFacturasFiltrados = tiposFacturas.filter(tf => tf.moneda === monedaSeleccionadaString);
   
-  const clientesPaga = registros.filter(r => Array.isArray(r.tiposEmpresa) && r.tiposEmpresa.includes('Cliente (Paga)'));
+  // ✅ CORRECCIÓN: el campo tiposEmpresa puede venir guardado como el ID del
+  //    catálogo ('7eec9cbb') o como el texto ('Cliente (Paga)'). Antes solo se
+  //    comparaba contra el texto, por eso el selector de "Cliente(s) que Paga
+  //    (Relacionados)" salía vacío ("No se encontraron coincidencias"). Ahora
+  //    aceptamos AMBOS formatos para que sí aparezcan los clientes que pagan.
+  const esClientePaga = (r: any) =>
+    Array.isArray(r.tiposEmpresa) &&
+    (r.tiposEmpresa.includes('Cliente (Paga)') || r.tiposEmpresa.includes(ID_TIPO_CLIENTE_PAGA));
+  const clientesPaga = registros.filter(esClientePaga);
   const opcionesClientesPaga = clientesPaga.map(c => ({ id: c.id, label: c.nombre }));
 
   return (
@@ -597,6 +691,15 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
               {estado === 'minimizado' ? 'Editando...' : (initialData ? `Editar Empresa` : 'Nueva Empresa')}
             </h2>
             <div className="header-actions" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => { if (!initialData) { alert('Guarda la empresa primero para poder subir documentos.'); return; } setMostrarSubirDoc(true); }}
+                title={initialData ? 'Subir documentos de la empresa' : 'Guarda la empresa primero para subir documentos'}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '6px', border: 'none', backgroundColor: initialData ? '#D84315' : '#21262d', color: initialData ? '#fff' : '#6e7681', cursor: initialData ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '0.82rem' }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                Subir Documentos
+              </button>
               {estado === 'abierto' ? (
                 <button type="button" onClick={onMinimize} className="btn-window" style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>🗕</button>
               ) : (
@@ -790,6 +893,31 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
                           + Añadir Nueva
                         </button>
                       </div>
+                      {/* ✅ Desglose de la dirección seleccionada (campos del catálogo de
+                          direcciones, SOLO LECTURA: se editan desde el catálogo). */}
+                      {(() => {
+                        const dirSel = direccionesDB.find((d: any) => String(d.id) === String(formData.direccionId));
+                        if (!dirSel) return null;
+                        const v = (x: any) => String(x ?? '').trim() || '—';
+                        const campoDir = (etiqueta: string, valor: any) => (
+                          <div>
+                            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.7rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>{etiqueta}</label>
+                            <input type="text" readOnly disabled value={v(valor)} className="form-control" style={{ backgroundColor: '#010409', color: '#c9d1d9', cursor: 'not-allowed', opacity: 0.9, width: '100%', boxSizing: 'border-box' }} />
+                          </div>
+                        );
+                        return (
+                          <div style={{ marginTop: '14px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+                            {campoDir('País', dirSel.paisNombre)}
+                            {campoDir('Estado', dirSel.estadoNombre)}
+                            {campoDir('Municipio', dirSel.municipioNombre)}
+                            {campoDir('Colonia', dirSel.coloniaNombre)}
+                            {campoDir('Calle', dirSel.calleNombre)}
+                            {campoDir('# Exterior', dirSel.numExterior)}
+                            {campoDir('# Interior', dirSel.numInterior)}
+                            {campoDir('Código Postal', dirSel.cpNombre)}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="form-group" style={{ gridColumn: 'span 2' }}>
@@ -839,6 +967,15 @@ export const FormularioEmpresa: React.FC<FormProps> = ({ estado, initialData, re
           onRestore={() => {}}
         />
       )}
+
+      <DocumentoUploadModal
+        isOpen={mostrarSubirDoc}
+        onClose={() => setMostrarSubirDoc(false)}
+        coleccionOrigen="empresas"
+        registroId={(initialData as any)?.id || ''}
+        registroNombre={formData.nombre || ''}
+        tiposDocumento={TIPOS_DOCUMENTO_EMPRESA}
+      />
     </>
   );
 };

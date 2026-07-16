@@ -5,6 +5,31 @@ import { collection, getDocs, query, limit, orderBy, doc, updateDoc } from 'fire
 import { db } from '../../../../config/firebase';
 import { guardarMttoSeguro } from '../services/mttoService';
 
+// ✅ Helpers de folio (mismo formato que el dashboard: MTTO-DDMMYY-NNN).
+//    Se usan solo para MOSTRAR el folio normalizado al editar registros viejos;
+//    el valor guardado en Firestore no se altera.
+const consecutivoDe = (m: any): number => {
+  const parte = String(m?.numeroGasto || '').split('-').pop() || '';
+  const n = parseInt(parte.replace(/\D/g, ''), 10);
+  return isNaN(n) ? 0 : n;
+};
+const partesFechaISO = (v: any): { yyyy: string; mm: string; dd: string } | null => {
+  const s = String(v || '').slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return { yyyy: m[1], mm: m[2], dd: m[3] };
+};
+const formatearFolio = (m: any): string => {
+  const consStr = String(consecutivoDe(m)).padStart(3, '0');
+  const p = partesFechaISO(m?.fecha) || partesFechaISO(m?.createdAt);
+  if (p) return `MTTO-${p.dd}${p.mm}${p.yyyy.slice(2)}-${consStr}`;
+  const original = String(m?.numeroGasto || '').trim();
+  if (!original) return '-';
+  const partes = original.split('-');
+  if (partes.length >= 3) return `MTTO-${partes[1]}-${consStr}`;
+  return original;
+};
+
 interface FormProps {
   estado: 'abierto' | 'minimizado' | 'cerrado';
   catalogos: any;
@@ -148,24 +173,30 @@ export const FormularioMtto = ({ estado, catalogos, initialData, onClose, onSave
         setFormData(prev => ({ ...prev, numeroGasto: initialData.numeroGasto }));
         return;
       }
-      const dateObj = new Date(formData.fecha || new Date());
-      const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
-      const dd = String(dateObj.getDate()).padStart(2, '0');
-      const yyyy = dateObj.getFullYear();
-      const dateString = `${mm}${dd}${yyyy}`;
+      // ✅ FORMATO DDMMYY -> Ej: 2026-06-26 = "260626" (se parsea el string para evitar el
+      // desfase de zona horaria que provoca new Date('YYYY-MM-DD') en husos negativos como MX)
+      const fechaStr = formData.fecha || new Date().toISOString().split('T')[0];
+      const [yyyyStr = '', mmStr = '', ddStr = ''] = String(fechaStr).split('-');
+      const yyyy = yyyyStr || String(new Date().getFullYear());
+      const mm = (mmStr || '01').padStart(2, '0');
+      const dd = (ddStr || '01').padStart(2, '0');
+      const yy = yyyy.slice(-2);
+      const dateString = `${dd}${mm}${yy}`;
 
       try {
-        const q = query(collection(db, 'gastos_mtto'), orderBy('createdAt', 'desc'), limit(1));
+        // Se revisan los gastos más recientes y se toma el consecutivo MÁS ALTO del mismo día
+        const q = query(collection(db, 'gastos_mtto'), orderBy('createdAt', 'desc'), limit(50));
         const snap = await getDocs(q);
-        let proximoNumero = 1;
-        const regexHoy = new RegExp(`MTTO-${dateString}-`);
-        if (!snap.empty) {
-          const ultimoRef = snap.docs[0].data().numeroGasto;
-          if (ultimoRef && regexHoy.test(ultimoRef)) {
-             const partes = ultimoRef.split('-');
-             proximoNumero = parseInt(partes[2], 10) + 1;
+        let maxConsecutivo = 0;
+        const prefijoHoy = `MTTO-${dateString}-`;
+        snap.docs.forEach((docu: any) => {
+          const ref = docu.data().numeroGasto;
+          if (ref && String(ref).startsWith(prefijoHoy)) {
+            const seq = parseInt(String(ref).split('-')[2], 10);
+            if (!isNaN(seq) && seq > maxConsecutivo) maxConsecutivo = seq;
           }
-        }
+        });
+        const proximoNumero = maxConsecutivo + 1;
         const paddedCorrelativo = String(proximoNumero).padStart(3, '0');
         setFormData(prev => ({ ...prev, numeroGasto: `MTTO-${dateString}-${paddedCorrelativo}` }));
       } catch (error) {
@@ -343,6 +374,10 @@ export const FormularioMtto = ({ estado, catalogos, initialData, onClose, onSave
 
   const operacionesFiltro = catalogos?.operaciones?.filter((o:any) => (o.ref || '').toLowerCase().includes(searchOperacion.toLowerCase())) || [];
 
+  // ✅ Folio que se muestra: al editar se normaliza a MTTO-DDMMYY-NNN (solo visual,
+  //    el valor guardado en Firestore se conserva intacto). Al crear, muestra el folio en vivo.
+  const folioDisplay = initialData ? formatearFolio(formData) : formData.numeroGasto;
+
   if (estado === 'cerrado') return null;
 
   const tabs = [
@@ -360,7 +395,7 @@ export const FormularioMtto = ({ estado, catalogos, initialData, onClose, onSave
         {/* ENCABEZADO */}
         <div className="form-header" style={{ padding: '16px 24px', borderBottom: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <h2 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {initialData ? `Editar Gasto ${initialData.numeroGasto}` : 'Nuevo Gasto (MTTO)'}
+            {initialData ? `Editar Gasto ${folioDisplay}` : 'Nuevo Gasto (MTTO)'}
           </h2>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
             <button type="button" onClick={() => setShowConfig(true)} title="Configuración de Formulario" style={{ background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer', padding: '6px 12px', borderRadius: '6px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s ease' }} onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#30363d'} onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#21262d'}>
@@ -405,7 +440,7 @@ export const FormularioMtto = ({ estado, catalogos, initialData, onClose, onSave
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', animation: 'fadeIn 0.2s ease' }}>
               <div className="form-group">
                 <label style={{ display: 'block', marginBottom: '8px', color: '#8b949e', fontSize: '0.85rem' }}># de Gasto</label>
-                <input type="text" readOnly value={formData.numeroGasto} style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#8b949e' }} />
+                <input type="text" readOnly value={folioDisplay} style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#8b949e' }} />
               </div>
               <div className="form-group">
                 <label style={{ display: 'block', marginBottom: '8px', color: '#c9d1d9', fontSize: '0.85rem' }}># de Invoice {configuracion.requeridos.invoice && <RequeridoMark />}</label>
@@ -459,9 +494,18 @@ export const FormularioMtto = ({ estado, catalogos, initialData, onClose, onSave
                 )}
               </div>
 
-              <div className="form-group">
+              {/* ✅ DESCRIPCIÓN GENERAL: AHORA ADMITE SALTOS DE LÍNEA (TEXTAREA) */}
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                 <label style={{ display: 'block', marginBottom: '8px', color: '#c9d1d9', fontSize: '0.85rem' }}>Descripción General {configuracion.requeridos.descripcion && <RequeridoMark />}</label>
-                <input type="text" name="descripcion" required={configuracion.requeridos.descripcion} value={formData.descripcion} onChange={handleChange} style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9' }} />
+                <textarea
+                  name="descripcion"
+                  required={configuracion.requeridos.descripcion}
+                  value={formData.descripcion}
+                  onChange={handleChange}
+                  rows={4}
+                  placeholder="Escribe la descripción. Presiona Enter para agregar saltos de línea..."
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', minHeight: '90px', resize: 'vertical', fontFamily: 'inherit', fontSize: '0.9rem', lineHeight: '1.5', boxSizing: 'border-box' }}
+                />
               </div>
             </div>
           )}
@@ -475,7 +519,9 @@ export const FormularioMtto = ({ estado, catalogos, initialData, onClose, onSave
                 <input type="text" required={configuracion.requeridos.proveedor && !formData.proveedorId} value={searchProveedor} onChange={(e) => { setSearchProveedor(e.target.value); setShowProveedor(true); }} onFocus={() => setShowProveedor(true)} placeholder="Buscar proveedor..." style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9' }} />
                 {showProveedor && searchProveedor && (
                   <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#161b22', border: '1px solid #30363d', zIndex: 10, maxHeight: '150px', overflowY: 'auto' }}>
-                    {proveedoresFiltro.map((p:any) => (
+                    {proveedoresFiltro.map((p:any) => {
+                      const dirProveedor = p.direccion || p.domicilio || p.direccionFiscal || p.direccion_fiscal || p.calle || p.ubicacion || '';
+                      return (
                       <div 
                         key={p.id} 
                         style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid #21262d' }} 
@@ -492,9 +538,11 @@ export const FormularioMtto = ({ estado, catalogos, initialData, onClose, onSave
                           setShowProveedor(false); 
                         }}
                       >
-                        {p.nombre}
+                        <div style={{ fontWeight: 'bold', color: '#c9d1d9' }}>{p.nombre}</div>
+                        {dirProveedor && <div style={{ fontSize: '0.8rem', color: '#8b949e', marginTop: '2px', whiteSpace: 'normal' }}>{dirProveedor}</div>}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

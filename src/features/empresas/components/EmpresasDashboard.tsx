@@ -2,7 +2,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, onSnapshot, getDocs, query, where, limit, orderBy, writeBatch, doc } from 'firebase/firestore';
 import { db, eliminarRegistro, actualizarRegistro } from '../../../config/firebase';
-import { FormularioEmpresa } from './FormularioEmpresa';
+import { FormularioEmpresa, TIPOS_DOCUMENTO_EMPRESA } from './FormularioEmpresa';
+import { DocumentoUploadModal } from '../../documentos/DocumentoUploadModal';
+import { DocumentosLista } from '../../documentos/DocumentosLista';
 import { registrarLog } from '../../../utils/logger';
 import * as XLSX from 'xlsx';
 
@@ -51,9 +53,13 @@ const EmpresasDashboard = () => {
   const [empresaEditando, setEmpresaEditando] = useState<any | null>(null);
   
   const [empresaViendo, setEmpresaViendo] = useState<any | null>(null);
-  const [activeTabDetalle, setActiveTabDetalle] = useState<'general' | 'fiscal' | 'contacto' | 'uso'>('general');
+  // ✅ Documentos COMPLETOS del catálogo de direcciones (país, estado, colonia,
+  //   calle, C.P., números) para el desglose en el detalle de la empresa.
+  const [direccionesDocs, setDireccionesDocs] = useState<Record<string, any>>({});
+  const [activeTabDetalle, setActiveTabDetalle] = useState<'general' | 'fiscal' | 'contacto' | 'uso' | 'documentos'>('general');
   const [operacionesUso, setOperacionesUso] = useState<any[]>([]);
   const [cargandoUso, setCargandoUso] = useState(false);
+  const [mostrarSubirDoc, setMostrarSubirDoc] = useState(false);
 
   const [empresas, setEmpresas] = useState<any[]>([]);
   const [lastUsedMap, setLastUsedMap] = useState<Record<string, string>>({}); 
@@ -144,6 +150,13 @@ const EmpresasDashboard = () => {
           });
           return dict;
         };
+
+        // ✅ Docs completos de direcciones para el desglose del detalle.
+        getDocs(collection(db, 'direcciones')).then(snapDir => {
+          const m: Record<string, any> = {};
+          snapDir.docs.forEach(dd => { m[dd.id] = { id: dd.id, ...(dd.data() as any) }; });
+          setDireccionesDocs(m);
+        }).catch(() => {});
 
         const [reg, mon, fac, dir, tEmpresa, tServicio] = await Promise.all([
           getDict('catalogo_regimen_fiscal', '', (d: any) => `${d.clave} - ${d.descripcion}`),
@@ -839,7 +852,17 @@ const EmpresasDashboard = () => {
                   </span>
                 )}
               </div>
-              <button onClick={() => setEmpresaViendo(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <button
+                  onClick={() => setMostrarSubirDoc(true)}
+                  title="Subir documentos de la empresa"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '6px', border: 'none', backgroundColor: '#D84315', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: '0.82rem' }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  Subir Documentos
+                </button>
+                <button onClick={() => setEmpresaViendo(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+              </div>
             </div>
             
             <div style={{ display: 'flex', borderBottom: '1px solid #30363d', backgroundColor: '#161b22', padding: '0 24px', overflowX: 'auto' }}>
@@ -847,6 +870,7 @@ const EmpresasDashboard = () => {
               <button type="button" onClick={() => setActiveTabDetalle('fiscal')} style={tabStyle(activeTabDetalle === 'fiscal')}>Comercial / Fiscal</button>
               <button type="button" onClick={() => setActiveTabDetalle('contacto')} style={tabStyle(activeTabDetalle === 'contacto')}>Contacto</button>
               <button type="button" onClick={() => setActiveTabDetalle('uso')} style={tabStyle(activeTabDetalle === 'uso')}>Historial de Uso</button>
+              <button type="button" onClick={() => setActiveTabDetalle('documentos')} style={tabStyle(activeTabDetalle === 'documentos')}>Documentos</button>
             </div>
 
             <div className="detail-content" style={{ padding: '24px', minHeight: '300px', maxHeight: '60vh', overflowY: 'auto' }}>
@@ -895,6 +919,33 @@ const EmpresasDashboard = () => {
               {activeTabDetalle === 'contacto' && (
                 <div className="detail-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', animation: 'fadeIn 0.3s ease' }}>
                   <div className="detail-item" style={{ gridColumn: 'span 2' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem', display:'block' }}>Dirección de Facturación</span><span className="detail-value" style={{ color: '#c9d1d9' }}>{mostrarDato(empresaViendo._direccionLabel)}</span></div>
+                  {/* ✅ Desglose de la dirección (campos del catálogo de direcciones). */}
+                  {(() => {
+                    // ✅ Por id y, si el id quedó desactualizado, por coincidencia
+                    //   del texto de la dirección completa.
+                    const dirSel = direccionesDocs[String(empresaViendo.direccionId || '')]
+                      || Object.values(direccionesDocs).find((d: any) => String(d.direccionCompleta || '').trim().toLowerCase() === String(empresaViendo._direccionLabel || '').trim().toLowerCase() && String(d.direccionCompleta || '').trim() !== '');
+                    if (!dirSel) return null;
+                    const v = (x: any) => String(x ?? '').trim() || '—';
+                    const itemDir = (etiqueta: string, valor: any) => (
+                      <div className="detail-item">
+                        <span className="detail-label" style={{ color: '#8b949e', fontSize: '0.8rem', display: 'block' }}>{etiqueta}</span>
+                        <span className="detail-value" style={{ color: '#c9d1d9' }}>{v(valor)}</span>
+                      </div>
+                    );
+                    return (
+                      <div style={{ gridColumn: 'span 2', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '8px', padding: '12px 16px', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+                        {itemDir('País', dirSel.paisNombre)}
+                        {itemDir('Estado', dirSel.estadoNombre)}
+                        {itemDir('Municipio', dirSel.municipioNombre)}
+                        {itemDir('Colonia', dirSel.coloniaNombre)}
+                        {itemDir('Calle', dirSel.calleNombre)}
+                        {itemDir('# Exterior', dirSel.numExterior)}
+                        {itemDir('# Interior', dirSel.numInterior)}
+                        {itemDir('Código Postal', dirSel.cpNombre)}
+                      </div>
+                    );
+                  })()}
                   <div className="detail-item" style={{ gridColumn: 'span 2' }}><span className="detail-label" style={{ color: '#8b949e', fontSize: '0.85rem', display:'block' }}>Link de Maps</span>
                     {empresaViendo.maps ? <a href={empresaViendo.maps} target="_blank" rel="noopener noreferrer" style={{ color: '#58a6ff', textDecoration: 'none' }}>Ver en Google Maps ↗</a> : <span style={{ color: '#c9d1d9' }}>-</span>}
                   </div>
@@ -948,6 +999,10 @@ const EmpresasDashboard = () => {
                 </div>
               )}
 
+              {activeTabDetalle === 'documentos' && (
+                <DocumentosLista coleccionOrigen="empresas" registroId={empresaViendo.id ?? ''} />
+              )}
+
             </div>
             
             <div style={{ padding: '16px 24px', textAlign: 'right', borderTop: '1px solid #30363d' }}>
@@ -995,6 +1050,18 @@ const EmpresasDashboard = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL SUBIR DOCUMENTOS (ligado a la empresa) */}
+      {empresaViendo && (
+        <DocumentoUploadModal
+          isOpen={mostrarSubirDoc}
+          onClose={() => setMostrarSubirDoc(false)}
+          coleccionOrigen="empresas"
+          registroId={empresaViendo.id ?? ''}
+          registroNombre={empresaViendo.nombre || ''}
+          tiposDocumento={TIPOS_DOCUMENTO_EMPRESA}
+        />
       )}
     </div>
   );

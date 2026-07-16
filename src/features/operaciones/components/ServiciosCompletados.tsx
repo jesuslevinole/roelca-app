@@ -1,11 +1,28 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, getDocs, onSnapshot, orderBy, limit, where, startAfter, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { collection, query, getDocs, getCountFromServer, onSnapshot, orderBy, limit, where, startAfter, documentId, deleteDoc, doc, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../../../config/firebase'; 
 import { generarSolicitudRetiroPDF, generarInstruccionesServicioPDF, generarCheckListPDF, generarPruebaEntregaPDF, generarCartaInstruccionesPDF } from '../../../utils/pdfGenerator'; 
 import * as XLSX from 'xlsx';
+// ✅ NUEVO: reglas de status (botones dinámicos + cascada) — igual que Operaciones Activas
+import { obtenerBotonesHorarioDinamicos, resolverCascadaStatus } from '../config/statusRules';
+// ✅ NUEVO: visor y subida de documentos ligados a la operación
+import { DocumentosLista } from '../../documentos/DocumentosLista';
+import { DocumentoUploadModal } from '../../documentos/DocumentoUploadModal';
+import { FormularioOperacion, TIPOS_DOCUMENTO_OPERACION } from './FormularioOperacion';
 
 const ID_USD = '7dca62b3';
 const ID_MXN = 'f95d8894';
+
+
+// ✅ Color por TIPO DE OPERACIÓN: Transfer → naranja, Logística → azul,
+//   Fletes → verde. Cualquier otro tipo conserva el color neutro.
+const colorTipoOperacion = (nombre: any): string => {
+  const n = String(nombre || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (n.includes('transfer')) return '#fb923c';
+  if (n.includes('logist')) return '#58a6ff';
+  if (n.includes('flete')) return '#3fb950';
+  return '#c9d1d9';
+};
 
 const COLUMNAS_BASE = [
   { id: 'ref', label: '# Referencia', visible: true },
@@ -13,6 +30,11 @@ const COLUMNAS_BASE = [
   { id: 'fechaCita', label: 'Fecha Cita', visible: false },
   { id: 'tipoOperacion', label: 'Tipo de Operación', visible: true },
   { id: 'status', label: 'Status', visible: true },
+  // ✅ NUEVO: conexiones con los demás módulos (vienen desnormalizadas en la operación)
+  { id: 'refDiesel', label: 'Ref. Diesel', visible: true },
+  { id: 'refNomina', label: 'Ref. Nómina', visible: true },
+  { id: 'invoiceCliente', label: 'Invoice Cliente', visible: true },
+  { id: 'invoiceProveedor', label: 'Invoice Proveedor', visible: true },
   { id: 'trafico', label: 'Tráfico', visible: false },
   { id: 'cliente', label: 'Cliente (Paga)', visible: true },
   { id: 'convenioTarifa', label: 'Convenio Cliente (Tarifa)', visible: true },
@@ -67,15 +89,115 @@ const COLUMNAS_BASE = [
   { id: 'observacionesCobrar', label: 'Obs. Cobro', visible: false }
 ];
 
-// ✅ Status considerados "Completado" — sólo los 2 IDs hex (estricto)
-const STATUS_COMPLETADOS_VALORES = ['f557b751', 'c2d57403'];
+// ✅ Status que se muestran en esta vista — SOLO estos 2 IDs hex.
+const STATUS_COMPLETADOS_VALORES = ['c2d57403', 'f557b751'];
 // ID del tipo de empresa "Cliente (Paga)" para el buscador
 const ID_TIPO_CLIENTE_PAGA = '7eec9cbb';
 // ✅ NUEVO: tamaño de página para descarga incremental
 const TAMANIO_PAGINA = 100;
+// ✅ NUEVO: tamaño de bloque al descargar TODOS los completados por status.
+const TAMANIO_BLOQUE_STATUS = 500;
 // ✅ NUEVO: TTL del caché en sessionStorage (5 minutos)
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_PREFIX = 'roelca_completadas_';
+// ✅ NUEVO: clave ÚNICA de caché. Ahora descargamos TODOS los completados (ambos
+//   status) una sola vez y filtramos fecha/cliente en memoria, así que la caché
+//   NO depende del rango de fechas ni del cliente.
+const CACHE_KEY_TODOS = CACHE_PREFIX + 'all_v3';
+
+// ✅ NUEVO: clave para PERSISTIR la configuración de columnas (orden + visibles)
+//   en localStorage, para que NO se pierda al recargar la página.
+const COLUMNAS_STORAGE_KEY = 'roelca_completadas_columnas_v1';
+
+// ✅ NUEVO: carga la configuración guardada y la reconcilia con COLUMNAS_BASE:
+//   · respeta el ORDEN y la VISIBILIDAD guardados,
+//   · si en el código se agregaron columnas nuevas (que no estaban guardadas),
+//     se añaden al final con su valor por defecto,
+//   · si una columna guardada ya no existe en el código, se descarta.
+//   Así nunca se rompe aunque el catálogo de columnas cambie en una actualización.
+const cargarColumnasGuardadas = (): typeof COLUMNAS_BASE => {
+  const base = COLUMNAS_BASE.map(c => ({ ...c }));
+  try {
+    const raw = localStorage.getItem(COLUMNAS_STORAGE_KEY);
+    if (!raw) return base;
+    const guardadas = JSON.parse(raw);
+    if (!Array.isArray(guardadas)) return base;
+
+    const basePorId = new Map(base.map(c => [c.id, c]));
+    const resultado: typeof COLUMNAS_BASE = [];
+    const yaAgregados = new Set<string>();
+
+    // 1) Primero, en el ORDEN guardado (solo las que siguen existiendo).
+    guardadas.forEach((g: any) => {
+      const def = basePorId.get(g?.id);
+      if (def && !yaAgregados.has(def.id)) {
+        resultado.push({ ...def, visible: typeof g.visible === 'boolean' ? g.visible : def.visible });
+        yaAgregados.add(def.id);
+      }
+    });
+
+    // 2) Columnas nuevas del código que no estaban guardadas: al final.
+    base.forEach(c => {
+      if (!yaAgregados.has(c.id)) {
+        resultado.push({ ...c });
+        yaAgregados.add(c.id);
+      }
+    });
+
+    return resultado;
+  } catch {
+    return base;
+  }
+};
+
+// ✅ NUEVO: normaliza CUALQUIER formato de fecha de servicio a "YYYY-MM-DD".
+//   Los registros migrados/viejos pueden guardar la fecha como Timestamp de
+//   Firestore, objeto Date, número epoch o texto "DD/MM/YYYY" / "MM/DD/YYYY".
+//   Sin esta normalización, el filtro por rango fallaba y no mostraba nada.
+const normalizarFechaServicioISO = (valor: any): string => {
+  if (valor === null || valor === undefined || valor === '') return '';
+
+  // Timestamp de Firestore u objeto con toDate()/seconds.
+  if (typeof valor === 'object') {
+    try {
+      if (typeof valor.toDate === 'function') return valor.toDate().toISOString().split('T')[0];
+      if (typeof valor.seconds === 'number') return new Date(valor.seconds * 1000).toISOString().split('T')[0];
+      if (valor instanceof Date && !isNaN(valor.getTime())) return valor.toISOString().split('T')[0];
+    } catch { /* sigue abajo */ }
+  }
+
+  const s = String(valor).trim();
+  if (!s) return '';
+
+  // Ya viene en ISO ("2026-06-25" o "2026-06-25T10:30:00").
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  // Formatos con barras o guiones: DD/MM/YYYY (latino) o MM/DD/YYYY.
+  const dmy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+  if (dmy) {
+    let a = parseInt(dmy[1], 10);
+    let b = parseInt(dmy[2], 10);
+    const y = dmy[3];
+    let dd = a, mm = b;            // Por defecto se asume DD/MM (formato latino).
+    if (a <= 12 && b > 12) { mm = a; dd = b; }   // Si el 2º > 12 era MM/DD.
+    if (mm < 1 || mm > 12) return s;             // Formato no reconocible.
+    return `${y}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  }
+
+  // Número epoch (ms o s).
+  if (/^\d+$/.test(s)) {
+    const n = parseInt(s, 10);
+    const d = new Date(n > 1e12 ? n : n * 1000);
+    if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+  }
+
+  // Último intento: que lo resuelva el motor de fechas del navegador.
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+
+  return s;
+};
 
 // ✅ NUEVO: prop opcional para conectar la edición con el formulario existente del padre.
 interface ServiciosCompletadosProps {
@@ -87,16 +209,31 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
   const [cargandoOperaciones, setCargandoOperaciones] = useState(false);
   const [operacionViendo, setOperacionViendo] = useState<any | null>(null);
 
-  const [modalHorarios, setModalHorarios] = useState<'cerrado' | 'historial'>('cerrado');
+  const [modalHorarios, setModalHorarios] = useState<'cerrado' | 'registrar' | 'historial'>('cerrado');
   const [historialList, setHistorialList] = useState<any[]>([]);
   const [cargandoHorarios, setCargandoHorarios] = useState(false);
+
+  // ✅ NUEVO: edición de horario/status (igual que Operaciones Activas)
+  const [nuevoStatus, setNuevoStatus] = useState('');
+  const [nuevaFechaHora, setNuevaFechaHora] = useState('');
+  const [botonesDisponibles, setBotonesDisponibles] = useState<string[]>([]);
+  const [guardandoStatusRapido, setGuardandoStatusRapido] = useState<string | null>(null);
+  const [ultimoStatusGuardado, setUltimoStatusGuardado] = useState<string | null>(null);
+
+  // ✅ NUEVO: visor/subida de documentos de la operación
+  const [mostrarDocumentos, setMostrarDocumentos] = useState(false);
+  const [mostrarSubirDocOp, setMostrarSubirDocOp] = useState(false);
   
   const [catalogosGlobales, setCatalogosGlobales] = useState<any>({});
   const [busqueda, setBusqueda] = useState('');
 
-  const [filterFecha, setFilterFecha] = useState('');
+  // ✅ MODIFICADO: el filtro PRINCIPAL ahora es el rango de fechas (inicio/fin).
+  const [filterFechaInicio, setFilterFechaInicio] = useState('');
+  const [filterFechaFin, setFilterFechaFin] = useState('');
   const [filterRemolque, setFilterRemolque] = useState('');
   const [filterCliente, setFilterCliente] = useState('');
+  // ✅ NUEVO: filtro por tipo de operación (Transfer / Logística / Fletes).
+  const [filterTipoOperacion, setFilterTipoOperacion] = useState('');
 
   const [paginaActual, setPaginaActual] = useState(1);
   const [pestañaDetalleActiva, setPestañaDetalleActiva] = useState<string>('general');
@@ -105,21 +242,31 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
 
   const [modalColumnas, setModalColumnas] = useState(false);
-  const [columnasTabla, setColumnasTabla] = useState(COLUMNAS_BASE.map(c => ({ ...c })));
+  const [columnasTabla, setColumnasTabla] = useState(cargarColumnasGuardadas);
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
+  // ✅ NUEVO: buscador dentro del modal "Configurar Columnas".
+  const [busquedaColumnas, setBusquedaColumnas] = useState('');
 
-  // ✅ NUEVO: paginación incremental (chunks de Firestore con startAfter)
-  const [lastDocSnap, setLastDocSnap] = useState<any | null>(null);
+  // ✅ NUEVO: paginación incremental (ya no se usa: se descargan todos por status).
   const [hayMasOperaciones, setHayMasOperaciones] = useState(false);
-  const [cargandoMas, setCargandoMas] = useState(false);
+  const [cargandoMas] = useState(false);
 
   // ✅ NUEVO: buscador autocompletado de cliente
   const [textoBuscarCliente, setTextoBuscarCliente] = useState('');
   const [mostrarSugerenciasCliente, setMostrarSugerenciasCliente] = useState(false);
 
-  // ✅ NUEVO: búsqueda remota por referencia cuando NO hay cliente seleccionado
-  const [resultadosRefRemota, setResultadosRefRemota] = useState<any[]>([]);
-  const [buscandoRefRemota, setBuscandoRefRemota] = useState(false);
+  // ✅ NUEVO: buscador autocompletado de remolque (reemplaza el desplegable)
+  const [textoBuscarRemolque, setTextoBuscarRemolque] = useState('');
+  const [mostrarSugerenciasRemolque, setMostrarSugerenciasRemolque] = useState(false);
+  // ✅ NUEVO: filtro por OPERADOR (tipo búsqueda, igual que cliente/remolque).
+  const [filterOperador, setFilterOperador] = useState(''); // id del empleado
+  const [textoBuscarOperador, setTextoBuscarOperador] = useState('');
+  const [mostrarSugerenciasOperador, setMostrarSugerenciasOperador] = useState(false);
+  // Normalizador de texto (sin acentos/mayúsculas) y etiqueta del empleado.
+  const normalizarTxtOperador = (s: any): string =>
+    String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const etiquetaOperador = (emp: any) =>
+    `${emp?.firstName || ''} ${emp?.lastNamePaternal || ''} ${emp?.lastNameMaternal || emp?.lastNameMaterno || ''}`.replace(/\s+/g, ' ').trim();
 
   // ✅ NUEVO: editor integrado (fallback cuando NO se pasa la prop onEditar)
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
@@ -127,36 +274,95 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
   const [pestañaEdicionActiva, setPestañaEdicionActiva] = useState<string>('general');
 
-  // ✅ MODIFICADO: query con FILTRO DE STATUS EN FIRESTORE + CACHÉ + PAGINACIÓN.
+  // ✅ NUEVO: estado del FormularioOperacion COMPLETO (mismo que Operaciones Activas).
+  //   Al editar se abre este formulario en lugar del editor rápido reducido.
+  const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
+
+  // ✅ NUEVO: conteos EXACTOS desde el servidor (getCountFromServer).
+  const [conteosServidor, setConteosServidor] = useState<{
+    completados: number | null;   // completados reales (sin falsos)
+    falsos: number | null;
+    total: number | null;         // completados + falsos
+    cargando: boolean;
+    error: string | null;
+    alcance: 'rango' | 'global' | null;
+  }>({ completados: null, falsos: null, total: null, cargando: false, error: null, alcance: null });
+
+  // ✅ NUEVO: resolución bidireccional ID ↔ Nombre de catalogo_status_servicio.
+  const mapaStatus = useMemo(() => {
+    const lista = (catalogosGlobales.statusServicio || []) as any[];
+    const porId: Record<string, { id: string; nombre: string }> = {};
+    const porNombre: Record<string, { id: string; nombre: string }> = {};
+    lista.forEach((s: any) => {
+      const entry = { id: String(s.id || ''), nombre: String(s.nombre || s.id || '') };
+      if (entry.id) porId[entry.id] = entry;
+      if (entry.nombre) porNombre[entry.nombre.trim().toLowerCase()] = entry;
+    });
+    return { porId, porNombre };
+  }, [catalogosGlobales.statusServicio]);
+
+  const resolverStatus = (valor: string | null | undefined): { id: string; nombre: string } => {
+    if (!valor) return { id: '', nombre: '' };
+    const v = String(valor).trim();
+    if (mapaStatus.porId[v]) return mapaStatus.porId[v];
+    const porNom = mapaStatus.porNombre[v.toLowerCase()];
+    if (porNom) return porNom;
+    return { id: v, nombre: v };
+  };
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // ✅ NUEVO: helpers de status y de CONEXIONES con los demás módulos.
+  // ───────────────────────────────────────────────────────────────────────────
+  const nombreStatusOp = (op: any): string => {
+    const r = resolverStatus(op?.status);
+    return String(r.nombre || op?.statusNombre || op?.status || '');
+  };
+  // Una operación completada es "Falso" si su status contiene la palabra "falso".
+  const esFalso = (op: any): boolean => nombreStatusOp(op).toLowerCase().includes('falso');
+
+  const tieneDiesel = (op: any): boolean => !!(op?.referenciaDieselConsecutivo || op?.referenciaDieselId);
+  const tieneNomina = (op: any): boolean => !!(op?.referenciaNominaConsecutivo || op?.referenciaNominaId);
+  const facturadoCliente = (op: any): boolean => !!(op?.facturaClienteInvoice || op?.facturaClienteId || op?.facturado);
+  const facturadoProveedor = (op: any): boolean => !!(op?.facturaProveedorFolio || op?.facturaProveedorId || op?.facturadoProveedor);
+
+  // Píldora reutilizable para mostrar una conexión (ref / invoice) en la tabla.
+  const chipConexion = (texto: string, color: string) => (
+    <span style={{ padding: '3px 10px', borderRadius: '12px', fontSize: '0.78rem', fontWeight: 'bold', color, border: `1px solid ${color}`, backgroundColor: `${color}1a`, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{texto}</span>
+  );
+
+  // ✅ MODIFICADO: clave de caché ÚNICA (todos los completados). Filtramos en memoria.
+  const claveCacheActual = () => CACHE_KEY_TODOS;
+
+  // ✅ REESCRITO: descarga TODOS los servicios completados (status c2d57403 y
+  //   f557b751) paginando por status. NO depende de índices compuestos ni del
+  //   formato de fechaServicio. La fecha y el cliente se filtran EN MEMORIA
+  //   (ver operacionesFiltradas) usando normalizarFechaServicioISO.
   //
-  // Estrategia de carga (en orden):
-  //   0) Si existe caché válido en sessionStorage (< 5 min) → usarlo (instantáneo).
-  //   1) Query óptima: where(clientePaga) + where(status, in, [...]) + orderBy + limit(100).
-  //      Trae SOLO las completadas (no descarga las demás). Requiere índice compuesto.
-  //   2) Fallback 1: misma query pero sin orderBy (índice más simple, ordena en memoria).
-  //   3) Fallback 2 (legacy): solo where(clientePaga) + limit(500), filtra todo en memoria.
-  //
-  // El conjunto descargado se cachea en sessionStorage por clienteId.
-  const descargarOperaciones = async (clienteId: string, opciones: { ignorarCache?: boolean } = {}) => {
-    // Reset paginación al cargar de cero
-    setLastDocSnap(null);
+  //   Por qué: los registros migrados guardan fechaServicio en formatos que la
+  //   consulta por rango de Firestore no reconoce (devolvía 0). Al traer todos
+  //   los completados y filtrar la fecha en memoria, siempre aparecen.
+  const descargarOperaciones = async (
+    fechaInicio: string,
+    fechaFin: string,
+    _clienteId: string,
+    opciones: { ignorarCache?: boolean } = {}
+  ) => {
     setHayMasOperaciones(false);
 
-    if (!clienteId) {
+    // Se mantiene el requisito de elegir rango para mostrar la tabla.
+    if (!fechaInicio || !fechaFin) {
       setOperacionesGlobales([]);
       return;
     }
 
-    // [0] Intentar caché en sessionStorage
+    // [0] Caché (mismo dataset completo para cualquier rango/cliente).
     if (!opciones.ignorarCache) {
       try {
-        const cacheStr = sessionStorage.getItem(CACHE_PREFIX + clienteId);
+        const cacheStr = sessionStorage.getItem(CACHE_KEY_TODOS);
         if (cacheStr) {
           const cache = JSON.parse(cacheStr);
           if (cache && Date.now() - cache.ts < CACHE_TTL_MS && Array.isArray(cache.ops)) {
             setOperacionesGlobales(cache.ops);
-            // Si el caché está al máximo del último chunk, asumimos que puede haber más;
-            // pero no tenemos cursor, así que el usuario verá un aviso de refrescar para paginar.
             setHayMasOperaciones(false);
             return;
           }
@@ -166,138 +372,87 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
 
     setCargandoOperaciones(true);
 
-    const filtrarLegacy = (ops: any[]) => ops.filter((op: any) => {
-      const statusId = String(op.status || '').trim();
-      return STATUS_COMPLETADOS_VALORES.includes(statusId);
-    });
-
-    let opsFinal: any[] = [];
-    let lastSnapFinal: any = null;
-    let hayMasFinal = false;
-    let exito = false;
+    const todas: any[] = [];
+    const vistos = new Set<string>();
 
     try {
-      // [1] Query óptima: where + where + orderBy + limit
-      const q1 = query(
-        collection(db, 'operaciones'),
-        where('clientePaga', '==', clienteId),
-        where('status', 'in', STATUS_COMPLETADOS_VALORES),
-        orderBy('fechaServicio', 'desc'),
-        limit(TAMANIO_PAGINA)
-      );
-      const snap = await getDocs(q1);
-      opsFinal = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-      lastSnapFinal = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
-      hayMasFinal = snap.docs.length === TAMANIO_PAGINA;
-      exito = true;
-    } catch (e1: any) {
-      const msg1 = String(e1?.message || e1?.code || e1 || '');
-      const esIndice1 = msg1.toLowerCase().includes('index') || msg1.toLowerCase().includes('failed-precondition');
-      if (esIndice1) {
-        console.warn('[ServiciosCompletados] Query óptima falló (falta índice). Crea el índice con:', msg1);
-        try {
-          // [2] Fallback 1: where + where (sin orderBy)
-          const q2 = query(
-            collection(db, 'operaciones'),
-            where('clientePaga', '==', clienteId),
-            where('status', 'in', STATUS_COMPLETADOS_VALORES),
-            limit(TAMANIO_PAGINA * 3)
-          );
-          const snap2 = await getDocs(q2);
-          opsFinal = snap2.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-          opsFinal.sort((a: any, b: any) =>
-            String(b.fechaServicio || '').localeCompare(String(a.fechaServicio || ''))
-          );
-          // Sin cursor: no se puede paginar correctamente
-          lastSnapFinal = null;
-          hayMasFinal = false;
-          exito = true;
-          console.warn('[ServiciosCompletados] Usando Fallback 1 (sin orderBy). Crea el índice para mejor rendimiento.');
-        } catch (e2: any) {
-          const msg2 = String(e2?.message || e2 || '');
-          console.warn('[ServiciosCompletados] Fallback 1 falló, probando legacy:', msg2);
-          try {
-            // [3] Fallback 2 (legacy): solo where cliente + limit alto, filtra en memoria
-            const q3 = query(
-              collection(db, 'operaciones'),
-              where('clientePaga', '==', clienteId),
-              limit(500)
-            );
-            const snap3 = await getDocs(q3);
-            const todas = snap3.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-            opsFinal = filtrarLegacy(todas);
-            opsFinal.sort((a: any, b: any) =>
-              String(b.fechaServicio || '').localeCompare(String(a.fechaServicio || ''))
-            );
-            lastSnapFinal = null;
-            hayMasFinal = false;
-            exito = true;
-            console.warn('[ServiciosCompletados] Usando Fallback 2 (legacy compatible).');
-          } catch (e3: any) {
-            console.error('[ServiciosCompletados] Todos los intentos fallaron:', e3);
-            alert(`No se pudieron cargar las operaciones.\n\nDetalle: ${e3?.message || e3}`);
-          }
-        }
-      } else {
-        console.error('[ServiciosCompletados] Error inesperado:', e1);
-        alert(`Hubo un problema al cargar las operaciones.\n\nDetalle: ${msg1}`);
-      }
-    }
+      // Por cada status permitido, paginamos por documentId hasta traerlos todos.
+      for (const statusVal of STATUS_COMPLETADOS_VALORES) {
+        let cursor: any = null;
+        let intentoSimple = false;
 
-    if (exito) {
-      setOperacionesGlobales(opsFinal);
-      setLastDocSnap(lastSnapFinal);
-      setHayMasOperaciones(hayMasFinal);
-      // Guardar en caché (los snapshots NO son serializables, sólo los datos)
+        for (let pagina = 0; pagina < 60; pagina++) {
+          let snap;
+          try {
+            const partes: any[] = [where('status', '==', statusVal), orderBy(documentId()), limit(TAMANIO_BLOQUE_STATUS)];
+            if (cursor) partes.splice(2, 0, startAfter(cursor));
+            snap = await getDocs(query(collection(db, 'operaciones'), ...partes));
+          } catch (errPag) {
+            // Si orderBy(documentId) fallara por índice, traemos un bloque grande
+            // sin paginar (último recurso) y salimos del bucle de este status.
+            console.warn('[ServiciosCompletados] Paginación por documentId no disponible; uso bloque simple.', errPag);
+            intentoSimple = true;
+            break;
+          }
+
+          snap.docs.forEach((d: any) => {
+            const id = d.id;
+            if (!vistos.has(id)) { vistos.add(id); const data = d.data(); todas.push({ id, ...data, _fechaISO: normalizarFechaServicioISO(data.fechaServicio) }); }
+          });
+
+          if (snap.docs.length < TAMANIO_BLOQUE_STATUS) break;     // ya no hay más
+          cursor = snap.docs[snap.docs.length - 1];
+        }
+
+        if (intentoSimple) {
+          const snapSimple = await getDocs(query(
+            collection(db, 'operaciones'),
+            where('status', '==', statusVal),
+            limit(8000)
+          ));
+          snapSimple.docs.forEach((d: any) => {
+            const id = d.id;
+            if (!vistos.has(id)) { vistos.add(id); const data = d.data(); todas.push({ id, ...data, _fechaISO: normalizarFechaServicioISO(data.fechaServicio) }); }
+          });
+        }
+      }
+
+      // Seguridad: dejar ESTRICTAMENTE solo los 2 status permitidos.
+      const soloCompletados = todas.filter((op: any) =>
+        STATUS_COMPLETADOS_VALORES.includes(String(op.status || '').trim())
+      );
+
+      // Orden por fecha (normalizada) descendente, desempatando por consecutivo.
+      soloCompletados.sort((a: any, b: any) => {
+        const fa = a._fechaISO || '';
+        const fb = b._fechaISO || '';
+        if (fa !== fb) return fb.localeCompare(fa);
+        return obtenerConsecutivoRef(b) - obtenerConsecutivoRef(a);
+      });
+
+      setOperacionesGlobales(soloCompletados);
+      setHayMasOperaciones(false);
+
       try {
-        sessionStorage.setItem(
-          CACHE_PREFIX + clienteId,
-          JSON.stringify({ ts: Date.now(), ops: opsFinal })
-        );
+        sessionStorage.setItem(CACHE_KEY_TODOS, JSON.stringify({ ts: Date.now(), ops: soloCompletados }));
       } catch { /* cuota agotada: ignorar */ }
+
+      console.log(`[ServiciosCompletados v3] descargados ${soloCompletados.length} completados (status ${STATUS_COMPLETADOS_VALORES.join(' / ')}). Filtro de fecha aplicado en memoria.`);
+    } catch (e: any) {
+      console.error('[ServiciosCompletados] Error al descargar completados:', e);
+      alert(`No se pudieron cargar las operaciones completadas.\n\nDetalle: ${e?.message || e}`);
     }
 
     setCargandoOperaciones(false);
   };
 
-  // ✅ NUEVO: descarga el siguiente chunk de operaciones (paginación incremental).
-  // Sólo funciona si la query óptima funcionó (necesita lastDocSnap).
+  // ✅ MODIFICADO: ya no se usa (se descargan todos por status). Se deja como
+  //   no-op por compatibilidad con el botón "Cargar más" (que ya no se muestra).
   const cargarMasOperaciones = async () => {
-    if (!filterCliente || !lastDocSnap || cargandoMas || cargandoOperaciones) return;
-    setCargandoMas(true);
-    try {
-      const qMas = query(
-        collection(db, 'operaciones'),
-        where('clientePaga', '==', filterCliente),
-        where('status', 'in', STATUS_COMPLETADOS_VALORES),
-        orderBy('fechaServicio', 'desc'),
-        startAfter(lastDocSnap),
-        limit(TAMANIO_PAGINA)
-      );
-      const snap = await getDocs(qMas);
-      const nuevas = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-      const setCompleto = [...operacionesGlobales, ...nuevas];
-      setOperacionesGlobales(setCompleto);
-      setLastDocSnap(snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null);
-      setHayMasOperaciones(snap.docs.length === TAMANIO_PAGINA);
-      // Actualizar caché con el conjunto acumulado
-      try {
-        sessionStorage.setItem(
-          CACHE_PREFIX + filterCliente,
-          JSON.stringify({ ts: Date.now(), ops: setCompleto })
-        );
-      } catch { /* ignorar */ }
-    } catch (e: any) {
-      console.error('[ServiciosCompletados] Error al cargar más:', e);
-      alert(`No se pudieron cargar más operaciones.\n\nDetalle: ${e?.message || e}`);
-    }
-    setCargandoMas(false);
+    return;
   };
 
-  // ✅ Catálogos en tiempo real vía onSnapshot: cualquier cambio hecho en otra
-  // pantalla (p.ej. tipo de cambio, convenios, empresas) se refleja aquí al
-  // instante, sin depender del caché en sessionStorage que antes podía quedar
-  // desactualizado durante toda la sesión.
+  // ✅ Catálogos en tiempo real vía onSnapshot.
   const COLECCIONES_CATALOGOS: Record<string, string> = {
     empresas: 'empresas',
     tiposOperacion: 'catalogo_tipo_operacion',
@@ -330,68 +485,70 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
     );
   };
 
-  // Se conserva como no-op para no tocar los puntos donde se invocaba antes
-  // de abrir formularios/modales: los catálogos ya quedan suscritos al montar.
+  // Se conserva como no-op para no tocar los puntos donde se invocaba antes.
   const cargarCatalogosSiEsNecesario = async () => {};
 
-  // ✅ Al montar nos suscribimos a los catálogos en vivo.
-  // Las operaciones se cargarán cuando el usuario elija un cliente.
   useEffect(() => {
     const unsubscribers = suscribirCatalogosEnVivo();
     return () => unsubscribers.forEach((unsub) => unsub());
   }, []);
 
-  // ✅ NUEVO: cuando cambia el cliente seleccionado, se hace la query específica.
-  useEffect(() => {
-    descargarOperaciones(filterCliente);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCliente]);
+  // ✅ OPTIMIZACIÓN: el conjunto descargado (TODOS los completados) NO depende de
+  //   los filtros — fecha, cliente, tipo y remolque se aplican en memoria. Por eso
+  //   sólo descargamos UNA vez por sesión: en cuanto hay un rango de fechas válido.
+  //   Cambiar cualquier filtro después es instantáneo (no vuelve a consultar la BD).
+  const yaDescargado = useRef(false);
 
-  // ✅ NUEVO: sin cliente seleccionado, buscar la referencia directo en Firestore.
-  // Se dispara con debounce de 400 ms y sólo cuando NO hay cliente.
   useEffect(() => {
-    if (filterCliente || !busqueda.trim()) {
-      setResultadosRefRemota([]);
-      setBuscandoRefRemota(false);
+    if (!filterFechaInicio || !filterFechaFin) return;   // se requiere rango para mostrar
+    if (yaDescargado.current) return;                    // ya tenemos los datos en memoria
+    yaDescargado.current = true;
+    descargarOperaciones(filterFechaInicio, filterFechaFin, filterCliente);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterFechaInicio, filterFechaFin]);
+
+  // ✅ NUEVO: fuerza una recarga desde Firestore (ignora caché). Para el botón "Actualizar".
+  const refrescarDatos = () => {
+    if (!filterFechaInicio || !filterFechaFin) {
+      alert('Selecciona Fecha Inicio y Fecha Fin primero.');
       return;
     }
+    try { sessionStorage.removeItem(CACHE_KEY_TODOS); } catch { /* ignorar */ }
+    yaDescargado.current = true;
+    descargarOperaciones(filterFechaInicio, filterFechaFin, filterCliente, { ignorarCache: true });
+  };
 
-    const termino = busqueda.trim();
-    let cancelado = false;
-    setBuscandoRefRemota(true);
+  useEffect(() => { setPaginaActual(1); }, [busqueda, filterFechaInicio, filterFechaFin, filterRemolque, filterCliente, filterTipoOperacion, filterOperador]);
 
-    const timer = setTimeout(async () => {
-      try {
-        // Búsqueda por prefijo del campo "ref" (asume que ref se guarda como TEXTO).
-        // Rango sobre un solo campo → NO requiere índice compuesto.
-        const qRef = query(
-          collection(db, 'operaciones'),
-          where('ref', '>=', termino),
-          where('ref', '<=', termino + '\uf8ff'),
-          limit(50)
-        );
-        const snap = await getDocs(qRef);
-        let encontradas = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+  // ✅ NUEVO: cada vez que cambian las columnas (orden o visibilidad), se guardan
+  //   en localStorage para que la configuración se mantenga al recargar la página.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        COLUMNAS_STORAGE_KEY,
+        JSON.stringify(columnasTabla.map(c => ({ id: c.id, visible: c.visible })))
+      );
+    } catch { /* almacenamiento lleno o no disponible: ignorar */ }
+  }, [columnasTabla]);
 
-        // Mantener sólo las COMPLETADAS (coherente con este módulo)
-        encontradas = encontradas.filter((op: any) =>
-          STATUS_COMPLETADOS_VALORES.includes(String(op.status || '').trim())
-        );
-
-        if (!cancelado) setResultadosRefRemota(encontradas);
-      } catch (e: any) {
-        console.error('[ServiciosCompletados] Error en búsqueda remota por referencia:', e);
-        if (!cancelado) setResultadosRefRemota([]);
-      } finally {
-        if (!cancelado) setBuscandoRefRemota(false);
+  useEffect(() => {
+    const cargarBotones = async () => {
+      if (operacionViendo) {
+        let op = operacionViendo;
+        if (!op.statusNombre && op.status) {
+          const resuelto = resolverStatus(op.status);
+          if (resuelto.nombre && resuelto.nombre !== resuelto.id) op = { ...op, statusNombre: resuelto.nombre };
+        }
+        const botones = await obtenerBotonesHorarioDinamicos(op);
+        setBotonesDisponibles(botones || []);
+      } else {
+        setBotonesDisponibles([]);
       }
-    }, 400);
+    };
+    cargarBotones();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operacionViendo, mapaStatus]);
 
-    return () => { cancelado = true; clearTimeout(timer); };
-  }, [busqueda, filterCliente]);
-
-  useEffect(() => { setPaginaActual(1); }, [busqueda, filterFecha, filterRemolque, filterCliente]);
-  
   const mostrarDato = (text: any) => (text && text !== '' ? text : '-');
   
   const formatearFechaHora = (isoString: string | undefined | null) => {
@@ -405,64 +562,33 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
     return val || '-';
   };
 
-  const mostrarDatoMapeado = (id: string | null | undefined, catalogo: keyof typeof catalogosGlobales, campoRetorno: string = 'nombre', valorDesnormalizado?: string) => {
-    if (valorDesnormalizado && valorDesnormalizado.trim() !== '' && valorDesnormalizado !== '-' && String(valorDesnormalizado).trim() !== String(id).trim()) {
-      if (catalogo === 'statusServicio' && valorDesnormalizado.length > 30) {
-      } else {
-        return valorDesnormalizado; 
-      }
+  // ✅ Muestra ÚNICAMENTE el nombre desnormalizado ya guardado en la operación.
+  //    NO consulta otras colecciones (reduce lecturas) y NUNCA muestra un ID:
+  //    si no hay nombre guardado, devuelve '-'. Para monedas cae a la conversión
+  //    local ID→USD/MXN (sin catálogo).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const mostrarDatoMapeado = (id: string | null | undefined, catalogo: keyof typeof catalogosGlobales, _campoRetorno: string = 'nombre', valorDesnormalizado?: string) => {
+    const v = valorDesnormalizado != null ? String(valorDesnormalizado).trim() : '';
+    if (v && v !== '-' && v !== String(id ?? '').trim()) return String(valorDesnormalizado);
+    if ((catalogo === 'catalogoMoneda' || catalogo === 'catalogo_moneda') && id) {
+      const m = mostrarMoneda(id);
+      if (m && m !== '-') return m;
     }
-
-    if (!id) return '-';
-    if (!catalogosGlobales[catalogo] || !Array.isArray(catalogosGlobales[catalogo])) return id;
-    
-    const elementoEncontrado = catalogosGlobales[catalogo].find((item: any) => String(item.id).trim() === String(id).trim() || String(item.nombre).trim() === String(id).trim());
-    if (!elementoEncontrado) return id;
-
-    if (catalogo === 'empleados') {
-      return `${elementoEncontrado.firstName || ''} ${elementoEncontrado.lastNamePaternal || ''}`.trim() || id;
-    }
-    if (catalogo === 'remolques') {
-      return `${elementoEncontrado.nombre || ''} ${elementoEncontrado.placas || elementoEncontrado.placa || ''}`.trim() || id;
-    }
-    if (catalogo === 'unidades') {
-      return elementoEncontrado.unidad || elementoEncontrado.nombre || id;
-    }
-    if (catalogo === 'catalogoMoneda' || catalogo === 'catalogo_moneda') {
-      return elementoEncontrado.moneda || id;
-    }
-    if (catalogo === 'statusServicio') {
-      return elementoEncontrado.nombre || id;
-    }
-    if (catalogo === 'tiposOperacion') {
-      return elementoEncontrado.tipo_operacion || id;
-    }
-
-    return elementoEncontrado[campoRetorno] || elementoEncontrado.nombre || id;
+    return '-';
   };
 
+  // ✅ Solo nombre desnormalizado (convenioNombre). Sin lecturas de catálogos.
   const obtenerNombreConvenioCliente = (id: string, valorDesnormalizado?: string) => {
-    if (valorDesnormalizado && valorDesnormalizado.trim() !== '' && valorDesnormalizado !== '-' && String(valorDesnormalizado).trim() !== String(id).trim()) return valorDesnormalizado;
-    if (!id) return '-';
-    const detalle = catalogosGlobales.catalogoConvDetalles?.find((d:any) => String(d.id).trim() === String(id).trim());
-    if (detalle) {
-        const tarifaId = detalle.tipoConvenioId || detalle.tipo_convenio_id || detalle.tipoConvenio || detalle.tipo_convenio || detalle['TIPO DE CONVENIO'];
-        const tObj = catalogosGlobales.tarifas?.find((t:any) => String(t.id).trim() === String(tarifaId).trim());
-        return tObj?.descripcion || tObj?.nombre || id;
-    }
-    return id;
+    const v = valorDesnormalizado != null ? String(valorDesnormalizado).trim() : '';
+    if (v && v !== '-' && v !== String(id ?? '').trim()) return String(valorDesnormalizado);
+    return '-';
   };
 
+  // ✅ Solo nombre desnormalizado (convenioProveedorNombre). Sin lecturas.
   const obtenerNombreConvenioProv = (id: string, valorDesnormalizado?: string) => {
-    if (valorDesnormalizado && valorDesnormalizado.trim() !== '' && valorDesnormalizado !== '-' && String(valorDesnormalizado).trim() !== String(id).trim()) return valorDesnormalizado;
-    if (!id) return '-';
-    const detalle = catalogosGlobales.catalogoConvProvDetalles?.find((d:any) => String(d.id).trim() === String(id).trim());
-    if (detalle) {
-        const tarifaId = detalle.tipoConvenioId || detalle.tipo_convenio || detalle.tarifaId || detalle['TIPO DE CONVENIO'];
-        const tObj = catalogosGlobales.tarifas?.find((t:any) => String(t.id).trim() === String(tarifaId).trim());
-        return tObj?.descripcion || tObj?.nombre || detalle.tipoConvenioNombre || id;
-    }
-    return id;
+    const v = valorDesnormalizado != null ? String(valorDesnormalizado).trim() : '';
+    if (v && v !== '-' && v !== String(id ?? '').trim()) return String(valorDesnormalizado);
+    return '-';
   };
 
   const formatoMoneda = (monto: any) => {
@@ -483,6 +609,128 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
       console.error(e);
     }
     setCargandoHorarios(false);
+  };
+
+  const abrirRegistroHorario = () => {
+    const now = new Date();
+    const tzOffset = now.getTimezoneOffset() * 60000;
+    const localISOTime = (new Date(Date.now() - tzOffset)).toISOString().slice(0, 16);
+    setNuevaFechaHora(localISOTime);
+    setNuevoStatus(botonesDisponibles[0] || '');
+    setModalHorarios('registrar');
+  };
+
+  const aplicarStatusEnMemoria = (opId: string, statusId: string, statusNombre: string) => {
+    setOperacionesGlobales(prev => {
+      const next = prev.map((o: any) => (o.id === opId ? { ...o, status: statusId, statusNombre } : o));
+      if (filterFechaInicio && filterFechaFin) {
+        try { sessionStorage.setItem(claveCacheActual(), JSON.stringify({ ts: Date.now(), ops: next })); } catch { /* ignorar */ }
+      }
+      return next;
+    });
+    setOperacionViendo((prev: any) => (prev && prev.id === opId ? { ...prev, status: statusId, statusNombre } : prev));
+  };
+
+  const guardarHorario = async () => {
+    if (!operacionViendo) return;
+    if (!nuevoStatus || !nuevaFechaHora) return alert('Completa la fecha y el estatus.');
+    setCargandoHorarios(true);
+    try {
+      const { id: statusId, nombre: statusNombreResuelto } = resolverStatus(nuevoStatus);
+      const batch = writeBatch(db);
+      const horarioRef = doc(collection(db, 'horarios'));
+      batch.set(horarioRef, {
+        operacionId: operacionViendo.id,
+        status: statusId,
+        statusNombre: statusNombreResuelto,
+        fechaHora: nuevaFechaHora,
+        registradoEn: new Date().toISOString()
+      });
+      const opRef = doc(db, 'operaciones', String(operacionViendo.id));
+      batch.update(opRef, { status: statusId, statusNombre: statusNombreResuelto });
+      await batch.commit();
+
+      aplicarStatusEnMemoria(operacionViendo.id, statusId, statusNombreResuelto);
+      alert('Horario registrado y Estatus actualizado.');
+      setModalHorarios('cerrado');
+    } catch (e) {
+      console.error('[ServiciosCompletados] Error guardarHorario:', e);
+      alert('Error al actualizar la base de datos.');
+    }
+    setCargandoHorarios(false);
+  };
+
+  const registrarStatusRapido = async (statusNombre: string) => {
+    if (!operacionViendo || !statusNombre) return;
+    if (guardandoStatusRapido) return;
+
+    const _normalizar = (s: string) =>
+      String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    if (_normalizar(statusNombre).includes('cancel')) {
+      const refOp = operacionViendo.ref || operacionViendo.id?.substring(0, 6) || 'esta operación';
+      const confirmado = window.confirm(
+        `¿Seguro que deseas CANCELAR la operación ${refOp}?\n\n` +
+        `Se registrará el status "${statusNombre}" y la referencia quedará cancelada.`
+      );
+      if (!confirmado) return;
+    }
+
+    setGuardandoStatusRapido(statusNombre);
+
+    const operacionPrevia = operacionViendo;
+    const operacionesPrevias = operacionesGlobales;
+    const botonesPrevios = botonesDisponibles;
+
+    try {
+      let opParaCascada = operacionViendo;
+      if (!opParaCascada.statusNombre && opParaCascada.status) {
+        const r = resolverStatus(opParaCascada.status);
+        opParaCascada = { ...opParaCascada, statusNombre: r.nombre };
+      }
+
+      const cadenaStatus = await resolverCascadaStatus(statusNombre, opParaCascada);
+      const cadenaResuelta = cadenaStatus.map(resolverStatus);
+      const statusFinal = cadenaResuelta[cadenaResuelta.length - 1];
+
+      aplicarStatusEnMemoria(operacionViendo.id, statusFinal.id, statusFinal.nombre);
+
+      obtenerBotonesHorarioDinamicos({ ...operacionViendo, status: statusFinal.id, statusNombre: statusFinal.nombre })
+        .then(botones => setBotonesDisponibles(botones || []))
+        .catch(() => {});
+
+      const now = new Date();
+      const tzOffset = now.getTimezoneOffset() * 60000;
+      const fechaHoraLocal = (new Date(Date.now() - tzOffset)).toISOString().slice(0, 16);
+      const registradoEn = new Date().toISOString();
+
+      const batch = writeBatch(db);
+      cadenaResuelta.forEach((statusPaso, idx) => {
+        const horarioRef = doc(collection(db, 'horarios'));
+        batch.set(horarioRef, {
+          operacionId: operacionViendo.id,
+          status: statusPaso.id,
+          statusNombre: statusPaso.nombre,
+          fechaHora: fechaHoraLocal,
+          registradoEn,
+          ordenCascada: idx,
+          esAutomatico: idx > 0,
+        });
+      });
+      const opRef = doc(db, 'operaciones', String(operacionViendo.id));
+      batch.update(opRef, { status: statusFinal.id, statusNombre: statusFinal.nombre });
+      await batch.commit();
+
+      setGuardandoStatusRapido(null);
+      setUltimoStatusGuardado(statusNombre);
+      setTimeout(() => setUltimoStatusGuardado(null), 1500);
+    } catch (e: any) {
+      console.error('[ServiciosCompletados] Error al registrar status:', e);
+      setOperacionViendo(operacionPrevia);
+      setOperacionesGlobales(operacionesPrevias);
+      setBotonesDisponibles(botonesPrevios);
+      setGuardandoStatusRapido(null);
+      alert('Error al guardar el status. Se revirtió el cambio.');
+    }
   };
 
   const handleDescSolicitudRetiro = async () => {
@@ -648,8 +896,6 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
     });
   };
 
-  // ✅ MODIFICADO: editar — si el padre pasa onEditar, delega ahí (su formulario).
-  // Si NO, abre el editor integrado de este módulo.
   const handleEditarOperacion = (op: any, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!op) return;
@@ -657,32 +903,32 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
       onEditar(op);
       return;
     }
-    // Abrir editor integrado: copiamos la operación al formulario
+    setOperacionViendo(null);
     setOperacionEditando(op);
-    setFormEdicion({ ...op });
-    setPestañaEdicionActiva('general');
+    setEstadoFormulario('abierto');
   };
 
-  // ✅ NUEVO: actualiza un campo del formulario de edición.
-  // Recalcula los totales que la propia UI define por fórmula (subtotales, sueldo, combustible).
+  const handleOperacionGuardada = () => {
+    if (filterFechaInicio && filterFechaFin) {
+      descargarOperaciones(filterFechaInicio, filterFechaFin, filterCliente, { ignorarCache: true });
+    }
+    setEstadoFormulario('cerrado');
+    setOperacionEditando(null);
+  };
+
   const actualizarCampoEdicion = (campo: string, valor: any) => {
     setFormEdicion((prev: any) => {
       const next = { ...prev, [campo]: valor };
       const num = (v: any) => Number(v) || 0;
-
-      // Subtotal Cliente = Monto Convenio + Cargos Adicionales
       if (campo === 'montoConvenioCliente' || campo === 'cargosAdicionales') {
         next.subtotalCliente = num(next.montoConvenioCliente) + num(next.cargosAdicionales);
       }
-      // Subtotal Prov = Monto Base + Cargos Adicionales Prov
       if (campo === 'totalAPagarProv' || campo === 'cargosAdicionalesProv') {
         next.subtotalProv = num(next.totalAPagarProv) + num(next.cargosAdicionalesProv);
       }
-      // Sueldo Total = Sueldo Operador + Sueldo Extra
       if (campo === 'sueldoOperador' || campo === 'sueldoExtra') {
         next.sueldoTotal = num(next.sueldoOperador) + num(next.sueldoExtra);
       }
-      // Combustible Total = Combustible + Combustible Extra
       if (campo === 'combustible' || campo === 'combustibleExtra') {
         next.combustibleTotal = num(next.combustible) + num(next.combustibleExtra);
       }
@@ -690,12 +936,10 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
     });
   };
 
-  // ✅ NUEVO: guardar los cambios del editor integrado en Firestore.
   const guardarEdicion = async () => {
     if (!operacionEditando?.id) return;
     setGuardandoEdicion(true);
     try {
-      // Sólo enviamos los campos editables (evitamos sobrescribir todo el documento).
       const camposEditables = [
         'refCliente', 'fechaServicio', 'fechaCita', 'trafico', 'observacionesEjecutivo',
         'clienteMercanciaNombre', 'descripcionMercancia', 'cantidad', 'embalajeNombre', 'pesoKg',
@@ -716,20 +960,17 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
 
       await updateDoc(doc(db, 'operaciones', operacionEditando.id), payload);
 
-      // Reflejar los cambios en memoria
       const aplicar = (o: any) => (o.id === operacionEditando.id ? { ...o, ...payload } : o);
       const nuevasGlobales = operacionesGlobales.map(aplicar);
       setOperacionesGlobales(nuevasGlobales);
-      setResultadosRefRemota(prev => prev.map(aplicar));
       if (operacionViendo?.id === operacionEditando.id) {
         setOperacionViendo({ ...operacionViendo, ...payload });
       }
 
-      // Actualizar caché del cliente
-      if (filterCliente) {
+      if (filterFechaInicio && filterFechaFin) {
         try {
           sessionStorage.setItem(
-            CACHE_PREFIX + filterCliente,
+            claveCacheActual(),
             JSON.stringify({ ts: Date.now(), ops: nuevasGlobales })
           );
         } catch { /* ignorar */ }
@@ -744,7 +985,6 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
     setGuardandoEdicion(false);
   };
 
-  // ✅ NUEVO: eliminar — borra el documento en Firestore y limpia estado/caché.
   const handleEliminarOperacion = async (op: any, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!op?.id) return;
@@ -757,20 +997,13 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
 
     try {
       await deleteDoc(doc(db, 'operaciones', op.id));
-
-      // Quitar de los estados en memoria
       const restantes = operacionesGlobales.filter((o: any) => o.id !== op.id);
       setOperacionesGlobales(restantes);
-      setResultadosRefRemota(prev => prev.filter((o: any) => o.id !== op.id));
-
-      // Cerrar la ficha si era la que estaba abierta
       if (operacionViendo?.id === op.id) setOperacionViendo(null);
-
-      // Actualizar el caché del cliente con el conjunto ya filtrado
-      if (filterCliente) {
+      if (filterFechaInicio && filterFechaFin) {
         try {
           sessionStorage.setItem(
-            CACHE_PREFIX + filterCliente,
+            claveCacheActual(),
             JSON.stringify({ ts: Date.now(), ops: restantes })
           );
         } catch { /* cuota agotada: ignorar */ }
@@ -781,76 +1014,174 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
     }
   };
 
-  const forzarRecarga = () => {
-    sessionStorage.removeItem('roelca_catalogos_v2');
-    // ✅ NUEVO: limpiar también el caché de operaciones completadas
-    try {
-      const keys = Object.keys(sessionStorage);
-      keys.forEach(k => { if (k.startsWith(CACHE_PREFIX)) sessionStorage.removeItem(k); });
-    } catch { /* ignorar */ }
-    window.location.reload();
+  const obtenerConsecutivoRef = (op: any): number => {
+    const ref = String(op?.ref || '');
+    const m = ref.match(/(\d+)\s*$/);
+    return m ? parseInt(m[1], 10) : 0;
   };
 
-  // ✅ MODIFICADO: ahora soporta tres escenarios:
-  //   🅐 Con cliente → filtra en memoria lo descargado para ese cliente.
-  //   🅑 Sin cliente pero con búsqueda → usa lo que devolvió Firestore por "ref".
-  //   🅒 Sin cliente y sin búsqueda → vacío (mensaje guía).
+  // ✅ NUEVO: clasifica el tipo de operación (transfer / fletes / logistica) a
+  //   partir del nombre desnormalizado o del catálogo. Se usa en el filtro nuevo.
+  const tipoOpTexto = (op: any): string => String(
+    op?.tipoOperacionNombre ||
+    mostrarDatoMapeado(op?.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op?.tipoOperacionNombre) ||
+    ''
+  ).toLowerCase();
+
+  const coincideTipoOperacion = (op: any, filtro: string): boolean => {
+    if (!filtro) return true;
+    const t = tipoOpTexto(op);
+    if (filtro === 'transfer') return t.includes('transfer');
+    if (filtro === 'fletes') return t.includes('flete');
+    if (filtro === 'logistica') return t.includes('logistica') || t.includes('logística');
+    return true;
+  };
+
+  // ✅ MODIFICADO: el filtro de RANGO DE FECHAS ahora se aplica AQUÍ, en memoria,
+  //   usando normalizarFechaServicioISO. Así funciona aunque fechaServicio venga
+  //   como Timestamp, "DD/MM/YYYY", etc. (antes el filtro fallaba y salía vacío).
   const operacionesFiltradas = useMemo(() => {
-    // 🅐 Hay cliente → comportamiento normal (filtra en memoria lo ya descargado)
+    if (!filterFechaInicio || !filterFechaFin) return [];
+
+    let filtradas = operacionesGlobales;
+
+    // Filtro por rango de fechas (robusto a distintos formatos).
+    //   Usa _fechaISO precalculado en la descarga; si viniera de un caché antiguo
+    //   sin ese campo, cae a normalizar al vuelo.
+    filtradas = filtradas.filter(op => {
+      const f = op._fechaISO != null ? op._fechaISO : normalizarFechaServicioISO(op.fechaServicio);
+      if (!f) return false;
+      return f >= filterFechaInicio && f <= filterFechaFin;
+    });
+
     if (filterCliente) {
-      let filtradas = operacionesGlobales;
-
-      if (filterFecha) {
-        filtradas = filtradas.filter(op => String(op.fechaServicio || '').includes(filterFecha));
-      }
-      if (filterRemolque) {
-        filtradas = filtradas.filter(op => String(op.numeroRemolque || '') === filterRemolque || String(op.remolqueNombre || '').toLowerCase().includes(filterRemolque.toLowerCase()));
-      }
-
-      if (busqueda.trim()) {
-        const b = busqueda.toLowerCase();
-        filtradas = filtradas.filter(op => {
-          return (
-            String(op.ref || op.id || '').toLowerCase().includes(b) ||
-            String(op.fechaServicio || '').toLowerCase().includes(b) ||
-            String(op.clienteNombre || op.nombreCliente || '').toLowerCase().includes(b) ||
-            String(op.tipoOperacionNombre || op.tipoServicio || '').toLowerCase().includes(b) ||
-            String(op.trafico || '').toLowerCase().includes(b) ||
-            String(op.statusNombre || op.status || '').toLowerCase().includes(b) 
-          );
-        });
-      }
-
-      return filtradas;
+      filtradas = filtradas.filter(op => String(op.clientePaga || op.clienteId || '') === filterCliente);
     }
 
-    // 🅑 SIN cliente pero con búsqueda por referencia → usamos lo que trajo Firestore
-    if (busqueda.trim() && resultadosRefRemota.length > 0) {
-      let filtradas = resultadosRefRemota;
-
-      if (filterFecha) {
-        filtradas = filtradas.filter(op => String(op.fechaServicio || '').includes(filterFecha));
-      }
-      if (filterRemolque) {
-        filtradas = filtradas.filter(op => String(op.numeroRemolque || '') === filterRemolque || String(op.remolqueNombre || '').toLowerCase().includes(filterRemolque.toLowerCase()));
-      }
-
-      return filtradas;
+    // ✅ NUEVO: filtro por tipo de operación (Transfer / Logística / Fletes).
+    if (filterTipoOperacion) {
+      filtradas = filtradas.filter(op => coincideTipoOperacion(op, filterTipoOperacion));
     }
 
-    // 🅒 Sin cliente y sin búsqueda → vacío
-    return [];
-  }, [busqueda, operacionesGlobales, filterFecha, filterRemolque, filterCliente, resultadosRefRemota]);
+    if (filterRemolque) {
+      filtradas = filtradas.filter(op => String(op.numeroRemolque || '') === filterRemolque || String(op.remolqueNombre || '').toLowerCase().includes(filterRemolque.toLowerCase()));
+    }
+
+    // ✅ NUEVO: filtro por OPERADOR. Cruza por ID del empleado (op.operador /
+    //   op.operadorId) y, como respaldo, por nombre normalizado con tolerancia
+    //   al apellido materno (las operaciones pueden traer el nombre completo).
+    if (filterOperador) {
+      const empSel = (catalogosGlobales.empleados || []).find((x: any) => String(x.id) === String(filterOperador));
+      const nombreSel = normalizarTxtOperador(empSel ? `${empSel.firstName || ''} ${empSel.lastNamePaternal || ''}` : '');
+      const nombreSelCompleto = normalizarTxtOperador(empSel ? `${empSel.firstName || ''} ${empSel.lastNamePaternal || ''} ${empSel.lastNameMaternal || empSel.lastNameMaterno || ''}` : '');
+      filtradas = filtradas.filter(op => {
+        const idsOp = [op.operador, op.operadorId].map(v => String(v || '')).filter(Boolean);
+        if (idsOp.includes(String(filterOperador))) return true;
+        const n = normalizarTxtOperador(op.operadorNombre);
+        if (!n || !nombreSel) return false;
+        return n === nombreSel || (nombreSelCompleto && n === nombreSelCompleto) || n.startsWith(nombreSel + ' ') || nombreSel.startsWith(n + ' ');
+      });
+    }
+
+    if (busqueda.trim()) {
+      const b = busqueda.toLowerCase();
+      filtradas = filtradas.filter(op => {
+        return (
+          String(op.ref || op.id || '').toLowerCase().includes(b) ||
+          String(op.fechaServicio || '').toLowerCase().includes(b) ||
+          String(op.clienteNombre || op.nombreCliente || '').toLowerCase().includes(b) ||
+          String(op.tipoOperacionNombre || op.tipoServicio || '').toLowerCase().includes(b) ||
+          String(op.trafico || '').toLowerCase().includes(b) ||
+          String(op.statusNombre || op.status || '').toLowerCase().includes(b)
+        );
+      });
+    }
+
+    return [...filtradas].sort((a: any, b2: any) => {
+      const fa = a._fechaISO != null ? a._fechaISO : normalizarFechaServicioISO(a.fechaServicio);
+      const fb = b2._fechaISO != null ? b2._fechaISO : normalizarFechaServicioISO(b2.fechaServicio);
+      if (fa !== fb) return fb.localeCompare(fa);
+      return obtenerConsecutivoRef(b2) - obtenerConsecutivoRef(a);
+    });
+  }, [busqueda, operacionesGlobales, filterFechaInicio, filterFechaFin, filterRemolque, filterCliente, filterTipoOperacion, filterOperador, catalogosGlobales]);
+
+  const resumenServicios = useMemo(() => {
+    const base = operacionesFiltradas;
+    const total = base.length;
+    let falsos = 0, factCliente = 0, factProveedor = 0, conDiesel = 0, conNomina = 0;
+    base.forEach((op: any) => {
+      if (esFalso(op)) falsos++;
+      if (facturadoCliente(op)) factCliente++;
+      if (facturadoProveedor(op)) factProveedor++;
+      if (tieneDiesel(op)) conDiesel++;
+      if (tieneNomina(op)) conNomina++;
+    });
+    const completados = total - falsos;
+    return {
+      total, completados, falsos,
+      factCliente, pendCliente: total - factCliente,
+      factProveedor, pendProveedor: total - factProveedor,
+      conDiesel, conNomina,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operacionesFiltradas, mapaStatus]);
 
   const totalPaginas = Math.ceil(operacionesFiltradas.length / registrosPorPagina);
   const indiceUltimoRegistro = paginaActual * registrosPorPagina;
   const indicePrimerRegistro = indiceUltimoRegistro - registrosPorPagina;
   const operacionesEnPantalla = operacionesFiltradas.slice(indicePrimerRegistro, indiceUltimoRegistro);
 
+  const idStatusFalso = useMemo(() => {
+    const lista = (catalogosGlobales.statusServicio || []) as any[];
+    const found = lista.find((s: any) => String(s.nombre || '').toLowerCase().includes('falso'));
+    return found ? String(found.id) : '';
+  }, [catalogosGlobales.statusServicio]);
+
+  const calcularTotalesServidor = async (alcance: 'rango' | 'global') => {
+    if (alcance === 'rango' && (!filterFechaInicio || !filterFechaFin)) {
+      alert('Selecciona Fecha Inicio y Fecha Fin para los totales del rango.');
+      return;
+    }
+    setConteosServidor(prev => ({ ...prev, cargando: true, error: null, alcance }));
+    try {
+      const col = collection(db, 'operaciones');
+
+      const baseConstraints: any[] = [];
+      if (alcance === 'rango') {
+        if (filterCliente) baseConstraints.push(where('clientePaga', '==', filterCliente));
+        baseConstraints.push(where('fechaServicio', '>=', filterFechaInicio));
+        baseConstraints.push(where('fechaServicio', '<=', filterFechaFin + '\uf8ff'));
+      }
+
+      const qTotal = query(col, where('status', 'in', STATUS_COMPLETADOS_VALORES), ...baseConstraints);
+      const snapTotal = await getCountFromServer(qTotal);
+      const total = snapTotal.data().count;
+
+      let falsos: number | null = null;
+      if (idStatusFalso) {
+        const qFalsos = query(col, where('status', '==', idStatusFalso), ...baseConstraints);
+        const snapFalsos = await getCountFromServer(qFalsos);
+        falsos = snapFalsos.data().count;
+      }
+
+      const completados = falsos !== null ? total - falsos : total;
+      setConteosServidor({ completados, falsos, total, cargando: false, error: null, alcance });
+    } catch (e: any) {
+      const msg = String(e?.message || e || '');
+      console.error('[ServiciosCompletados] Error en conteo de servidor:', e);
+      setConteosServidor(prev => ({
+        ...prev,
+        cargando: false,
+        error: msg.toLowerCase().includes('index')
+          ? 'Falta un índice en Firestore para este conteo. Revisa la consola para el enlace de creación.'
+          : (msg || 'No se pudo calcular el total.'),
+      }));
+    }
+  };
+
   const irPaginaSiguiente = () => setPaginaActual(prev => Math.min(prev + 1, totalPaginas));
   const irPaginaAnterior = () => setPaginaActual(prev => Math.max(prev - 1, 1));
 
-  // ✅ NUEVO: lista de clientes Paga (filtra empresas por tiposEmpresa que incluya 7eec9cbb)
   const clientesFiltradosBuscador = useMemo(() => {
     if (!catalogosGlobales.empresas) return [];
 
@@ -875,12 +1206,49 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
     ).slice(0, 30);
   }, [catalogosGlobales.empresas, textoBuscarCliente]);
 
-  // ✅ NUEVO: nombre del cliente actualmente seleccionado (para mostrar el chip)
   const nombreClienteSeleccionado = useMemo(() => {
     if (!filterCliente || !catalogosGlobales.empresas) return '';
     const cli = catalogosGlobales.empresas.find((e: any) => e.id === filterCliente);
     return cli?.nombre || filterCliente;
   }, [filterCliente, catalogosGlobales.empresas]);
+
+  // ✅ NUEVO: lista filtrada de remolques para el buscador (nombre o placa).
+  const etiquetaRemolque = (rem: any) => `${rem?.nombre || ''} ${rem?.placas || rem?.placa || ''}`.trim();
+
+  // ✅ NUEVO (filtro operador): buscador de empleados para las sugerencias.
+  const operadoresFiltradosBuscador = useMemo(() => {
+    const lista = (catalogosGlobales.empleados || []) as any[];
+    const ordenados = lista
+      .filter((e: any) => etiquetaOperador(e))
+      .sort((a: any, b: any) => etiquetaOperador(a).localeCompare(etiquetaOperador(b), 'es', { sensitivity: 'base' }));
+    if (!textoBuscarOperador.trim()) return ordenados.slice(0, 30);
+    const q = normalizarTxtOperador(textoBuscarOperador);
+    return ordenados.filter((e: any) => normalizarTxtOperador(etiquetaOperador(e)).includes(q)).slice(0, 30);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogosGlobales.empleados, textoBuscarOperador]);
+
+  const nombreOperadorSeleccionado = useMemo(() => {
+    if (!filterOperador || !catalogosGlobales.empleados) return '';
+    const e = (catalogosGlobales.empleados as any[]).find((x: any) => String(x.id) === String(filterOperador));
+    return e ? (etiquetaOperador(e) || filterOperador) : filterOperador;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterOperador, catalogosGlobales.empleados]);
+
+  const remolquesFiltradosBuscador = useMemo(() => {
+    const lista = (catalogosGlobales.remolques || []) as any[];
+    const ordenados = [...lista].sort((a: any, b: any) =>
+      etiquetaRemolque(a).localeCompare(etiquetaRemolque(b), 'es', { sensitivity: 'base' })
+    );
+    if (!textoBuscarRemolque.trim()) return ordenados.slice(0, 30);
+    const q = textoBuscarRemolque.toLowerCase().trim();
+    return ordenados.filter((r: any) => etiquetaRemolque(r).toLowerCase().includes(q)).slice(0, 30);
+  }, [catalogosGlobales.remolques, textoBuscarRemolque]);
+
+  const nombreRemolqueSeleccionado = useMemo(() => {
+    if (!filterRemolque || !catalogosGlobales.remolques) return '';
+    const r = catalogosGlobales.remolques.find((x: any) => x.id === filterRemolque);
+    return r ? (etiquetaRemolque(r) || filterRemolque) : filterRemolque;
+  }, [filterRemolque, catalogosGlobales.remolques]);
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.effectAllowed = 'move';
@@ -904,11 +1272,19 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
 
   const renderCellContent = (op: any, colId: string) => {
     switch (colId) {
-      case 'ref': return <span className="font-mono" style={{ color: '#10b981', fontWeight: 'bold' }}>{op.ref || op.id?.substring(0,6)}</span>;
+      // ✅ Referencia coloreada por tipo de operación (Fletes verde / Logística azul / Transfer naranja)
+      case 'ref': return <span className="font-mono" style={{ color: colorTipoOperacion(mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre)), fontWeight: 'bold' }}>{op.ref || op.id?.substring(0,6)}</span>;
       case 'fechaServicio': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.fechaServicio)}</span>;
       case 'fechaCita': return <span style={{ color: '#c9d1d9' }}>{formatearFechaHora(op.fechaCita)}</span>;
-      case 'tipoOperacion': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre)}</span>;
+      case 'tipoOperacion': {
+        const nombreTipoOp = mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre);
+        return <span style={{ color: colorTipoOperacion(nombreTipoOp), fontWeight: 'bold' }}>{nombreTipoOp}</span>;
+      }
       case 'status': return <span style={{ color: '#10b981', fontWeight: 'bold' }}>{mostrarDatoMapeado(op.status, 'statusServicio', 'nombre', op.statusNombre)}</span>;
+      case 'refDiesel': return op.referenciaDieselConsecutivo ? chipConexion(op.referenciaDieselConsecutivo, '#f59e0b') : <span style={{ color: '#8b949e' }}>-</span>;
+      case 'refNomina': return op.referenciaNominaConsecutivo ? chipConexion(op.referenciaNominaConsecutivo, '#a371f7') : <span style={{ color: '#8b949e' }}>-</span>;
+      case 'invoiceCliente': return (op.facturaClienteInvoice || op.facturado) ? chipConexion(op.facturaClienteInvoice || 'Facturada', '#10b981') : <span style={{ color: '#8b949e' }}>-</span>;
+      case 'invoiceProveedor': return (op.facturaProveedorFolio || op.facturadoProveedor) ? chipConexion(op.facturaProveedorFolio || 'Facturada', '#58a6ff') : <span style={{ color: '#8b949e' }}>-</span>;
       case 'trafico': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.trafico)}</span>;
       case 'cliente': return <span style={{ color: '#f0f6fc', fontWeight: '500' }}>{mostrarDatoMapeado(op.clientePaga || op.clienteId, 'empresas', 'nombre', op.clienteNombre || op.nombreCliente)}</span>;
       case 'convenioTarifa': return <span style={{ color: '#c9d1d9', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={obtenerNombreConvenioCliente(op.convenio, op.convenioNombre)}>{obtenerNombreConvenioCliente(op.convenio, op.convenioNombre)}</span>;
@@ -925,8 +1301,8 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
       case 'destino': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.destino, 'empresas', 'nombre', op.destinoNombre)}</span>;
       case 'remolque': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'nombre', op.remolqueNombre)}</span>;
       case 'proveedor': return <span style={{ color: '#c9d1d9', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={op.proveedorUnidadNombre || op.proveedorUnidad}>{mostrarDatoMapeado(op.proveedorUnidad, 'empresas', 'nombre', op.proveedorUnidadNombre)}</span>;
-      case 'unidadProveedor': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.unidadProveedor)}</span>;
-      case 'operadorProveedor': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.operadorProveedor)}</span>;
+      case 'unidadProveedor': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.unidadProveedor, 'unidades_proveedor', 'numeroUnidad', op.unidadProveedorNombre)}</span>;
+      case 'operadorProveedor': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.operadorProveedor, 'proveedores_unidad', 'nombre', op.operadorProveedorNombre)}</span>;
       case 'convenioProv': return <span style={{ color: '#c9d1d9', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={obtenerNombreConvenioProv(op.convenioProveedor, op.convenioProveedorNombre)}>{obtenerNombreConvenioProv(op.convenioProveedor, op.convenioProveedorNombre)}</span>;
       case 'facturadoEnUnidad': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.facturadoEnUnidad, 'catalogoMoneda', 'moneda', op.monedaUnidadNombre)}</span>;
       case 'monedaConvenioProv': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.monedaConvenioProv, 'catalogoMoneda', 'moneda', op.monedaConvProvNombre)}</span>;
@@ -947,7 +1323,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
       case 'clienteMercancia': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.clienteMercancia, 'empresas', 'nombre', op.clienteMercanciaNombre)}</span>;
       case 'descripcionMercancia': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.descripcionMercancia)}</span>;
       case 'cantidad': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.cantidad)}</span>;
-      case 'embalaje': return <span style={{ color: '#c9d1d9' }}>{op.embalajeNombre || op.embalaje || '-'}</span>;
+      case 'embalaje': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.embalaje, 'embalajes', 'clave', op.embalajeNombre)}</span>;
       case 'pesoKg': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.pesoKg)}</span>;
       case 'numDoda': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.numDoda)}</span>;
       case 'fechaEmisionDoda': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.fechaEmisionDoda)}</span>;
@@ -982,6 +1358,10 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
           case 'fechaCita': val = formatearFechaHora(op.fechaCita); break;
           case 'tipoOperacion': val = mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre); break;
           case 'status': val = mostrarDatoMapeado(op.status, 'statusServicio', 'nombre', op.statusNombre); break; 
+          case 'refDiesel': val = op.referenciaDieselConsecutivo || ''; break;
+          case 'refNomina': val = op.referenciaNominaConsecutivo || ''; break;
+          case 'invoiceCliente': val = op.facturaClienteInvoice || (op.facturado ? 'Facturada' : ''); break;
+          case 'invoiceProveedor': val = op.facturaProveedorFolio || (op.facturadoProveedor ? 'Facturada' : ''); break;
           case 'trafico': val = op.trafico || ''; break;
           case 'cliente': val = mostrarDatoMapeado(op.clientePaga || op.clienteId, 'empresas', 'nombre', op.clienteNombre || op.nombreCliente); break;
           case 'convenioTarifa': val = obtenerNombreConvenioCliente(op.convenio, op.convenioNombre); break;
@@ -998,8 +1378,8 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
           case 'destino': val = mostrarDatoMapeado(op.destino, 'empresas', 'nombre', op.destinoNombre); break;
           case 'remolque': val = mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'nombre', op.remolqueNombre); break;
           case 'proveedor': val = mostrarDatoMapeado(op.proveedorUnidad, 'empresas', 'nombre', op.proveedorUnidadNombre); break;
-          case 'unidadProveedor': val = op.unidadProveedor || ''; break;
-          case 'operadorProveedor': val = op.operadorProveedor || ''; break;
+          case 'unidadProveedor': val = mostrarDatoMapeado(op.unidadProveedor, 'unidades_proveedor', 'numeroUnidad', op.unidadProveedorNombre); break;
+          case 'operadorProveedor': val = mostrarDatoMapeado(op.operadorProveedor, 'proveedores_unidad', 'nombre', op.operadorProveedorNombre); break;
           case 'convenioProv': val = obtenerNombreConvenioProv(op.convenioProveedor, op.convenioProveedorNombre); break;
           case 'facturadoEnUnidad': val = mostrarDatoMapeado(op.facturadoEnUnidad, 'catalogoMoneda', 'moneda', op.monedaUnidadNombre); break;
           case 'monedaConvenioProv': val = mostrarDatoMapeado(op.monedaConvenioProv, 'catalogoMoneda', 'moneda', op.monedaConvProvNombre); break;
@@ -1020,7 +1400,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
           case 'clienteMercancia': val = mostrarDatoMapeado(op.clienteMercancia, 'empresas', 'nombre', op.clienteMercanciaNombre); break;
           case 'descripcionMercancia': val = op.descripcionMercancia || ''; break;
           case 'cantidad': val = op.cantidad || ''; break;
-          case 'embalaje': val = op.embalajeNombre || op.embalaje || ''; break;
+          case 'embalaje': val = mostrarDatoMapeado(op.embalaje, 'embalajes', 'clave', op.embalajeNombre); break;
           case 'pesoKg': val = op.pesoKg || ''; break;
           case 'numDoda': val = op.numDoda || ''; break;
           case 'fechaEmisionDoda': val = op.fechaEmisionDoda || ''; break;
@@ -1058,24 +1438,50 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
   const showDetailInternalFleet = evalIsTransfer || ((evalIsLogistica || evalIsFletes) && evalIsRoelca);
   const showDetailExternalFleet = (evalIsLogistica || evalIsFletes) && !evalIsRoelca;
 
+  const refOperacionViendo = operacionViendo ? (operacionViendo.ref || operacionViendo.id?.substring(0, 6) || 'Operacion') : '';
+
   const btnSecondaryActionStyle = { background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '8px 16px', borderRadius: '6px', gap: '8px', fontWeight: 'bold', transition: 'background 0.2s', fontSize: '0.85rem' };
   const btnDocStyle = { background: 'transparent', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '6px 12px', borderRadius: '6px', gap: '6px', fontSize: '0.85rem', transition: 'all 0.2s' };
 
+  const cardResumenStyle: React.CSSProperties = { backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '4px' };
+  const cardLabelStyle: React.CSSProperties = { color: '#8b949e', fontSize: '0.72rem', fontWeight: 'bold', textTransform: 'uppercase' };
+  const cardValueStyle: React.CSSProperties = { fontSize: '1.6rem', fontWeight: 'bold', lineHeight: 1.1 };
+
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease', width: '100%', boxSizing: 'border-box' }}>
+
+      {estadoFormulario !== 'cerrado' && (
+        <FormularioOperacion
+          estado={estadoFormulario}
+          initialData={operacionEditando}
+          onClose={() => { setEstadoFormulario('cerrado'); setOperacionEditando(null); }}
+          onMinimize={() => setEstadoFormulario('minimizado')}
+          onRestore={() => setEstadoFormulario('abierto')}
+          catalogosCacheados={catalogosGlobales}
+          onSave={handleOperacionGuardada}
+        />
+      )}
+
       <div style={{ width: '100%', margin: '0 auto' }}>
         <h1 className="module-title" style={{ fontSize: '1.5rem', color: '#10b981', margin: '0 0 24px 0', fontWeight: 'bold' }}>
           ✓ Servicios Completados
         </h1>
 
-        {/* ✅ MODIFICADO: Cliente ahora es el primer filtro y es el principal.
-            Al elegir cliente se dispara la query a Firestore. */}
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '16px', marginBottom: '20px', width: '100%', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d' }}>
+          <div style={{ flex: '1 1 180px' }}>
+            <label style={{ display: 'block', color: '#10b981', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>FECHA INICIO ★</label>
+            <input type="date" value={filterFechaInicio} onChange={(e) => setFilterFechaInicio(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #10b981', borderRadius: '6px', color: '#c9d1d9' }} />
+          </div>
+
+          <div style={{ flex: '1 1 180px' }}>
+            <label style={{ display: 'block', color: '#10b981', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>FECHA FIN ★</label>
+            <input type="date" value={filterFechaFin} min={filterFechaInicio || undefined} onChange={(e) => setFilterFechaFin(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #10b981', borderRadius: '6px', color: '#c9d1d9' }} />
+          </div>
+
           <div style={{ flex: '1 1 280px', position: 'relative' }}>
-            <label style={{ display: 'block', color: '#10b981', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>CLIENTE QUE PAGA ★</label>
+            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>CLIENTE QUE PAGA (opcional)</label>
 
             {filterCliente ? (
-              // ✅ Cliente seleccionado: mostrar chip con X para limpiar
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #10b981', borderRadius: '6px', minHeight: '20px' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                 <span style={{ color: '#10b981', fontWeight: 'bold', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1090,7 +1496,6 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                 </button>
               </div>
             ) : (
-              // ✅ Sin cliente: input de búsqueda con autocompletado
               <div style={{ position: 'relative' }}>
                 <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#10b981' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 <input
@@ -1107,17 +1512,9 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
 
             {!filterCliente && mostrarSugerenciasCliente && (
               <div style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                right: 0,
-                backgroundColor: '#0d1117',
-                border: '1px solid #30363d',
-                borderRadius: '6px',
-                maxHeight: '320px',
-                overflowY: 'auto',
-                zIndex: 100,
-                marginTop: '4px',
+                position: 'absolute', top: '100%', left: 0, right: 0,
+                backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px',
+                maxHeight: '320px', overflowY: 'auto', zIndex: 100, marginTop: '4px',
                 boxShadow: '0 6px 16px rgba(0,0,0,0.5)'
               }}>
                 {clientesFiltradosBuscador.length === 0 ? (
@@ -1138,14 +1535,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                           setTextoBuscarCliente('');
                           setMostrarSugerenciasCliente(false);
                         }}
-                        style={{
-                          padding: '10px 12px',
-                          cursor: 'pointer',
-                          color: '#c9d1d9',
-                          fontSize: '0.88rem',
-                          borderBottom: '1px solid #21262d',
-                          transition: 'background-color 0.15s'
-                        }}
+                        style={{ padding: '10px 12px', cursor: 'pointer', color: '#c9d1d9', fontSize: '0.88rem', borderBottom: '1px solid #21262d', transition: 'background-color 0.15s' }}
                         onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'}
                         onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
@@ -1159,41 +1549,176 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
             )}
           </div>
 
-          <div style={{ flex: '1 1 180px' }}>
-            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>FECHA</label>
-            <input type="date" value={filterFecha} onChange={(e) => setFilterFecha(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9' }} />
-          </div>
+          <div style={{ flex: '1 1 240px', position: 'relative' }}>
+            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>REMOLQUE (opcional)</label>
 
-          <div style={{ flex: '1 1 200px' }}>
-            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>REMOLQUE</label>
-            <select value={filterRemolque} onChange={(e) => setFilterRemolque(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9' }}>
-              <option value="">Seleccionar Remolque...</option>
-              {catalogosGlobales.remolques?.map((rem: any) => (
-                <option key={rem.id} value={rem.id}>{`${rem.nombre || ''} ${rem.placas || rem.placa || ''}`.trim()}</option>
-              ))}
-            </select>
-          </div>
+            {filterRemolque ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', minHeight: '20px' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" strokeWidth="2"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
+                <span style={{ color: '#c9d1d9', fontWeight: '500', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {nombreRemolqueSeleccionado}
+                </span>
+                <button
+                  onClick={() => { setFilterRemolque(''); setTextoBuscarRemolque(''); setMostrarSugerenciasRemolque(false); }}
+                  title="Quitar remolque"
+                  style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', padding: '0 4px', fontSize: '1rem', lineHeight: 1 }}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <div style={{ position: 'relative' }}>
+                <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input
+                  type="text"
+                  placeholder="Buscar remolque por nombre o placa..."
+                  value={textoBuscarRemolque}
+                  onChange={(e) => { setTextoBuscarRemolque(e.target.value); setMostrarSugerenciasRemolque(true); }}
+                  onFocus={() => setMostrarSugerenciasRemolque(true)}
+                  onBlur={() => setTimeout(() => setMostrarSugerenciasRemolque(false), 180)}
+                  style={{ width: '100%', padding: '10px 10px 10px 32px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
 
-          <div style={{ flex: '1 1 200px' }}>
-            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>FILTRO GENERAL</label>
-            <div style={{ position: 'relative' }}>
-              <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-              <input type="text" placeholder="Buscar por Ref..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} style={{ width: '100%', padding: '10px 10px 10px 36px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
-            </div>
-            {/* ✅ NUEVO: aviso cuando se busca referencia sin cliente */}
-            {!filterCliente && busqueda.trim() && (
-              <div style={{ marginTop: '4px', fontSize: '0.7rem', color: '#fb923c' }}>
-                Búsqueda directa por referencia (sin cliente)
+            {!filterRemolque && mostrarSugerenciasRemolque && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0,
+                backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px',
+                maxHeight: '320px', overflowY: 'auto', zIndex: 100, marginTop: '4px',
+                boxShadow: '0 6px 16px rgba(0,0,0,0.5)'
+              }}>
+                {remolquesFiltradosBuscador.length === 0 ? (
+                  <div style={{ padding: '14px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>
+                    {textoBuscarRemolque.trim() ? 'Sin coincidencias' : 'No hay remolques cargados'}
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ padding: '6px 12px', fontSize: '0.7rem', color: '#8b949e', borderBottom: '1px solid #21262d', backgroundColor: '#161b22' }}>
+                      {remolquesFiltradosBuscador.length} {remolquesFiltradosBuscador.length === 1 ? 'remolque' : 'remolques'}{textoBuscarRemolque.trim() ? '' : ' (primeros 30)'}
+                    </div>
+                    {remolquesFiltradosBuscador.map((rem: any) => (
+                      <div
+                        key={rem.id}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setFilterRemolque(rem.id);
+                          setTextoBuscarRemolque('');
+                          setMostrarSugerenciasRemolque(false);
+                        }}
+                        style={{ padding: '10px 12px', cursor: 'pointer', color: '#c9d1d9', fontSize: '0.88rem', borderBottom: '1px solid #21262d', transition: 'background-color 0.15s' }}
+                        onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'}
+                        onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        <div style={{ fontWeight: '500' }}>{etiquetaRemolque(rem) || rem.id}</div>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
 
+          {/* ✅ NUEVO: filtro por OPERADOR (búsqueda con sugerencias) */}
+          <div style={{ flex: '1 1 240px', position: 'relative' }}>
+            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>OPERADOR (opcional)</label>
+
+            {filterOperador ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', minHeight: '20px' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                <span style={{ color: '#c9d1d9', fontWeight: '500', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {nombreOperadorSeleccionado}
+                </span>
+                <button
+                  onClick={() => { setFilterOperador(''); setTextoBuscarOperador(''); setMostrarSugerenciasOperador(false); }}
+                  title="Quitar operador"
+                  style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', padding: '0 4px', fontSize: '1rem', lineHeight: 1 }}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <div style={{ position: 'relative' }}>
+                <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input
+                  type="text"
+                  placeholder="Buscar operador por nombre..."
+                  value={textoBuscarOperador}
+                  onChange={(e) => { setTextoBuscarOperador(e.target.value); setMostrarSugerenciasOperador(true); }}
+                  onFocus={() => setMostrarSugerenciasOperador(true)}
+                  onBlur={() => setTimeout(() => setMostrarSugerenciasOperador(false), 180)}
+                  style={{ width: '100%', padding: '10px 10px 10px 32px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
+
+            {!filterOperador && mostrarSugerenciasOperador && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0,
+                backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px',
+                maxHeight: '320px', overflowY: 'auto', zIndex: 100, marginTop: '4px',
+                boxShadow: '0 6px 16px rgba(0,0,0,0.5)'
+              }}>
+                {operadoresFiltradosBuscador.length === 0 ? (
+                  <div style={{ padding: '14px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>
+                    {textoBuscarOperador.trim() ? 'Sin coincidencias' : 'No hay operadores cargados'}
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ padding: '6px 12px', fontSize: '0.7rem', color: '#8b949e', borderBottom: '1px solid #21262d', backgroundColor: '#161b22' }}>
+                      {operadoresFiltradosBuscador.length} {operadoresFiltradosBuscador.length === 1 ? 'operador' : 'operadores'}{textoBuscarOperador.trim() ? '' : ' (primeros 30)'}
+                    </div>
+                    {operadoresFiltradosBuscador.map((emp: any) => (
+                      <div
+                        key={emp.id}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setFilterOperador(String(emp.id));
+                          setTextoBuscarOperador('');
+                          setMostrarSugerenciasOperador(false);
+                        }}
+                        style={{ padding: '10px 12px', cursor: 'pointer', color: '#c9d1d9', fontSize: '0.88rem', borderBottom: '1px solid #21262d', transition: 'background-color 0.15s' }}
+                        onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'}
+                        onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        <div style={{ fontWeight: '500' }}>{etiquetaOperador(emp) || emp.id}</div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ✅ NUEVO: filtro por TIPO DE OPERACIÓN (Transfer / Logística / Fletes) */}
+          <div style={{ flex: '1 1 180px' }}>
+            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>TIPO DE OPERACIÓN (opcional)</label>
+            <select
+              value={filterTipoOperacion}
+              onChange={(e) => setFilterTipoOperacion(e.target.value)}
+              style={{ width: '100%', padding: '10px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }}
+            >
+              <option value="">Todas</option>
+              <option value="transfer">Transfer</option>
+              <option value="logistica">Logística</option>
+              <option value="fletes">Fletes</option>
+            </select>
+          </div>
+
+          <div style={{ flex: '1 1 200px' }}>
+            <label style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', marginBottom: '6px', fontWeight: 'bold' }}>FILTRO GENERAL (opcional)</label>
+            <div style={{ position: 'relative' }}>
+              <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input type="text" placeholder="Buscar por Ref..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} style={{ width: '100%', padding: '10px 10px 10px 36px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
+            </div>
+          </div>
+
           <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-end', marginLeft: 'auto', paddingBottom: '2px' }}>
+            <button className="btn btn-outline" onClick={refrescarDatos} disabled={cargandoOperaciones} style={{ padding: '10px 12px', cursor: cargandoOperaciones ? 'wait' : 'pointer' }} title="Actualizar (recargar desde la base de datos)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            </button>
             <button className="btn btn-outline" onClick={() => setModalColumnas(true)} style={{ padding: '10px 12px' }} title="Configurar Columnas">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-            </button>
-            <button className="btn btn-outline" onClick={forzarRecarga} style={{ padding: '10px 12px' }} title="Recargar Catálogos">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 0 20.49 15"></path></svg>
             </button>
             <button className="btn btn-outline" onClick={exportarExcel} style={{ padding: '10px 12px' }} title="Exportar a Excel">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -1201,11 +1726,117 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
           </div>
         </div>
 
+        {(filterFechaInicio && filterFechaFin) && (
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Servicios (rango)</span>
+                <span style={{ ...cardValueStyle, color: '#f0f6fc' }}>{resumenServicios.total}</span>
+              </div>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Completados</span>
+                <span style={{ ...cardValueStyle, color: '#10b981' }}>{resumenServicios.completados}</span>
+              </div>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Falsos</span>
+                <span style={{ ...cardValueStyle, color: '#f85149' }}>{resumenServicios.falsos}</span>
+              </div>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Cargaron Diésel</span>
+                <span style={{ ...cardValueStyle, color: '#f59e0b' }}>{resumenServicios.conDiesel}</span>
+              </div>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Pagados Nómina</span>
+                <span style={{ ...cardValueStyle, color: '#a371f7' }}>{resumenServicios.conNomina}</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginTop: '12px' }}>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Facturados Cliente</span>
+                <span style={{ ...cardValueStyle, color: '#10b981' }}>{resumenServicios.factCliente}</span>
+              </div>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Pendientes Cliente</span>
+                <span style={{ ...cardValueStyle, color: '#f59e0b' }}>{resumenServicios.pendCliente}</span>
+              </div>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Facturados Proveedor</span>
+                <span style={{ ...cardValueStyle, color: '#58a6ff' }}>{resumenServicios.factProveedor}</span>
+              </div>
+              <div style={cardResumenStyle}>
+                <span style={cardLabelStyle}>Pendientes Proveedor</span>
+                <span style={{ ...cardValueStyle, color: '#f59e0b' }}>{resumenServicios.pendProveedor}</span>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '14px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '8px', padding: '14px 16px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px' }}>
+                <span style={{ color: '#f0f6fc', fontWeight: 'bold', fontSize: '0.9rem' }}>Totales exactos (servidor)</span>
+                <span style={{ color: '#8b949e', fontSize: '0.78rem', flex: '1 1 200px' }}>
+                  Cuenta TODA la base sin importar el límite de descarga. No descarga operaciones.
+                </span>
+                <button
+                  onClick={() => calcularTotalesServidor('rango')}
+                  disabled={conteosServidor.cargando}
+                  style={{ padding: '8px 14px', backgroundColor: conteosServidor.cargando ? '#0d1117' : '#238636', color: conteosServidor.cargando ? '#484f58' : '#fff', border: 'none', borderRadius: '6px', cursor: conteosServidor.cargando ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.82rem' }}
+                  title="Cuenta exactamente los completados del rango/cliente seleccionado"
+                >
+                  Σ Total del rango
+                </button>
+                <button
+                  onClick={() => calcularTotalesServidor('global')}
+                  disabled={conteosServidor.cargando}
+                  style={{ padding: '8px 14px', backgroundColor: conteosServidor.cargando ? '#0d1117' : '#1f6feb', color: conteosServidor.cargando ? '#484f58' : '#fff', border: 'none', borderRadius: '6px', cursor: conteosServidor.cargando ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.82rem' }}
+                  title="Cuenta TODA la base de completados, sin fechas ni cliente"
+                >
+                  Σ Total global (sin filtros)
+                </button>
+              </div>
+
+              {conteosServidor.cargando && (
+                <div style={{ marginTop: '12px', color: '#8b949e', fontSize: '0.85rem' }}>Contando en el servidor...</div>
+              )}
+
+              {conteosServidor.error && !conteosServidor.cargando && (
+                <div style={{ marginTop: '12px', color: '#f85149', fontSize: '0.82rem' }}>{conteosServidor.error}</div>
+              )}
+
+              {!conteosServidor.cargando && !conteosServidor.error && conteosServidor.total !== null && (
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ color: '#8b949e', fontSize: '0.75rem', marginBottom: '8px' }}>
+                    Resultado: <span style={{ color: '#fb923c', fontWeight: 'bold' }}>{conteosServidor.alcance === 'global' ? 'TODA la base (sin filtros)' : 'Rango / cliente seleccionado'}</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
+                    <div style={cardResumenStyle}>
+                      <span style={cardLabelStyle}>Total (real)</span>
+                      <span style={{ ...cardValueStyle, color: '#f0f6fc' }}>{conteosServidor.total}</span>
+                    </div>
+                    <div style={cardResumenStyle}>
+                      <span style={cardLabelStyle}>Completados (real)</span>
+                      <span style={{ ...cardValueStyle, color: '#10b981' }}>{conteosServidor.completados}</span>
+                    </div>
+                    <div style={cardResumenStyle}>
+                      <span style={cardLabelStyle}>Falsos (real)</span>
+                      <span style={{ ...cardValueStyle, color: '#f85149' }}>{conteosServidor.falsos !== null ? conteosServidor.falsos : 'N/D'}</span>
+                    </div>
+                  </div>
+                  {conteosServidor.falsos === null && (
+                    <div style={{ marginTop: '8px', color: '#fb923c', fontSize: '0.78rem' }}>
+                      ⚠ No se encontró un status llamado "Falso" en el catálogo, por eso no se separan los falsos. El "Total" sí es exacto.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="content-body" style={{ display: 'block', width: '100%' }}>
           <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)', width: '100%' }}>
-            {(cargandoOperaciones || buscandoRefRemota) ? (
+            {cargandoOperaciones ? (
               <div style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>
-                {buscandoRefRemota ? 'Buscando referencia...' : 'Cargando operaciones completadas...'}
+                Cargando operaciones completadas...
               </div>
             ) : (
               <table className="data-table" style={{ width: '100%', minWidth: '1300px', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -1222,16 +1853,16 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                   </tr>
                 </thead>
                 <tbody>
-                  {(!filterCliente && !busqueda.trim()) ? (
+                  {(!filterFechaInicio || !filterFechaFin) ? (
                     <tr>
                       <td colSpan={columnasTabla.length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e', fontWeight: '500' }}>
-                        Selecciona un cliente o escribe una referencia en el filtro general.
+                        Selecciona <strong style={{ color: '#10b981' }}>Fecha Inicio</strong> y <strong style={{ color: '#10b981' }}>Fecha Fin</strong> para buscar las operaciones completadas.
                       </td>
                     </tr>
                   ) : operacionesEnPantalla.length === 0 ? (
                     <tr>
                       <td colSpan={columnasTabla.length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
-                        {!filterCliente ? 'No se encontró ninguna operación completada con esa referencia.' : 'Sin resultados para los filtros seleccionados.'}
+                        Sin resultados para el rango de fechas y los filtros seleccionados.
                       </td>
                     </tr>
                   ) : (
@@ -1239,34 +1870,25 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                       <tr key={op.id} style={{ borderBottom: '1px solid #21262d', backgroundColor: hoveredRowId === op.id ? '#21262d' : '#0d1117', transition: 'background-color 0.2s', cursor: 'pointer' }} onMouseEnter={() => setHoveredRowId(op.id)} onMouseLeave={() => setHoveredRowId(null)} onClick={() => { setOperacionViendo(op); setPestañaDetalleActiva('general'); }}>
                         <td style={{ padding: '16px', textAlign: 'center', position: 'sticky', left: 0, backgroundColor: 'inherit', zIndex: 5, borderRight: '1px solid #30363d' }} onClick={(e: any) => e.stopPropagation()}>
                           <div className="actions-cell" style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                            <button 
-                              type="button" 
-                              title="Ver Detalles"
+                            <button type="button" title="Ver Detalles"
                               onClick={(e) => { e.stopPropagation(); setOperacionViendo(op); setPestañaDetalleActiva('general'); }} 
                               style={{ background: 'transparent', border: '1px solid #10b981', borderRadius: '4px', color: '#10b981', cursor: 'pointer', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }} 
                               onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.1)'} 
-                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
-                            >
+                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                             </button>
-                            <button 
-                              type="button" 
-                              title="Editar"
+                            <button type="button" title="Editar"
                               onClick={(e) => handleEditarOperacion(op, e)} 
                               style={{ background: 'transparent', border: '1px solid #58a6ff', borderRadius: '4px', color: '#58a6ff', cursor: 'pointer', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }} 
                               onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(88, 166, 255, 0.1)'} 
-                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
-                            >
+                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                             </button>
-                            <button 
-                              type="button" 
-                              title="Eliminar"
+                            <button type="button" title="Eliminar"
                               onClick={(e) => handleEliminarOperacion(op, e)} 
                               style={{ background: 'transparent', border: '1px solid #f85149', borderRadius: '4px', color: '#f85149', cursor: 'pointer', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }} 
                               onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(248, 81, 73, 0.1)'} 
-                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}
-                            >
+                              onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                             </button>
                           </div>
@@ -1284,29 +1906,19 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
             )}
           </div>
 
-          {operacionesFiltradas.length > 0 && !cargandoOperaciones && !buscandoRefRemota && (
+          {operacionesFiltradas.length > 0 && !cargandoOperaciones && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', padding: '0 8px', flexWrap: 'wrap', gap: '10px' }}>
               <div style={{ color: '#8b949e', fontSize: '0.9rem' }}>
                 Mostrando {indicePrimerRegistro + 1} - {Math.min(indiceUltimoRegistro, operacionesFiltradas.length)} de {operacionesFiltradas.length} operaciones completadas
-                {filterCliente && hayMasOperaciones && <span style={{ color: '#fb923c', marginLeft: '8px' }}>(hay más disponibles)</span>}
+                {hayMasOperaciones && <span style={{ color: '#fb923c', marginLeft: '8px' }}>(hay más disponibles)</span>}
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {/* ✅ NUEVO: botón Cargar más (sólo aplica cuando hay cliente seleccionado) */}
-                {filterCliente && hayMasOperaciones && (
+                {hayMasOperaciones && (
                   <button
                     onClick={cargarMasOperaciones}
                     disabled={cargandoMas}
-                    style={{
-                      padding: '6px 14px',
-                      backgroundColor: cargandoMas ? '#0d1117' : '#D84315',
-                      color: cargandoMas ? '#484f58' : '#fff',
-                      border: '1px solid #D84315',
-                      borderRadius: '6px',
-                      cursor: cargandoMas ? 'not-allowed' : 'pointer',
-                      fontWeight: 'bold',
-                      fontSize: '0.85rem'
-                    }}
-                    title="Descargar el siguiente bloque de operaciones del cliente"
+                    style={{ padding: '6px 14px', backgroundColor: cargandoMas ? '#0d1117' : '#D84315', color: cargandoMas ? '#484f58' : '#fff', border: '1px solid #D84315', borderRadius: '6px', cursor: cargandoMas ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.85rem' }}
+                    title="Descargar el siguiente bloque de operaciones del rango"
                   >
                     {cargandoMas ? 'Cargando...' : `+ Cargar más (${TAMANIO_PAGINA})`}
                   </button>
@@ -1325,38 +1937,72 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '1000px', maxWidth: '95%', padding: '24px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', borderBottom: '1px solid #30363d', paddingBottom: '12px' }}>
               <h3 style={{ margin: 0, color: '#f0f6fc' }}>Configurar Columnas</h3>
-              <button onClick={() => setModalColumnas(false)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+              <button onClick={() => { setModalColumnas(false); setBusquedaColumnas(''); }} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
-            <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '24px' }}>Arrastra los campos para reordenarlos. Desmarca los que desees ocultar de la tabla principal y del reporte de Excel.</p>
-            
+            <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '16px' }}>Arrastra los campos para reordenarlos. Desmarca los que desees ocultar de la tabla principal y del reporte de Excel.</p>
+
+            {/* ✅ NUEVO: buscador de columnas por nombre */}
+            <div style={{ position: 'relative', marginBottom: '20px' }}>
+              <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input
+                type="text"
+                value={busquedaColumnas}
+                onChange={(e) => setBusquedaColumnas(e.target.value)}
+                placeholder="Buscar columna por nombre..."
+                style={{ width: '100%', padding: '10px 12px 10px 38px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }}
+              />
+              {busquedaColumnas && (
+                <button
+                  onClick={() => setBusquedaColumnas('')}
+                  title="Limpiar búsqueda"
+                  style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1rem', lineHeight: 1 }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
             <ul style={{ 
               listStyle: 'none', padding: 0, margin: 0, maxHeight: '60vh', overflowY: 'auto', 
               display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' 
             }}>
-              {columnasTabla.map((col, idx) => (
-                <li 
-                  key={col.id}
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, idx)}
-                  onDragEnter={() => handleDragEnter(idx)}
-                  onDragEnd={() => setDraggedColIndex(null)}
-                  onDragOver={(e) => e.preventDefault()}
-                  style={{ 
-                    display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', 
-                    backgroundColor: draggedColIndex === idx ? '#1f2937' : '#161b22', 
-                    border: '1px solid #30363d', borderRadius: '6px', cursor: 'grab',
-                    transition: 'background-color 0.2s'
-                  }}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b949e" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-                  <input type="checkbox" checked={col.visible} onChange={() => toggleColumnaVisible(idx)} style={{ cursor: 'pointer', transform: 'scale(1.2)' }} />
-                  <span style={{ color: col.visible ? '#c9d1d9' : '#484f58', fontSize: '0.85rem', fontWeight: col.visible ? 'bold' : 'normal', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
-                </li>
-              ))}
+              {columnasTabla.map((col, idx) => {
+                // Se conserva el índice real (idx) para que arrastrar y marcar/desmarcar
+                // sigan funcionando; solo ocultamos los que no coinciden con la búsqueda.
+                if (busquedaColumnas.trim() && !col.label.toLowerCase().includes(busquedaColumnas.trim().toLowerCase())) {
+                  return null;
+                }
+                return (
+                  <li 
+                    key={col.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, idx)}
+                    onDragEnter={() => handleDragEnter(idx)}
+                    onDragEnd={() => setDraggedColIndex(null)}
+                    onDragOver={(e) => e.preventDefault()}
+                    style={{ 
+                      display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', 
+                      backgroundColor: draggedColIndex === idx ? '#1f2937' : '#161b22', 
+                      border: '1px solid #30363d', borderRadius: '6px', cursor: 'grab',
+                      transition: 'background-color 0.2s'
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b949e" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                    <input type="checkbox" checked={col.visible} onChange={() => toggleColumnaVisible(idx)} style={{ cursor: 'pointer', transform: 'scale(1.2)' }} />
+                    <span style={{ color: col.visible ? '#c9d1d9' : '#8b949e', fontSize: '0.85rem', fontWeight: col.visible ? 'bold' : 'normal', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
+                  </li>
+                );
+              })}
             </ul>
 
+            {busquedaColumnas.trim() && !columnasTabla.some(c => c.label.toLowerCase().includes(busquedaColumnas.trim().toLowerCase())) && (
+              <div style={{ color: '#8b949e', fontSize: '0.85rem', textAlign: 'center', padding: '20px' }}>
+                No hay columnas que coincidan con "{busquedaColumnas}".
+              </div>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px', borderTop: '1px solid #30363d', paddingTop: '16px' }}>
-              <button onClick={() => setModalColumnas(false)} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 32px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Aplicar Cambios</button>
+              <button onClick={() => { setModalColumnas(false); setBusquedaColumnas(''); }} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 32px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Aplicar Cambios</button>
             </div>
           </div>
         </div>
@@ -1372,12 +2018,21 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                   <h2 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.6rem', fontWeight: 600, letterSpacing: '-0.5px' }}>
                     Detalle de Operación Completada
                   </h2>
-                  <div style={{ marginTop: '8px', color: '#10b981', fontWeight: 'bold', fontSize: '1.1rem', letterSpacing: '0.5px' }}>
-                    {operacionViendo.ref || operacionViendo.id?.substring(0,6)}
+                  <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <span style={{ color: '#10b981', fontWeight: 'bold', fontSize: '1.1rem', letterSpacing: '0.5px' }}>
+                      {operacionViendo.ref || operacionViendo.id?.substring(0,6)}
+                    </span>
+                    <span style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', padding: '4px 12px', borderRadius: '12px', fontSize: '0.85rem', border: '1px solid rgba(16, 185, 129, 0.3)', fontWeight: 'bold' }}>
+                      {mostrarDatoMapeado(operacionViendo.status, 'statusServicio', 'nombre', operacionViendo.statusNombre)}
+                    </span>
                   </div>
                 </div>
                 
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <button onClick={() => setMostrarDocumentos(true)} title="Ver / Subir Documentos" style={{ ...btnSecondaryActionStyle, color: '#fb923c', borderColor: 'rgba(251, 146, 60, 0.4)' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                    Documentos
+                  </button>
                   <button onClick={verHistorial} title="Ver Bitácora (Historial)" style={btnSecondaryActionStyle}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
                     Bitácora
@@ -1395,6 +2050,82 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                   </button>
                 </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', paddingBottom: '4px' }}>
+                <span style={{ color: '#8b949e', fontSize: '0.7rem', fontWeight: 'bold', letterSpacing: '1px', marginRight: '4px' }}>CONEXIONES</span>
+                <span style={{ color: '#8b949e', fontSize: '0.78rem' }}>Diésel:</span>
+                {operacionViendo.referenciaDieselConsecutivo ? chipConexion(operacionViendo.referenciaDieselConsecutivo, '#f59e0b') : <span style={{ color: '#484f58', fontSize: '0.8rem' }}>Sin cargar</span>}
+                <span style={{ color: '#8b949e', fontSize: '0.78rem', marginLeft: '8px' }}>Nómina:</span>
+                {operacionViendo.referenciaNominaConsecutivo ? chipConexion(operacionViendo.referenciaNominaConsecutivo, '#a371f7') : <span style={{ color: '#484f58', fontSize: '0.8rem' }}>Sin pagar</span>}
+                <span style={{ color: '#8b949e', fontSize: '0.78rem', marginLeft: '8px' }}>Factura Cliente:</span>
+                {(operacionViendo.facturaClienteInvoice || operacionViendo.facturado) ? chipConexion(operacionViendo.facturaClienteInvoice || 'Facturada', '#10b981') : <span style={{ color: '#484f58', fontSize: '0.8rem' }}>Pendiente</span>}
+                <span style={{ color: '#8b949e', fontSize: '0.78rem', marginLeft: '8px' }}>Factura Proveedor:</span>
+                {(operacionViendo.facturaProveedorFolio || operacionViendo.facturadoProveedor) ? chipConexion(operacionViendo.facturaProveedorFolio || 'Facturada', '#58a6ff') : <span style={{ color: '#484f58', fontSize: '0.8rem' }}>Pendiente</span>}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 0 10px 0', borderTop: '1px solid #30363d', flexWrap: 'wrap' }}>
+                <span style={{ color: '#8b949e', fontSize: '0.7rem', fontWeight: 'bold', letterSpacing: '1px', marginRight: '4px' }}>SIGUIENTE PASO</span>
+                {botonesDisponibles.length > 0 ? (
+                  <>
+                    {botonesDisponibles.map((botonStr: string) => {
+                      const esExitoso = ultimoStatusGuardado === botonStr;
+                      return (
+                        <button key={botonStr} onClick={() => registrarStatusRapido(botonStr)} disabled={guardandoStatusRapido !== null} className="status-pill"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', padding: '6px 18px 6px 6px', borderRadius: '999px', border: 'none',
+                            background: esExitoso ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)',
+                            color: '#fff', cursor: guardandoStatusRapido && !esExitoso ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.9rem',
+                            boxShadow: esExitoso ? '0 4px 14px rgba(16, 185, 129, 0.4)' : '0 4px 14px rgba(234, 88, 12, 0.35)',
+                            transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                            opacity: guardandoStatusRapido && !esExitoso && guardandoStatusRapido !== botonStr ? 0.4 : 1, position: 'relative', overflow: 'hidden' }}
+                          title={`Marcar como: ${botonStr}`}>
+                          <span style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(255,255,255,0.22)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            {esExitoso ? (
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'pop 0.3s ease-out' }}>
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                              </svg>
+                            ) : (
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="9 18 15 12 9 6"></polyline>
+                              </svg>
+                            )}
+                          </span>
+                          <span style={{ whiteSpace: 'nowrap' }}>{botonStr}</span>
+                        </button>
+                      );
+                    })}
+                    <button onClick={abrirRegistroHorario} className="status-circle-btn"
+                      style={{ width: 36, height: 36, borderRadius: '50%', background: '#21262d', border: '1px solid #30363d', color: '#8b949e',
+                        cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s ease', flexShrink: 0 }}
+                      title="Registrar con fecha/hora distinta (retroactivo)">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                      </svg>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: '#8b949e', fontSize: '0.85rem', fontStyle: 'italic', marginRight: '8px' }}>
+                      No hay transiciones automáticas configuradas.
+                    </span>
+                    <button onClick={abrirRegistroHorario} className="status-pill"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', padding: '6px 18px 6px 6px', borderRadius: '999px', border: 'none',
+                        background: 'linear-gradient(135deg, #ea580c 0%, #c2410c 100%)', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
+                        boxShadow: '0 4px 14px rgba(234, 88, 12, 0.35)', transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)' }}
+                      title="Registrar status manualmente">
+                      <span style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(255,255,255,0.22)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="12" y1="5" x2="12" y2="19"></line>
+                          <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                      </span>
+                      Registrar Status
+                    </button>
+                  </>
+                )}
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 0', borderTop: '1px solid #30363d', marginTop: '4px', flexWrap: 'wrap' }}>
@@ -1458,11 +2189,11 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                 <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Operación</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.tipoOperacionNombre || operacionViendo.tipoOperacionId || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', operacionViendo.tipoOperacionNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Servicio / Status</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDato(operacionViendo.fechaServicio)} <span style={{color: '#30363d', margin: '0 8px'}}>|</span> <span style={{color: '#10b981', fontWeight: 'bold'}}>{operacionViendo.statusNombre || operacionViendo.status || '-'}</span></span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDato(operacionViendo.fechaServicio)} <span style={{color: '#30363d', margin: '0 8px'}}>|</span> <span style={{color: '#10b981', fontWeight: 'bold'}}>{mostrarDatoMapeado(operacionViendo.status, 'statusServicio', 'nombre', operacionViendo.statusNombre)}</span></span>
                   </div>
                   
                   {evalIsFletes ? (
@@ -1478,15 +2209,15 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
 
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Paga)</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDato(operacionViendo.clienteNombre || operacionViendo.nombreCliente || operacionViendo.clientePaga)}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.clientePaga || operacionViendo.clienteId, 'empresas', 'nombre', operacionViendo.clienteNombre || operacionViendo.nombreCliente)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio (Tarifa)</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.convenioNombre || operacionViendo.convenio || '-'}</span> 
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{obtenerNombreConvenioCliente(operacionViendo.convenio, operacionViendo.convenioNombre)}</span> 
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># de Remolque</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.remolquePlaca || operacionViendo.numeroRemolque || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.numeroRemolque, 'remolques', 'nombre', operacionViendo.remolqueNombre || operacionViendo.remolquePlaca)}</span>
                   </div>
                   
                   <div>
@@ -1495,11 +2226,11 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Origen</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.origenNombre || operacionViendo.origen || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.origen, 'empresas', 'nombre', operacionViendo.origenNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Destino</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.destinoNombre || operacionViendo.destino || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.destino, 'empresas', 'nombre', operacionViendo.destinoNombre)}</span>
                   </div>
                   <div style={{ gridColumn: '1 / -1', marginTop: '8px' }}>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Observaciones Ejecutivo</span>
@@ -1514,7 +2245,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                 <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                   <div style={{ gridColumn: 'span 2' }}>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Mercancía)</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.clienteMercanciaNombre || operacionViendo.clienteMercancia || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.clienteMercancia, 'empresas', 'nombre', operacionViendo.clienteMercanciaNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Descripción de la Mercancía</span>
@@ -1527,7 +2258,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Embalaje</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.embalajeNombre || operacionViendo.embalaje || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.embalaje, 'embalajes', 'clave', operacionViendo.embalajeNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Peso (Kg) Decimales</span>
@@ -1563,7 +2294,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Servicios</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.provServiciosNombre || operacionViendo.provServicios || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.provServicios, 'empresas', 'nombre', operacionViendo.provServiciosNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Costo Manifiesto ($)</span>
@@ -1577,7 +2308,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
                     <div style={{ gridColumn: 'span 3' }}>
                       <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Transporte</span>
-                      <span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '1.1rem' }}>{operacionViendo.proveedorUnidadNombre || operacionViendo.proveedorUnidad || '-'}</span>
+                      <span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '1.1rem' }}>{mostrarDatoMapeado(operacionViendo.proveedorUnidad, 'empresas', 'nombre', operacionViendo.proveedorUnidadNombre)}</span>
                     </div>
                   </div>
 
@@ -1589,7 +2320,7 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                       </div>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio Proveedor</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.convenioProveedorNombre || operacionViendo.convenioProveedor || '-'}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{obtenerNombreConvenioProv(operacionViendo.convenioProveedor, operacionViendo.convenioProveedorNombre)}</span>
                       </div>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Moneda del Convenio (Base)</span>
@@ -1633,11 +2364,11 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                       <div style={{ gridColumn: 'span 3' }}><h4 style={{ color: '#f0f6fc', margin: '0 0 8px 0' }}>Flota Operativa (Roelca)</h4></div>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Unidad Asignada</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.unidadNombre || operacionViendo.unidad || '-'}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.unidad, 'unidades', 'unidad', operacionViendo.unidadNombre)}</span>
                       </div>
                       <div style={{ gridColumn: 'span 2' }}>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Operador Asignado</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.operadorNombre || operacionViendo.operador || '-'}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.operador, 'empleados', 'nombre', operacionViendo.operadorNombre)}</span>
                       </div>
                       
                       <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '0' }} /></div>
@@ -1677,26 +2408,27 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
                       <div style={{ gridColumn: 'span 3' }}><h4 style={{ color: '#58a6ff', margin: '0 0 8px 0' }}>Flota Externa (Proveedor)</h4></div>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Unidad Externa</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDato(operacionViendo.unidadProveedor)}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.unidadProveedor, 'unidades_proveedor', 'numeroUnidad', operacionViendo.unidadProveedorNombre)}</span>
                       </div>
                       <div style={{ gridColumn: 'span 2' }}>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Operador Externo</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDato(operacionViendo.operadorProveedor)}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.operadorProveedor, 'proveedores_unidad', 'nombre', operacionViendo.operadorProveedorNombre)}</span>
                       </div>
                     </div>
                   )}
+
+                  {/* ✅ Observaciones ARRIBA del bloque de gastos (a petición) */}
+                  <div style={{ marginTop: '24px' }}>
+                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '8px' }}>Observaciones (Unidad / Proveedor)</span>
+                    <div style={{ color: '#c9d1d9', fontWeight: '500', backgroundColor: '#010409', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', minHeight: '60px' }}>
+                      {mostrarDato(operacionViendo.observacionesUnidad)}
+                    </div>
+                  </div>
 
                   <div style={{ gridColumn: 'span 3', marginTop: '20px' }}>
                     <div style={{ backgroundColor: '#0d1117', border: '1px solid #f85149', padding: '20px', borderRadius: '8px', textAlign: 'center' }}>
                       <div style={{ color: '#8b949e', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>Total Gastos [Sueldos + Manifiesto]</div>
                       <div style={{ color: '#f85149', fontSize: '2rem', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.totalGastos)}</div>
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: '24px' }}>
-                    <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '8px' }}>Observaciones (Unidad / Proveedor)</span>
-                    <div style={{ color: '#c9d1d9', fontWeight: '500', backgroundColor: '#010409', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', minHeight: '60px' }}>
-                      {mostrarDato(operacionViendo.observacionesUnidad)}
                     </div>
                   </div>
 
@@ -1771,8 +2503,8 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
         </div>
       )}
 
-      {/* ✅ NUEVO: Editor integrado (sólo se usa si NO se pasó la prop onEditar) */}
-      {operacionEditando && (
+      {/* ✅ Editor integrado DESHABILITADO: ahora "Editar" abre el FormularioOperacion completo */}
+      {false && operacionEditando && (
         <div className="modal-overlay" style={{ zIndex: 1600 }}>
           <div className="form-card" style={{ maxWidth: '1000px', maxHeight: '90vh', backgroundColor: '#0d1117', border: '1px solid #58a6ff', borderRadius: '12px', display: 'flex', flexDirection: 'column' }}>
 
@@ -1965,6 +2697,110 @@ const ServiciosCompletados: React.FC<ServiciosCompletadosProps> = ({ onEditar })
           </div>
         </div>
       )}
+
+      {modalHorarios === 'registrar' && (
+        <div className="modal-overlay" style={{ zIndex: 2000 }}>
+          <div className="form-card" style={{ maxWidth: '450px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px' }}>
+            <div className="form-header" style={{ borderBottom: '1px solid #30363d', padding: '20px 24px' }}>
+              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#f0f6fc' }}>Registrar Movimiento (Fecha Personalizada)</h2>
+              <button onClick={() => setModalHorarios('cerrado')} className="btn-window close">✕</button>
+            </div>
+            <div style={{ padding: '24px' }}>
+              <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '16px' }}>
+                Usa este formulario solo si necesitas registrar un movimiento con una fecha y hora distinta a la actual.
+              </p>
+              <div className="form-group">
+                <label className="form-label" style={{ color: '#8b949e' }}>Fecha y Hora</label>
+                <input type="datetime-local" className="form-control" value={nuevaFechaHora} onChange={e => setNuevaFechaHora(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label" style={{ color: '#8b949e' }}>Estatus / Hito</label>
+                <select className="form-control" value={nuevoStatus} onChange={e => setNuevoStatus(e.target.value)}>
+                  <option value="">-- Selecciona un status --</option>
+                  {botonesDisponibles.length > 0 ? (
+                    botonesDisponibles.map((botonStr: string) => (
+                      <option key={botonStr} value={botonStr}>{botonStr}</option>
+                    ))
+                  ) : (
+                    (catalogosGlobales.statusServicio || [])
+                      .filter((s: any) => s.nombre)
+                      .map((s: any) => (
+                        <option key={s.id} value={s.nombre}>{s.nombre}</option>
+                      ))
+                  )}
+                </select>
+              </div>
+              <button onClick={guardarHorario} disabled={cargandoHorarios} className="btn btn-primary" style={{ width: '100%', marginTop: '24px', padding: '12px', borderRadius: '6px', fontWeight: 'bold' }}>
+                {cargandoHorarios ? 'Actualizando...' : 'Guardar y Actualizar Operación'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mostrarDocumentos && operacionViendo && (
+        <div className="modal-overlay" style={{ zIndex: 2100 }}>
+          <div className="form-card" style={{ maxWidth: '760px', width: '95%', maxHeight: '88vh', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', display: 'flex', flexDirection: 'column' }}>
+            <div className="form-header" style={{ borderBottom: '1px solid #30363d', padding: '18px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.15rem', color: '#f0f6fc' }}>Documentos de la Operación</h2>
+                <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: '#8b949e' }}>
+                  Referencia: <span style={{ color: '#fb923c', fontWeight: 600 }}>{refOperacionViendo}</span>
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => setMostrarSubirDocOp(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '8px 14px', backgroundColor: '#D84315', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                  Subir Documento
+                </button>
+                <button onClick={() => setMostrarDocumentos(false)} style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1 }} title="Cerrar">✕</button>
+              </div>
+            </div>
+            <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+              <DocumentosLista coleccionOrigen="operaciones" registroId={operacionViendo.id} />
+            </div>
+            <div style={{ padding: '14px 24px', borderTop: '1px solid #30363d', textAlign: 'right', backgroundColor: '#161b22', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
+              <button onClick={() => setMostrarDocumentos(false)} className="btn btn-outline" style={{ padding: '10px 24px', borderRadius: '6px' }}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {operacionViendo && (
+        <DocumentoUploadModal
+          isOpen={mostrarSubirDocOp && !!operacionViendo}
+          onClose={() => setMostrarSubirDocOp(false)}
+          coleccionOrigen="operaciones"
+          registroId={operacionViendo.id}
+          registroNombre={refOperacionViendo}
+          tiposDocumento={TIPOS_DOCUMENTO_OPERACION}
+        />
+      )}
+
+      <style>{`
+        @keyframes pop {
+          0%   { transform: scale(0); opacity: 0; }
+          60%  { transform: scale(1.3); opacity: 1; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        .status-pill { transform: translateY(0); }
+        .status-pill:not(:disabled):hover {
+          transform: translateY(-2px);
+          filter: brightness(1.08);
+          box-shadow: 0 8px 20px rgba(234, 88, 12, 0.5) !important;
+        }
+        .status-pill:not(:disabled):active { transform: translateY(0); filter: brightness(0.95); }
+        .status-circle-btn:hover {
+          background: #30363d !important;
+          color: #ea580c !important;
+          border-color: #ea580c !important;
+          transform: scale(1.08);
+        }
+      `}</style>
 
     </div>
   );

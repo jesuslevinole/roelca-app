@@ -1,32 +1,23 @@
 // src/features/facturacion/components/FacturacionProveedoresDashboard.tsx
 //
 // ═══════════════════════════════════════════════════════════════════════
-// FACTURACIÓN DE PROVEEDORES
-// Espejo del módulo de Clientes, pero trabajando el lado "POR PAGAR" de cada
-// operación (proveedor de transporte) en lugar del lado "Por Cobrar".
+// PARIDAD TOTAL CON FacturacionClientesDashboard (lado "POR PAGAR")
+// ═══════════════════════════════════════════════════════════════════════
+// Este módulo replica EXACTAMENTE el comportamiento del de Clientes, pero
+// trabajando el lado del PROVEEDOR de transporte:
+//   subtotal   = totalAPagarProv + cargosAdicionalesProv
+//   moneda     = facturadoEnUnidad / monedaUnidadNombre
+//   conversión = conversionProv (o recálculo USD/MXN)
+//   Facturas en `facturas_proveedores`; la operación facturada se marca con
+//   facturaProveedorId / facturaProveedorFolio / facturadoProveedor.
 //
-// Diferencias clave respecto al de Clientes:
-//  · Buscador y filtro por PROVEEDOR (campo `proveedorUnidad` en la operación).
-//  · Montos del proveedor: totalAPagarProv + cargosAdicionalesProv = subtotal;
-//    facturadoEnUnidad/monedaUnidadNombre define la moneda; conversionProv,
-//    dolaresProv, pesosProv son los valores guardados (si faltan se recalculan).
-//  · Facturas se guardan en la colección `facturas_proveedores`.
-//  · La operación facturada se marca con facturaProveedorId / facturadoProveedor.
-//
-// Conserva: selector + orden de columnas y exportación a Excel (con rango de
-// fechas) en ambas pestañas, detalle de operación al clicar una referencia,
-// orden por cabeceras, y filtros Pendientes/Facturadas con conteo.
-//
-// ⚠️ CONFIGURACIÓN: ajusta ID_TIPO_PROVEEDOR con el ID del tipo "Proveedor"
-//    de tu catálogo de empresas. Si lo dejas en '', el buscador mostrará TODAS
-//    las empresas. CAMPO_PROVEEDOR_OP es el campo de la operación que apunta al
-//    proveedor (por defecto 'proveedorUnidad').
+// ⚠️ CONFIG: ajusta ID_TIPO_PROVEEDOR con el ID del tipo "Proveedor" de tu
+//    catálogo de empresas. Vacío ('') = el buscador muestra TODAS las empresas.
 // ═══════════════════════════════════════════════════════════════════════
 
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   collection,
-  onSnapshot,
   query,
   writeBatch,
   doc,
@@ -35,54 +26,324 @@ import {
   where,
   getDocs,
   getDoc,
+  setDoc,
+  documentId,
+  startAfter,
 } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
 import * as XLSX from 'xlsx';
+import { exportarExcelProfesional } from './exportarExcelProfesional';
+import { generarRemisionPDF } from './generarRemisionPDF';
+import type { EmisorRemision, RemisionData } from './generarRemisionPDF';
+import { generarConfirmacionTarifaPDF, generarRateProveedorPDF } from './generarDocumentosProveedorPDF';
+import type { ConfirmacionTarifaData, RateProveedorData } from './generarDocumentosProveedorPDF';
+import { getAuth } from 'firebase/auth';
 
 // ──────────────────────────────────────────────────────────────────────
 // Constantes
 // ──────────────────────────────────────────────────────────────────────
-const ID_TIPO_PROVEEDOR = '';            // ID del tipo "Proveedor" en tiposEmpresa. Vacío = muestra todas las empresas.
+const ID_TIPO_PROVEEDOR = '';                 // ID del tipo "Proveedor" en tiposEmpresa. Vacío = muestra todas las empresas.
 const CAMPO_PROVEEDOR_OP = 'proveedorUnidad'; // campo de la operación que referencia al proveedor
 const STATUS_COMPLETADOS = ['f557b751', 'c2d57403'];
-const LIMITE_OPERACIONES_PROVEEDOR = 100;
 const ID_USD = '7dca62b3';
 const ID_MXN = 'f95d8894';
 
-// Columnas configurables del Historial de Facturas (tabla + Excel).
-// El campo `id` se usa para resolver el valor; `label` es el encabezado.
+const LIMITE_OPS_TODAS = 20000;
+const PAG_OPS = 1000;
+const SS_OPS = 'roelca_ops_prov_completadas_v2';
+const SS_OPS_TTL = 30 * 60 * 1000;
+
+const CONFIG_COLUMNAS_COLLECTION = 'config_columnas';
+
+// ✅ (REMISIÓN) Encabezados (emisores) por moneda — mismos docs que Clientes,
+// para que la configuración quede compartida entre ambos módulos.
+const DOC_REMISION_EMISORES = 'facturacion_remision_emisores';
+const LS_REMISION_EMISORES = 'cfg_remision_emisores_v1';
+// Emisor por defecto para remisiones en PESOS (MXN) → Rolando.
+const EMISOR_MXN_DEFAULT: EmisorRemision = {
+  facturaNombre: 'ROLANDO ROBERTO MONTALVO CISNEROS',
+  direccion: 'MAR DE LAS ANTILLAS 947, COL. LA PAZ',
+  ciudadEstado: 'NUEVO LAREDO, TAMPS | (867) 196 4690',
+  email: 'COBRANZA@ROELCA.COM',
+};
+// Emisor por defecto para remisiones en DÓLARES (USD) → Camila.
+const EMISOR_USD_DEFAULT: EmisorRemision = {
+  facturaNombre: 'CAMILA MONTALVO OSORIO',
+  direccion: 'MAR DE LAS ANTILLAS 947, COL. LA PAZ',
+  ciudadEstado: 'NUEVO LAREDO, TAMPS | (867) 196 4690',
+  email: 'COBRANZA@ROELCA.COM',
+};
+const DOC_COLUMNAS_OPS = 'facturacion_proveedores_ops';
+const DOC_COLUMNAS_HISTORIAL = 'facturacion_proveedores_historial';
+
+const LS_COLS_OPS = 'cfgcols_facturacion_prov_ops_v1';
+const LS_COLS_HIST = 'cfgcols_facturacion_prov_hist_v1';
+
+const leerCacheLocal = (alias: string): any[] | null => {
+  try {
+    const raw = localStorage.getItem(`cat_v1__${alias}`) || localStorage.getItem(`cat_v2__${alias}`);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    return obj && Array.isArray(obj.data) ? obj.data : null;
+  } catch { return null; }
+};
+
+const construirMapaCatalogos = (): Record<string, string> => {
+  const mapa: Record<string, string> = {};
+  const tomarNombre = (item: any): string | null => {
+    if (!item || item.id === undefined || item.id === null) return null;
+    const fn = item.firstName ?? item.first_name;
+    const lp = item.lastNamePaternal ?? item.last_name_paternal ?? item.apellidoPaterno;
+    if (fn || lp) {
+      const full = `${fn || ''} ${lp || ''}`.trim();
+      if (full) return full;
+    }
+    if (item.unidad && typeof item.unidad === 'string' && item.unidad.trim() !== '') return String(item.unidad).trim();
+    const placa = item.placas ?? item.placa;
+    if (item.nombre && placa) return `${item.nombre} ${placa}`.trim();
+    const n = item.nombre ?? item.nombreCorto ?? item.label ?? item.descripcion ?? item.name ?? item.titulo ?? item.moneda ?? item.tipo_operacion;
+    return (n !== undefined && n !== null && String(n) !== '') ? String(n) : null;
+  };
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || (key.indexOf('cat_v1__') !== 0 && key.indexOf('cat_v2__') !== 0)) continue;
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const obj = JSON.parse(raw);
+        const arr = obj && Array.isArray(obj.data) ? obj.data : (Array.isArray(obj) ? obj : null);
+        if (!arr) continue;
+        arr.forEach((item: any) => {
+          const n = tomarNombre(item);
+          if (n) mapa[String(item.id)] = n;
+        });
+      } catch { /* catálogo corrupto: ignorar */ }
+    }
+  } catch { /* localStorage no disponible */ }
+  try {
+    const rawV2 = localStorage.getItem('roelca_catalogos_v2');
+    if (rawV2) {
+      const obj = JSON.parse(rawV2);
+      Object.values(obj || {}).forEach((val: any) => {
+        const arr = Array.isArray(val) ? val : (val && Array.isArray(val.data) ? val.data : null);
+        if (!arr) return;
+        arr.forEach((item: any) => {
+          const n = tomarNombre(item);
+          if (n && !mapa[String(item.id)]) mapa[String(item.id)] = n;
+        });
+      });
+    }
+  } catch { /* noop */ }
+  return mapa;
+};
+
+const aplicarConfigColumnasGuardada = (base: any[], guardadas: any): any[] => {
+  if (!Array.isArray(guardadas) || guardadas.length === 0) return base.map((c: any) => ({ ...c }));
+  const baseById = new Map<string, any>(base.map((c: any) => [c.id, c]));
+  const resultado: any[] = [];
+  const usados = new Set<string>();
+  guardadas.forEach((g: any) => {
+    const def = baseById.get(g?.id);
+    if (def && !usados.has(g.id)) {
+      resultado.push({ ...def, visible: !!g.visible });
+      usados.add(g.id);
+    }
+  });
+  base.forEach((c: any) => { if (!usados.has(c.id)) resultado.push({ ...c }); });
+  return resultado;
+};
+
+const moverIdAlInicio = (cols: any[], id: string): any[] => {
+  const idx = cols.findIndex((c: any) => c.id === id);
+  if (idx <= 0) return cols;
+  const copia = [...cols];
+  const [el] = copia.splice(idx, 1);
+  copia.unshift(el);
+  return copia;
+};
+const moverStatusAlInicio = (cols: any[]): any[] => moverIdAlInicio(cols, 'statusFactura');
+
+const STATUS_FACTURA_OPCIONES = ['Facturado', 'Cancelado', 'No Facturado'];
+const colorStatusFactura = (s: any): string => {
+  const t = String(s || '').toLowerCase();
+  if (t.includes('cancel')) return '#f85149';
+  if (t.includes('no')) return '#f59e0b';
+  if (t.includes('factur')) return '#10b981';
+  return '#8b949e';
+};
+
 const COLUMNAS_FACTURA_BASE = [
-  { id: 'invoice',   label: 'Factura Prov.', visible: true },
-  { id: 'fecha',     label: 'Fecha',         visible: true },
-  { id: 'proveedor', label: 'Proveedor',     visible: true },
-  { id: 'moneda',    label: 'Moneda',        visible: true },
-  { id: 'facturaCcp',label: 'Referencia',    visible: true },
-  { id: 'cantOps',   label: 'Cant. Ops',     visible: true },
-  { id: 'total',     label: 'Total',         visible: true },
-  { id: 'createdAt', label: 'Registrada',    visible: false },
+  { id: 'statusFactura', label: 'Status',        visible: true },
+  { id: 'invoice',      label: 'Factura Prov.', visible: true },
+  { id: 'fecha',        label: 'Fecha',         visible: true },
+  { id: 'proveedor',    label: 'Proveedor',     visible: true },
+  { id: 'moneda',       label: 'Moneda',        visible: true },
+  { id: 'facturaCcp',   label: 'Referencia',    visible: true },
+  { id: 'cantOps',      label: 'Cant. Ops',     visible: true },
+  { id: 'referencias',  label: 'Referencias',   visible: true },
+  { id: 'total',        label: 'Total',         visible: true },
+  { id: 'createdAt',    label: 'Registrada',    visible: false },
 ];
 
-// Columnas configurables de la tabla "Asignar Operaciones" (tabla + Excel).
-// orden:true -> la cabecera es clicable para ordenar por ese campo.
-const COLUMNAS_OPS_BASE = [
-  { id: 'ref',           label: 'Ref. Operación', visible: true,  orden: true },
-  { id: 'fechaServicio', label: 'Fecha Servicio',  visible: true,  orden: true },
-  { id: 'proveedor',     label: 'Proveedor',       visible: true,  orden: true },
-  { id: 'cartaPorte',    label: 'Carta Porte',     visible: true,  orden: false },
-  { id: 'destino',       label: 'Destino',         visible: true,  orden: true },
-  { id: 'moneda',        label: 'Moneda',          visible: true,  orden: false },
-  { id: 'subtotal',      label: 'Subtotal',        visible: true,  orden: true },
-  { id: 'dolares',       label: 'Dólares',         visible: true,  orden: false },
-  { id: 'pesos',         label: 'Pesos',           visible: true,  orden: false },
-  { id: 'conv',          label: 'Conversión',      visible: true,  orden: true },
+const LIMITE_FACTURAS_TODAS = 12000;
+const PAG_FACTURAS = 1000;
+const SS_FACTURAS = 'roelca_facturas_proveedores_v1';
+const SS_FACTURAS_CLIENTES = 'roelca_facturas_clientes_xref_v1';
+const SS_FACTURAS_TTL = 30 * 60 * 1000;
+
+const parseFechaFactura = (val: any): string => {
+  if (!val) return '';
+  const s = String(val).trim();
+  if (!s) return '';
+  // ISO (YYYY-MM-DD) → tal cual
+  if (/^\d{4}-\d{1,2}-\d{1,2}/.test(s)) {
+    const [y, m, d] = s.slice(0, 10).split('-');
+    return `${y}-${(m || '01').padStart(2, '0')}-${(d || '01').padStart(2, '0')}`;
+  }
+  // YYYY/M/D
+  const mISO = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (mISO) return `${mISO[1]}-${mISO[2].padStart(2, '0')}-${mISO[3].padStart(2, '0')}`;
+
+  // A/B/YYYY (ambiguo: D/M/YYYY vs M/D/YYYY). Se resuelve evitando fechas
+  // imposibles y, si ambas son válidas, evitando fechas FUTURAS (una factura
+  // no puede tener fecha posterior a hoy). Las no ambiguas (día > 12) no cambian.
+  const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+  if (m) {
+    const a = parseInt(m[1], 10);
+    const b = parseInt(m[2], 10);
+    const y = m[3];
+    const hoy = new Date(); hoy.setHours(23, 59, 59, 999);
+    const arma = (dia: number, mes: number) => `${y}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+    const valido = (dia: number, mes: number) => mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31;
+    const esPasada = (iso: string) => { const d = new Date(iso + 'T00:00:00'); return !isNaN(d.getTime()) && d <= hoy; };
+
+    const dm = valido(a, b) ? arma(a, b) : ''; // A = día, B = mes  (D/M/YYYY)
+    const md = valido(b, a) ? arma(b, a) : ''; // A = mes, B = día  (M/D/YYYY)
+
+    if (dm && !md) return dm;
+    if (md && !dm) return md;
+    if (dm && md) {
+      if (!esPasada(dm) && esPasada(md)) return md;
+      return dm;
+    }
+  }
+  return s;
+};
+
+const normalizarFactura = (raw: any): any => {
+  const fechaNorm = parseFechaFactura(raw.fecha || raw.fechaFactura);
+
+  // Convierte a arreglo tanto si viene como arreglo, como si viene en texto
+  // separado por comas (así llegan las facturas importadas desde el CSV).
+  const aArray = (v: any): string[] => {
+    if (Array.isArray(v)) return v.map((x) => String(x || '').trim()).filter(Boolean);
+    if (typeof v === 'string') return v.split(',').map((x) => x.trim()).filter(Boolean);
+    return [];
+  };
+
+  const opsIds = aArray(raw.operacionesIds);
+  const opsRefs = aArray(raw.operaciones);
+
+  let opsGuardadas: any = raw.operacionesGuardadas;
+  if (!Array.isArray(opsGuardadas) || opsGuardadas.length === 0) {
+    // Sin detalle (factura importada): combinamos IDs + referencias por posición.
+    const n = Math.max(opsIds.length, opsRefs.length);
+    opsGuardadas = [];
+    for (let i = 0; i < n; i++) {
+      opsGuardadas.push({
+        id: String(opsIds[i] || opsRefs[i] || ''),
+        ref: String(opsRefs[i] || opsIds[i] || ''),
+        monto: 0,
+        subtotalBase: 0,
+      });
+    }
+  }
+  return {
+    ...raw,
+    fecha: fechaNorm || String(raw.fecha || raw.fechaFactura || ''),
+    operacionesIds: opsIds,
+    operaciones: opsRefs,
+    operacionesGuardadas: opsGuardadas,
+    subtotalFactura: Number(raw.subtotalFactura) || Number(raw.total) || 0,
+    monedaProveedor: raw.monedaProveedor || raw.moneda || 'N/A',
+    monedaId: raw.monedaId || '',
+    proveedorNombre: raw.proveedorNombre || raw.proveedor || '',
+    facturaCcp: raw.facturaCcp || raw.ccp || '',
+    invoice: raw.invoice || raw.numeroInvoice || raw.numInvoice || raw.folio || String(raw.id || ''),
+    statusFactura: raw.statusFactura || 'Facturado',
+  };
+};
+
+const COLUMNAS_OPS_BASE: any[] = [
+  { id: 'factura',       label: '# Factura',       visible: true,  orden: true,  grupo: 'General' },
+  { id: 'facturaRoelca', label: 'Factura Roelca',  visible: true,  orden: false, grupo: 'General' },
+  { id: 'ref',           label: 'Ref. Operación',  visible: true,  orden: true,  grupo: 'General' },
+  { id: 'fechaServicio', label: 'Fecha Servicio',  visible: true,  orden: true,  grupo: 'General' },
+  { id: 'proveedor',     label: 'Proveedor',       visible: true,  orden: true,  grupo: 'General' },
+  { id: 'cartaPorte',    label: 'Carta Porte',     visible: true,  orden: false, grupo: 'General' },
+  { id: 'destino',       label: 'Destino',         visible: true,  orden: true,  grupo: 'General' },
+  { id: 'moneda',        label: 'Moneda',          visible: true,  orden: false, grupo: 'Por Pagar' },
+  { id: 'subtotal',      label: 'Subtotal',        visible: true,  orden: true,  grupo: 'Por Pagar' },
+  { id: 'dolares',       label: 'Dólares',         visible: true,  orden: false, grupo: 'Por Pagar' },
+  { id: 'pesos',         label: 'Pesos',           visible: true,  orden: false, grupo: 'Por Pagar' },
+  { id: 'conv',          label: 'Conversión',      visible: true,  orden: true,  grupo: 'Por Pagar' },
+  { id: 'tipoOperacion',  label: 'Tipo de Operación', visible: false, orden: true,  grupo: 'General', tipo: 'texto',     sourceField: ['tipoOperacionNombre', 'tipoOperacionId'] },
+  { id: 'status',         label: 'Status',            visible: false, orden: true,  grupo: 'General', tipo: 'texto',     sourceField: ['statusNombre', 'status'] },
+  { id: 'fechaCita',      label: 'Fecha Cita',        visible: false, orden: true,  grupo: 'General', tipo: 'fechaHora', sourceField: 'fechaCita' },
+  { id: 'convenio',       label: 'Convenio (Tarifa)', visible: false, orden: true,  grupo: 'General', tipo: 'texto',     sourceField: ['convenioNombre', 'convenio'] },
+  { id: 'remolque',       label: '# Remolque',        visible: false, orden: true,  grupo: 'General', tipo: 'texto',     sourceField: ['remolqueNombre', 'remolquePlaca', 'numeroRemolque'] },
+  { id: 'refCliente',     label: 'Ref Cliente',       visible: false, orden: true,  grupo: 'General', tipo: 'texto',     sourceField: 'refCliente' },
+  { id: 'origen',         label: 'Origen',            visible: false, orden: true,  grupo: 'General', tipo: 'texto',     sourceField: ['origenNombre', 'origen'] },
+  { id: 'cliente',        label: 'Cliente (Paga)',    visible: false, orden: true,  grupo: 'General', tipo: 'texto',     sourceField: ['clienteNombre', 'nombreCliente', 'clientePaga', 'clienteId'] },
+  { id: 'observacionesEjecutivo', label: 'Obs. Ejecutivo',    visible: false, orden: false, grupo: 'General', tipo: 'texto',     sourceField: 'observacionesEjecutivo' },
+  { id: 'createdAt',      label: 'Fecha de Creación', visible: false, orden: true,  grupo: 'General', tipo: 'fechaHora', sourceField: 'createdAt' },
+  { id: 'clienteMercancia',     label: 'Cliente (Mercancía)',  visible: false, orden: true,  grupo: 'Pedimento', tipo: 'texto',  sourceField: ['clienteMercanciaNombre', 'clienteMercancia'] },
+  { id: 'descripcionMercancia', label: 'Descripción Mercancía', visible: false, orden: false, grupo: 'Pedimento', tipo: 'texto',  sourceField: 'descripcionMercancia' },
+  { id: 'cantidad',             label: 'Cantidad',              visible: false, orden: true,  grupo: 'Pedimento', tipo: 'numero', sourceField: 'cantidad' },
+  { id: 'embalaje',             label: 'Embalaje',              visible: false, orden: true,  grupo: 'Pedimento', tipo: 'texto',  sourceField: ['embalajeNombre', 'embalaje'] },
+  { id: 'pesoKg',               label: 'Peso (Kg)',             visible: false, orden: true,  grupo: 'Pedimento', tipo: 'numero', sourceField: 'pesoKg' },
+  { id: 'numDoda',              label: '# DODA',                visible: false, orden: true,  grupo: 'Pedimento', tipo: 'texto',  sourceField: 'numDoda' },
+  { id: 'fechaEmisionDoda',     label: 'Fecha Emisión DODA',    visible: false, orden: true,  grupo: 'Pedimento', tipo: 'fecha',  sourceField: 'fechaEmisionDoda' },
+  { id: 'numeroEntrys',    label: "# Entry's",          visible: false, orden: false, grupo: 'Manifiestos', tipo: 'texto',  sourceField: 'numeroEntrys' },
+  { id: 'cantEntrys',      label: "Cant. Entry's",      visible: false, orden: true,  grupo: 'Manifiestos', tipo: 'numero', sourceField: 'cantEntrys' },
+  { id: 'numManifiesto',   label: '# Manifiesto',       visible: false, orden: false, grupo: 'Manifiestos', tipo: 'texto',  sourceField: 'numManifiesto' },
+  { id: 'provServicios',   label: 'Prov. Servicios',    visible: false, orden: true,  grupo: 'Manifiestos', tipo: 'texto',  sourceField: ['provServiciosNombre', 'provServicios'] },
+  { id: 'montoManifiesto', label: 'Costo Manifiesto',   visible: false, orden: true,  grupo: 'Manifiestos', tipo: 'monto',  sourceField: 'montoManifiesto' },
+  { id: 'proveedorUnidad',       label: 'Proveedor Transporte', visible: false, orden: true,  grupo: 'Unidad', tipo: 'texto', sourceField: ['proveedorUnidadNombre', 'proveedorUnidad'] },
+  { id: 'monedaUnidad',          label: 'Moneda Prov.',         visible: false, orden: false, grupo: 'Unidad', tipo: 'texto', sourceField: ['monedaUnidadNombre', 'facturadoEnUnidad'] },
+  { id: 'convenioProveedor',     label: 'Convenio Proveedor',   visible: false, orden: true,  grupo: 'Unidad', tipo: 'texto', sourceField: ['convenioProveedorNombre', 'convenioProveedor'] },
+  { id: 'monedaConvenioProv',    label: 'Moneda Convenio Prov.', visible: false, orden: false, grupo: 'Unidad', tipo: 'moneda', sourceField: 'monedaConvenioProv' },
+  { id: 'totalAPagarProv',       label: 'Monto a Pagar (Prov)', visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'totalAPagarProv' },
+  { id: 'cargosAdicionalesProv', label: 'Cargos Adic. (Prov)',  visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'cargosAdicionalesProv' },
+  { id: 'subtotalProv',          label: 'Subtotal Prov.',       visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'subtotalProv' },
+  { id: 'dolaresProv',           label: 'Dólares Prov.',        visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'dolaresProv' },
+  { id: 'pesosProv',             label: 'Pesos Prov.',          visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'pesosProv' },
+  { id: 'conversionProv',        label: 'Conversión Prov.',     visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'conversionProv' },
+  { id: 'unidad',                label: 'Unidad Asignada',      visible: false, orden: true,  grupo: 'Unidad', tipo: 'texto', sourceField: ['unidadNombre', 'unidad'] },
+  { id: 'operador',              label: 'Operador',             visible: false, orden: true,  grupo: 'Unidad', tipo: 'texto', sourceField: ['operadorNombre', 'operador'] },
+  { id: 'sueldoOperador',        label: 'Sueldo Operador',      visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'sueldoOperador' },
+  { id: 'sueldoExtra',           label: 'Sueldo Extra',         visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'sueldoExtra' },
+  { id: 'sueldoTotal',           label: 'Sueldo Total',         visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'sueldoTotal' },
+  { id: 'combustible',           label: 'Combustible',          visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'combustible' },
+  { id: 'combustibleExtra',      label: 'Combustible Extra',    visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'combustibleExtra' },
+  { id: 'combustibleTotal',      label: 'Total Combustible',    visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'combustibleTotal' },
+  { id: 'totalGastos',           label: 'Total Gastos',         visible: false, orden: true,  grupo: 'Unidad', tipo: 'monto', sourceField: 'totalGastos' },
+  { id: 'unidadProveedor',       label: 'Unidad Externa',       visible: false, orden: true,  grupo: 'Unidad', tipo: 'texto', sourceField: 'unidadProveedor' },
+  { id: 'operadorProveedor',     label: 'Operador Externo',     visible: false, orden: true,  grupo: 'Unidad', tipo: 'texto', sourceField: 'operadorProveedor' },
+  { id: 'observacionesUnidad',   label: 'Obs. Unidad/Prov.',    visible: false, orden: false, grupo: 'Unidad', tipo: 'texto', sourceField: 'observacionesUnidad' },
+  { id: 'monedaConvenioCliente', label: 'Moneda Convenio Cliente', visible: false, orden: false, grupo: 'Por Cobrar', tipo: 'moneda', sourceField: 'monedaConvenioCliente' },
+  { id: 'montoConvenioCliente',  label: 'Monto Convenio Cliente',  visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'monto',  sourceField: 'montoConvenioCliente' },
+  { id: 'cargosAdicionales',     label: 'Cargos Adicionales',      visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'monto',  sourceField: 'cargosAdicionales' },
+  { id: 'subtotalCliente',       label: 'Subtotal Cliente',        visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'monto',  sourceField: 'subtotalCliente' },
+  { id: 'tipoCambioAprobado',    label: 'TC Aprobado',             visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'numero', sourceField: 'tipoCambioAprobado' },
+  { id: 'dolaresCliente',        label: 'Dólares Cliente',         visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'monto',  sourceField: 'dolaresCliente' },
+  { id: 'pesosCliente',          label: 'Pesos Cliente',           visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'monto',  sourceField: 'pesosCliente' },
+  { id: 'conversionCliente',     label: 'Conversión Cliente',      visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'monto',  sourceField: 'conversionCliente' },
+  { id: 'utilidadEstimada',      label: 'Utilidad Estimada',       visible: false, orden: true,  grupo: 'Por Cobrar', tipo: 'monto',  sourceField: 'utilidadEstimada' },
+  { id: 'observacionesCobrar',   label: 'Obs. Facturación/Cobro',  visible: false, orden: false, grupo: 'Por Cobrar', tipo: 'texto',  sourceField: 'observacionesCobrar' },
 ];
 
-// ──────────────────────────────────────────────────────────────────────
-// Helpers de conversión del PROVEEDOR (misma lógica USD/MXN del formulario):
-//   subtotal = totalAPagarProv + cargosAdicionalesProv
-//     · USD -> dólares = subtotal ; conversión = subtotal * TC
-//     · MXN -> pesos   = subtotal ; conversión = subtotal
-// ──────────────────────────────────────────────────────────────────────
 const calcularConversionProveedor = (op: any) => {
   const fact = op.facturadoEnUnidad;
   const tc = Number(op.tipoCambioAprobado) || 0;
@@ -93,12 +354,10 @@ const calcularConversionProveedor = (op: any) => {
   const esPeso = fact === ID_MXN || nombreMoneda.includes('MXN');
   if (esDolar) { dol = subtotal; pes = 0; conv = subtotal * tc; }
   else if (esPeso) { dol = 0; pes = subtotal; conv = subtotal; }
-  else { conv = subtotal; } // moneda sin determinar: deja la conversión = subtotal
+  else { conv = subtotal; }
   return { subtotal, dol, pes, conv };
 };
 
-// Prefiere los valores ya calculados/guardados por el formulario; si no
-// existen, recalcula con la misma fórmula.
 const obtenerMontoOperacion = (op: any) => {
   const convGuardada = Number(op.conversionProv);
   if (!isNaN(convGuardada) && convGuardada > 0) {
@@ -113,237 +372,560 @@ const obtenerMontoOperacion = (op: any) => {
 };
 
 export const FacturacionProveedoresDashboard = () => {
-  const [activeTab, setActiveTab] = useState<'operaciones' | 'historial'>('historial');
+  const [activeTab, setActiveTab] = useState<'operaciones' | 'historial'>('operaciones');
 
   const [operacionesGlobales, setOperacionesGlobales] = useState<any[]>([]);
   const [facturasGlobales, setFacturasGlobales] = useState<any[]>([]);
   const [cargandoOperaciones, setCargandoOperaciones] = useState(false);
   const [cargandoFacturas, setCargandoFacturas] = useState(false);
 
-  // Catálogos
   const [empresasList, setEmpresasList] = useState<any[]>([]);
 
-  // Filtros / selección
+  const [fechaDesdeOps, setFechaDesdeOps] = useState('');
+  const [fechaHastaOps, setFechaHastaOps] = useState('');
+  const [fechaDesdeHist, setFechaDesdeHist] = useState('');
+  const [fechaHastaHist, setFechaHastaHist] = useState('');
+  const [textoBuscarRemolqueOps, setTextoBuscarRemolqueOps] = useState('');
+  const [vistaOps, setVistaOps] = useState<'pendientes' | 'facturadas' | 'todas'>('pendientes');
+  const [topeOpsAlcanzado, setTopeOpsAlcanzado] = useState(false);
   const [filtroProveedor, setFiltroProveedor] = useState('');
   const [seleccionadas, setSeleccionadas] = useState<string[]>([]);
 
-  // ✅ (6) Filtro Pendientes / Facturadas
-  const [filtroEstadoOps, setFiltroEstadoOps] = useState<'pendientes' | 'facturadas'>('pendientes');
-
-  // ✅ (5) Orden
   const [ordenOps, setOrdenOps] = useState<{ campo: string; dir: 'asc' | 'desc' }>({ campo: 'fechaServicio', dir: 'desc' });
   const [ordenFac, setOrdenFac] = useState<{ campo: string; dir: 'asc' | 'desc' }>({ campo: 'fecha', dir: 'desc' });
 
-  // Buscador de cliente
-  const [textoBuscarCliente, setTextoBuscarCliente] = useState('');
-  const [mostrarSugerenciasCliente, setMostrarSugerenciasCliente] = useState(false);
+  const [textoBuscarProveedor, setTextoBuscarProveedor] = useState('');
+  const [mostrarSugerenciasProveedor, setMostrarSugerenciasProveedor] = useState(false);
 
-  // Paginación Historial
+  const [textoBuscarFactura, setTextoBuscarFactura] = useState('');
+  const [filtroStatusFactura, setFiltroStatusFactura] = useState<string>('Todos');
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
+  const [filtroTipoOp, setFiltroTipoOp] = useState('');
+
   const [paginaActual, setPaginaActual] = useState(1);
+  const [paginaOps, setPaginaOps] = useState(1);
   const registrosPorPagina = 50;
 
-  // Modal de facturación
   const [modalAbierto, setModalAbierto] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [facturaViendo, setFacturaViendo] = useState<any | null>(null);
+  // Cruce con Facturación de CLIENTES: para saber si la operación ya fue facturada a cliente.
+  const [facturasClientesGlobales, setFacturasClientesGlobales] = useState<any[]>([]);
+  const [facturaClienteViendo, setFacturaClienteViendo] = useState<any | null>(null);
 
-  // ✅ (1) Columnas del historial
+  const [guardandoCols, setGuardandoCols] = useState(false);
+
   const [modalColumnas, setModalColumnas] = useState(false);
   const [columnasFactura, setColumnasFactura] = useState(COLUMNAS_FACTURA_BASE.map(c => ({ ...c })));
-  // Configurador de columnas + rango de fechas para la tabla "Asignar Operaciones"
   const [modalColumnasOps, setModalColumnasOps] = useState(false);
   const [columnasOps, setColumnasOps] = useState(COLUMNAS_OPS_BASE.map(c => ({ ...c })));
   const [draggedColOpsIndex, setDraggedColOpsIndex] = useState<number | null>(null);
-  const [fechaDesdeOps, setFechaDesdeOps] = useState('');
-  const [fechaHastaOps, setFechaHastaOps] = useState('');
+  const [busquedaColOps, setBusquedaColOps] = useState('');
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
 
-  // ✅ (4) Detalle de operación (al clicar referencia en la ficha de factura)
   const [operacionDetalle, setOperacionDetalle] = useState<any | null>(null);
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
   const [pestañaDetalleActiva, setPestañaDetalleActiva] = useState<string>('general');
 
-  // Campos del formulario de factura
   const [invoiceForm, setInvoiceForm] = useState('');
   const [fechaForm, setFechaForm] = useState(new Date().toISOString().split('T')[0]);
   const [facturaCcpForm, setFacturaCcpForm] = useState('');
+  const [statusFacturaForm, setStatusFacturaForm] = useState<string>('Facturado');
 
-  // ──────────────────────────────────────────────────────────────────
-  // Formateadores
-  // ──────────────────────────────────────────────────────────────────
+  const [modalCostoAdic, setModalCostoAdic] = useState(false);
+  const [costoAdicOpId, setCostoAdicOpId] = useState('');
+  const [costoAdicMonto, setCostoAdicMonto] = useState('');
+  const [costoAdicConcepto, setCostoAdicConcepto] = useState('');
+  const [guardandoCostoAdic, setGuardandoCostoAdic] = useState(false);
+
+  const [opInfoMap, setOpInfoMap] = useState<Record<string, any>>({});
+  const [modalDiagnostico, setModalDiagnostico] = useState(false);
+
+  const [facturaEditando, setFacturaEditando] = useState<any | null>(null);
+  const [guardandoEdit, setGuardandoEdit] = useState(false);
+  const [editInvoice, setEditInvoice] = useState('');
+  const [editFecha, setEditFecha] = useState('');
+  const [editCcp, setEditCcp] = useState('');
+  const [editStatus, setEditStatus] = useState('Facturado');
+  const [editMoneda, setEditMoneda] = useState('');
+  const [editTotal, setEditTotal] = useState('');
+
+  const [gestionOp, setGestionOp] = useState<any | null>(null);
+  const [gestionInvoice, setGestionInvoice] = useState('');
+  const [guardandoGestionOp, setGuardandoGestionOp] = useState(false);
+  const [agregarRefFactura, setAgregarRefFactura] = useState<any | null>(null);
+  const [busquedaRefPendiente, setBusquedaRefPendiente] = useState('');
+  const [agregandoRef, setAgregandoRef] = useState(false);
+
   const formatoMoneda = (monto: any) => {
     const num = parseFloat(monto || 0);
     return isNaN(num) ? '$ 0.00' : `$ ${num.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
-
-  const formatearFechaSpanish = (fechaString: string) => {
+  const formatearFechaSpanish = (fechaString: any) => {
     if (!fechaString) return '-';
-    try {
-      return new Date(fechaString + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
-    } catch { return fechaString; }
+    const fmt = (d: Date) => d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+    if (typeof fechaString === 'object') {
+      try {
+        if (typeof fechaString.toDate === 'function') { const d = fechaString.toDate(); return isNaN(d.getTime()) ? '-' : fmt(d); }
+        if (typeof fechaString.seconds === 'number') { const d = new Date(fechaString.seconds * 1000); return isNaN(d.getTime()) ? '-' : fmt(d); }
+      } catch { /* noop */ }
+      return '-';
+    }
+    const s = String(fechaString).trim();
+    if (!s) return '-';
+    let y = '', mo = '', da = '';
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) { y = m[1]; mo = m[2]; da = m[3]; }
+    if (!y) { m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+      if (m) { y = m[1]; mo = m[2]; da = m[3]; } }
+    if (!y) { m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+      if (m) { da = m[1]; mo = m[2]; y = m[3]; } }
+    if (!y) { m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})(?!\d)/);
+      if (m) { da = m[1]; mo = m[2]; y = '20' + m[3]; } }
+    if (y && mo && da) {
+      const d = new Date(`${y}-${mo.padStart(2, '0')}-${da.padStart(2, '0')}T00:00:00`);
+      if (!isNaN(d.getTime())) return fmt(d);
+    }
+    const d2 = new Date(s);
+    if (!isNaN(d2.getTime())) return fmt(d2);
+    return s;
   };
-
   const formatearFechaHora = (isoString: string | undefined | null) => {
     if (!isoString) return '-';
     try { return new Date(isoString).toLocaleString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
     catch { return isoString; }
   };
-
   const mostrarDato = (dato: any) => (dato && dato !== '' ? dato : '-');
-
   const mostrarMoneda = (val: string | null | undefined) => {
     if (val === ID_USD) return 'USD';
     if (val === ID_MXN) return 'MXN';
     return val || '-';
   };
+  const chipStatusFactura = (s: any) => {
+    const texto = s || 'Facturado';
+    const color = colorStatusFactura(texto);
+    return (
+      <span style={{ padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', color, border: `1px solid ${color}`, backgroundColor: `${color}1a`, whiteSpace: 'nowrap' }}>
+        {texto}
+      </span>
+    );
+  };
 
-  // ──────────────────────────────────────────────────────────────────
-  // 1. Carga de empresas (buscador de cliente en ambas pestañas)
-  // ──────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const unSubEmpresas = onSnapshot(collection(db, 'empresas'), (snap) => {
-      setEmpresasList(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+  const mapaCatalogos = useMemo(() => {
+    const m = construirMapaCatalogos();
+    empresasList.forEach((e: any) => {
+      if (e?.id) m[String(e.id)] = e.nombre || e.nombreCorto || m[String(e.id)] || String(e.id);
     });
-    return () => { unSubEmpresas(); };
+    m[ID_USD] = 'USD';
+    m[ID_MXN] = 'MXN';
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [empresasList]);
+
+  const resolverNombre = (val: any): any => {
+    if (val === '' || val === null || val === undefined) return val;
+    return mapaCatalogos[String(val)] || val;
+  };
+
+  const STATUS_FACTURABLES = useMemo(() => {
+    const ids = new Set<string>(STATUS_COMPLETADOS);
+    Object.entries(mapaCatalogos).forEach(([id, nombre]) => {
+      const n = String(nombre || '');
+      if (/\bfalso/i.test(n) || /falso\b/i.test(n)) ids.add(id);
+    });
+    return Array.from(ids);
+  }, [mapaCatalogos]);
+
+  const txt = (...cands: any[]): string => {
+    for (const c of cands) {
+      if (c !== undefined && c !== null && c !== '') {
+        const r = resolverNombre(c);
+        return (r === undefined || r === null || r === '') ? '-' : String(r);
+      }
+    }
+    return '-';
+  };
+
+  useEffect(() => {
+    const cache = leerCacheLocal('empresas');
+    if (cache && cache.length) { setEmpresasList(cache); return; }
+    let activo = true;
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, 'empresas'));
+        if (!activo) return;
+        const docs = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+        setEmpresasList(docs);
+        try { localStorage.setItem('cat_v1__empresas', JSON.stringify({ data: docs, ts: Date.now() })); } catch { /* noop */ }
+      } catch (e) { console.error('Error cargando empresas:', e); }
+    })();
+    return () => { activo = false; };
   }, []);
 
-  // ──────────────────────────────────────────────────────────────────
-  // 2. Carga de FACTURAS del proveedor (on demand)
-  // ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!filtroProveedor) { setFacturasGlobales([]); return; }
+    const aplicarOps = (guardadas: any) => {
+      let cols = aplicarConfigColumnasGuardada(COLUMNAS_OPS_BASE, guardadas);
+      if (!cols.some((c: any) => c.id === 'factura')) {
+        const base = COLUMNAS_OPS_BASE.find((c: any) => c.id === 'factura');
+        if (base) cols = [{ ...base, visible: true }, ...cols];
+      }
+      cols = cols.map((c: any) => c.id === 'factura' ? { ...c, visible: true } : c);
+      cols = moverIdAlInicio(cols, 'factura');
+      return cols;
+    };
+    const aplicarHist = (guardadas: any) => {
+      let cols = aplicarConfigColumnasGuardada(COLUMNAS_FACTURA_BASE, guardadas);
+      const teniaStatus = Array.isArray(guardadas) && guardadas.some((g: any) => g?.id === 'statusFactura');
+      if (!teniaStatus) cols = moverStatusAlInicio(cols);
+      return cols;
+    };
+    try {
+      const lsOps = localStorage.getItem(LS_COLS_OPS);
+      if (lsOps) setColumnasOps(aplicarOps(JSON.parse(lsOps)));
+      const lsHist = localStorage.getItem(LS_COLS_HIST);
+      if (lsHist) setColumnasFactura(aplicarHist(JSON.parse(lsHist)));
+    } catch { /* noop */ }
 
-    const descargarFacturasCliente = async () => {
+    let activo = true;
+    (async () => {
+      try {
+        const [snapOps, snapHist] = await Promise.all([
+          getDoc(doc(db, CONFIG_COLUMNAS_COLLECTION, DOC_COLUMNAS_OPS)),
+          getDoc(doc(db, CONFIG_COLUMNAS_COLLECTION, DOC_COLUMNAS_HISTORIAL)),
+        ]);
+        if (!activo) return;
+        if (snapOps.exists()) {
+          const guardadas = (snapOps.data() as any)?.columnas;
+          setColumnasOps(aplicarOps(guardadas));
+          try { localStorage.setItem(LS_COLS_OPS, JSON.stringify(guardadas || [])); } catch { /* noop */ }
+        }
+        if (snapHist.exists()) {
+          const guardadas = (snapHist.data() as any)?.columnas;
+          setColumnasFactura(aplicarHist(guardadas));
+          try { localStorage.setItem(LS_COLS_HIST, JSON.stringify(guardadas || [])); } catch { /* noop */ }
+        }
+      } catch (e) {
+        console.error('Error cargando configuración de columnas (compartida):', e);
+      }
+    })();
+    return () => { activo = false; };
+  }, []);
+
+  const guardarConfigColumnasOps = async () => {
+    setGuardandoCols(true);
+    try {
+      const payload = columnasOps.map(c => ({ id: c.id, visible: !!c.visible }));
+      try { localStorage.setItem(LS_COLS_OPS, JSON.stringify(payload)); } catch { /* noop */ }
+      await setDoc(doc(db, CONFIG_COLUMNAS_COLLECTION, DOC_COLUMNAS_OPS), { columnas: payload, updatedAt: new Date().toISOString() });
+      setModalColumnasOps(false);
+      setBusquedaColOps('');
+    } catch (e) {
+      console.error('Error guardando columnas (operaciones):', e);
+      alert('No se pudo guardar la configuración de columnas para todos los usuarios.\nRevisa tus permisos de escritura en Firestore (colección config_columnas).');
+    } finally {
+      setGuardandoCols(false);
+    }
+  };
+
+  const guardarConfigColumnasHistorial = async () => {
+    setGuardandoCols(true);
+    try {
+      const payload = columnasFactura.map(c => ({ id: c.id, visible: !!c.visible }));
+      try { localStorage.setItem(LS_COLS_HIST, JSON.stringify(payload)); } catch { /* noop */ }
+      await setDoc(doc(db, CONFIG_COLUMNAS_COLLECTION, DOC_COLUMNAS_HISTORIAL), { columnas: payload, updatedAt: new Date().toISOString() });
+      setModalColumnas(false);
+    } catch (e) {
+      console.error('Error guardando columnas (historial):', e);
+      alert('No se pudo guardar la configuración de columnas para todos los usuarios.\nRevisa tus permisos de escritura en Firestore (colección config_columnas).');
+    } finally {
+      setGuardandoCols(false);
+    }
+  };
+
+  const guardarCacheFacturas = (docs: any[]) => {
+    try { sessionStorage.setItem(SS_FACTURAS, JSON.stringify({ ts: Date.now(), data: docs })); } catch { /* cuota */ }
+  };
+
+  // Descarga TODAS las facturas desde Firestore (reutilizable por el botón Refrescar).
+  const descargarFacturas = async () => {
+    setCargandoFacturas(true);
+    try {
+      const todas: any[] = [];
+      let cursor: any = null;
+      for (let i = 0; i < Math.ceil(LIMITE_FACTURAS_TODAS / PAG_FACTURAS); i++) {
+        const cons: any[] = [orderBy(documentId()), limit(PAG_FACTURAS)];
+        if (cursor) cons.splice(1, 0, startAfter(cursor));
+        const snap = await getDocs(query(collection(db, 'facturas_proveedores'), ...cons));
+        if (snap.empty) break;
+        snap.docs.forEach(d => todas.push(normalizarFactura({ id: d.id, ...(d.data() as any) })));
+        cursor = snap.docs[snap.docs.length - 1];
+        if (snap.docs.length < PAG_FACTURAS) break;
+      }
+      todas.sort((a: any, b: any) => {
+        const fa = String(a.fecha || '');
+        const fb = String(b.fecha || '');
+        if (!fa && !fb) return 0;
+        if (!fa) return 1;
+        if (!fb) return -1;
+        return fb.localeCompare(fa);
+      });
+      setFacturasGlobales(todas);
+      guardarCacheFacturas(todas);
+    } catch (e: any) {
+      console.error('[Facturación Proveedores] Error al recargar facturas:', e);
+      alert('No se pudieron recargar las facturas. ' + String(e?.message || e?.code || e || ''));
+    }
+    setCargandoFacturas(false);
+  };
+
+  // Fuerza el refresco de la colección de facturas: limpia la caché y vuelve a leer.
+  const recargarFacturas = () => {
+    try { sessionStorage.removeItem(SS_FACTURAS); } catch { /* noop */ }
+    descargarFacturas();
+  };
+
+  // ── Cruce con Facturación de CLIENTES ────────────────────────────────────
+  // Carga (una vez, con caché) las facturas de clientes para saber si una
+  // operación ya fue facturada al cliente y con qué número de factura.
+  useEffect(() => {
+    if (facturasClientesGlobales.length > 0) return;
+    try {
+      const raw = sessionStorage.getItem(SS_FACTURAS_CLIENTES);
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && Array.isArray(obj.data) && (Date.now() - (obj.ts || 0)) < SS_FACTURAS_TTL) {
+          setFacturasClientesGlobales(obj.data);
+          return;
+        }
+      }
+    } catch { /* noop */ }
+
+    const descargarClientes = async () => {
+      try {
+        const todas: any[] = [];
+        let cursor: any = null;
+        for (let i = 0; i < Math.ceil(LIMITE_FACTURAS_TODAS / PAG_FACTURAS); i++) {
+          const cons: any[] = [orderBy(documentId()), limit(PAG_FACTURAS)];
+          if (cursor) cons.splice(1, 0, startAfter(cursor));
+          const snap = await getDocs(query(collection(db, 'facturas_clientes'), ...cons));
+          if (snap.empty) break;
+          snap.docs.forEach(d => {
+            const f: any = d.data();
+            todas.push({
+              id: d.id,
+              invoice: f.invoice || f.facturas || '',
+              fecha: f.fecha || f.fechaFactura || '',
+              clienteNombre: f.clienteNombre || f.cliente || '',
+              statusFactura: f.statusFactura || f.status || '',
+              moneda: f.monedaFacturacion || f.moneda || '',
+              total: (f.subtotalFactura !== undefined ? f.subtotalFactura : (f.total !== undefined ? f.total : 0)),
+              operacionesIds: f.operacionesIds || [],
+              operaciones: f.operaciones || [],
+            });
+          });
+          cursor = snap.docs[snap.docs.length - 1];
+          if (snap.docs.length < PAG_FACTURAS) break;
+        }
+        setFacturasClientesGlobales(todas);
+        try { sessionStorage.setItem(SS_FACTURAS_CLIENTES, JSON.stringify({ ts: Date.now(), data: todas })); } catch { /* cuota */ }
+      } catch (e) {
+        console.error('[Proveedores] Error cargando facturas de clientes (cruce):', e);
+      }
+    };
+    descargarClientes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mapa: operacionId / ref  ->  info de la factura de cliente donde aparece.
+  const mapaFacturaClientePorOp = useMemo(() => {
+    const aArr = (v: any): string[] => Array.isArray(v)
+      ? v.map((x) => String(x || '').trim()).filter(Boolean)
+      : (typeof v === 'string' ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
+    const m = new Map<string, any>();
+    (facturasClientesGlobales || []).forEach((f: any) => {
+      const info = {
+        facturaId: f.id,
+        invoice: f.invoice || '',
+        fecha: f.fecha || '',
+        clienteNombre: f.clienteNombre || '',
+        statusFactura: f.statusFactura || '',
+        moneda: f.moneda || '',
+        total: f.total ?? 0,
+      };
+      [...aArr(f.operacionesIds), ...aArr(f.operaciones)].forEach((k) => {
+        if (k && !m.has(k)) m.set(k, info);
+      });
+    });
+    return m;
+  }, [facturasClientesGlobales]);
+
+  const getFacturaClienteDeOp = (op: any): any | null => {
+    if (!op) return null;
+    return mapaFacturaClientePorOp.get(String(op.id))
+      || mapaFacturaClientePorOp.get(String(op.ref || ''))
+      || mapaFacturaClientePorOp.get(String(op.numReferencia || ''))
+      || mapaFacturaClientePorOp.get(String(op.referencia || ''))
+      || null;
+  };
+
+  useEffect(() => {
+    if (facturasGlobales.length > 0) return;
+    try {
+      const raw = sessionStorage.getItem(SS_FACTURAS);
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj && Array.isArray(obj.data) && obj.data.length && (Date.now() - (obj.ts || 0)) < SS_FACTURAS_TTL) {
+          setFacturasGlobales(obj.data.map((f: any) => normalizarFactura(f)));
+          return;
+        }
+      }
+    } catch { /* noop */ }
+
+    const descargar = async () => {
       setCargandoFacturas(true);
       try {
-        const q1 = query(
-          collection(db, 'facturas_proveedores'),
-          where('proveedorId', '==', filtroProveedor),
-          orderBy('createdAt', 'desc'),
-          limit(100)
-        );
-        const snap = await getDocs(q1);
-        setFacturasGlobales(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
-      } catch (e1: any) {
-        const msg1 = String(e1?.message || e1?.code || e1 || '');
-        const esIndice = msg1.toLowerCase().includes('index') || msg1.toLowerCase().includes('failed-precondition');
-        if (esIndice) {
-          console.warn('[Facturación Historial] Falta índice. Crea el índice:', msg1);
-          try {
-            const q2 = query(
-              collection(db, 'facturas_proveedores'),
-              where('proveedorId', '==', filtroProveedor),
-              limit(100)
-            );
-            const snap2 = await getDocs(q2);
-            const docs = snap2.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-            docs.sort((a: any, b: any) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-            setFacturasGlobales(docs);
-          } catch (e2: any) {
-            console.error('[Facturación Historial] Fallback falló:', e2);
-            alert(`No se pudieron cargar las facturas.\n\nDetalle: ${e2?.message || e2}`);
-          }
-        } else {
-          console.error('[Facturación Historial] Error:', e1);
-          alert(`Hubo un problema al cargar las facturas.\n\nDetalle: ${msg1}`);
+        const todas: any[] = [];
+        let cursor: any = null;
+        for (let i = 0; i < Math.ceil(LIMITE_FACTURAS_TODAS / PAG_FACTURAS); i++) {
+          const cons: any[] = [orderBy(documentId()), limit(PAG_FACTURAS)];
+          if (cursor) cons.splice(1, 0, startAfter(cursor));
+          const snap = await getDocs(query(collection(db, 'facturas_proveedores'), ...cons));
+          if (snap.empty) break;
+          snap.docs.forEach(d => todas.push(normalizarFactura({ id: d.id, ...(d.data() as any) })));
+          cursor = snap.docs[snap.docs.length - 1];
+          if (snap.docs.length < PAG_FACTURAS) break;
         }
+        todas.sort((a: any, b: any) => {
+          const fa = String(a.fecha || '');
+          const fb = String(b.fecha || '');
+          if (!fa && !fb) return 0;
+          if (!fa) return 1;
+          if (!fb) return -1;
+          return fb.localeCompare(fa);
+        });
+        setFacturasGlobales(todas);
+        guardarCacheFacturas(todas);
+      } catch (e: any) {
+        const msg = String(e?.message || e?.code || e || '');
+        console.error('[Facturación Historial] Error al cargar facturas:', e);
+        alert(`No se pudieron cargar las facturas.\n\nDetalle: ${msg}`);
       }
       setCargandoFacturas(false);
     };
+    descargar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    descargarFacturasCliente();
-  }, [filtroProveedor]);
-
-  // ──────────────────────────────────────────────────────────────────
-  // 3. Carga de OPERACIONES del proveedor (completadas) — on demand
-  //    Nota: NO filtramos las facturadas aquí; el filtro Pendientes/Facturadas
-  //    se aplica en memoria (ver `operacionesMostradas`).
-  // ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (activeTab !== 'operaciones') return;
-    if (!filtroProveedor) { setOperacionesGlobales([]); return; }
+    if (facturasGlobales.length > 0) guardarCacheFacturas(facturasGlobales);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facturasGlobales]);
 
-    const descargarOperacionesCliente = async () => {
-      setCargandoOperaciones(true);
-      const filtrarLegacy = (ops: any[]) => ops.filter((op: any) =>
-        STATUS_COMPLETADOS.includes(String(op.status || '').trim())
-      );
+  const guardarCacheOps = (docs: any[]) => {
+    try { sessionStorage.setItem(SS_OPS, JSON.stringify({ ts: Date.now(), data: docs })); } catch { /* cuota */ }
+  };
 
-      let opsFinal: any[] = [];
-      let exito = false;
-
+  const descargarOpsCompletadas = async (forzar = false) => {
+    if (!forzar && operacionesGlobales.length > 0) return;
+    if (!forzar) {
       try {
-        const q1 = query(
-          collection(db, 'operaciones'),
-          where(CAMPO_PROVEEDOR_OP, '==', filtroProveedor),
-          where('status', 'in', STATUS_COMPLETADOS),
-          orderBy('fechaServicio', 'desc'),
-          limit(LIMITE_OPERACIONES_PROVEEDOR)
-        );
-        const snap = await getDocs(q1);
-        opsFinal = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-        exito = true;
+        const raw = sessionStorage.getItem(SS_OPS);
+        if (raw) {
+          const obj = JSON.parse(raw);
+          if (obj && Array.isArray(obj.data) && obj.data.length && (Date.now() - (obj.ts || 0)) < SS_OPS_TTL) {
+            setOperacionesGlobales(obj.data);
+            setTopeOpsAlcanzado(obj.data.length >= LIMITE_OPS_TODAS);
+            return;
+          }
+        }
+      } catch { /* noop */ }
+    }
+    setCargandoOperaciones(true);
+    try {
+      let todas: any[] = [];
+      let usarFallback = false;
+      try {
+        let cursor: any = null;
+        for (let i = 0; i < Math.ceil(LIMITE_OPS_TODAS / PAG_OPS); i++) {
+          const cons: any[] = [where('status', 'in', STATUS_FACTURABLES), orderBy(documentId()), limit(PAG_OPS)];
+          if (cursor) cons.splice(2, 0, startAfter(cursor));
+          const snap = await getDocs(query(collection(db, 'operaciones'), ...cons));
+          if (snap.empty) break;
+          snap.docs.forEach(d => todas.push({ id: d.id, ...(d.data() as any) }));
+          cursor = snap.docs[snap.docs.length - 1];
+          if (snap.docs.length < PAG_OPS) break;
+        }
       } catch (e1: any) {
         const msg1 = String(e1?.message || e1?.code || e1 || '');
-        const esIndice = msg1.toLowerCase().includes('index') || msg1.toLowerCase().includes('failed-precondition');
-        if (esIndice) {
-          console.warn('[Facturación] Query óptima falló (falta índice). Crea el índice:', msg1);
-          try {
-            const q2 = query(
-              collection(db, 'operaciones'),
-              where(CAMPO_PROVEEDOR_OP, '==', filtroProveedor),
-              where('status', 'in', STATUS_COMPLETADOS),
-              limit(LIMITE_OPERACIONES_PROVEEDOR * 2)
-            );
-            const snap2 = await getDocs(q2);
-            opsFinal = snap2.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-            opsFinal.sort((a, b) => String(b.fechaServicio || '').localeCompare(String(a.fechaServicio || '')));
-            opsFinal = opsFinal.slice(0, LIMITE_OPERACIONES_PROVEEDOR);
-            exito = true;
-          } catch (e2: any) {
-            console.warn('[Facturación] Fallback 1 falló, probando legacy:', String(e2?.message || e2 || ''));
-            try {
-              const q3 = query(
-                collection(db, 'operaciones'),
-                where(CAMPO_PROVEEDOR_OP, '==', filtroProveedor),
-                limit(500)
-              );
-              const snap3 = await getDocs(q3);
-              const todas = snap3.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-              opsFinal = filtrarLegacy(todas);
-              opsFinal.sort((a, b) => String(b.fechaServicio || '').localeCompare(String(a.fechaServicio || '')));
-              opsFinal = opsFinal.slice(0, LIMITE_OPERACIONES_PROVEEDOR);
-              exito = true;
-            } catch (e3: any) {
-              console.error('[Facturación] Todos los intentos fallaron:', e3);
-              alert(`No se pudieron cargar las operaciones del proveedor.\n\nDetalle: ${e3?.message || e3}`);
-            }
-          }
+        if (msg1.toLowerCase().includes('index') || msg1.toLowerCase().includes('failed-precondition')) {
+          console.warn('[Facturación] Falta índice (status+__name__). Fallback: traer todo y filtrar en memoria. Detalle:', msg1);
+          usarFallback = true;
         } else {
-          console.error('[Facturación] Error inesperado:', e1);
-          alert(`Hubo un problema al cargar las operaciones.\n\nDetalle: ${msg1}`);
+          throw e1;
         }
       }
+      if (usarFallback) {
+        todas = [];
+        let cursor: any = null;
+        for (let i = 0; i < Math.ceil(LIMITE_OPS_TODAS / PAG_OPS); i++) {
+          const cons: any[] = [orderBy(documentId()), limit(PAG_OPS)];
+          if (cursor) cons.splice(1, 0, startAfter(cursor));
+          const snap = await getDocs(query(collection(db, 'operaciones'), ...cons));
+          if (snap.empty) break;
+          snap.docs.forEach(d => {
+            const o: any = { id: d.id, ...(d.data() as any) };
+            if (STATUS_FACTURABLES.includes(String(o.status || '').trim())) todas.push(o);
+          });
+          cursor = snap.docs[snap.docs.length - 1];
+          if (snap.docs.length < PAG_OPS) break;
+        }
+      }
+      todas.sort((a: any, b: any) => String(b.fechaServicio || b.createdAt || '').localeCompare(String(a.fechaServicio || a.createdAt || '')));
+      setOperacionesGlobales(todas);
+      setTopeOpsAlcanzado(todas.length >= LIMITE_OPS_TODAS);
+      guardarCacheOps(todas);
+    } catch (e: any) {
+      const msg = String(e?.message || e?.code || e || '');
+      console.error('[Facturación] Error al cargar operaciones completadas:', e);
+      alert(`No se pudieron cargar las operaciones.\n\nDetalle: ${msg}`);
+    }
+    setCargandoOperaciones(false);
+  };
 
-      if (exito) setOperacionesGlobales(opsFinal);
-      setCargandoOperaciones(false);
-    };
+  useEffect(() => {
+    if (activeTab !== 'operaciones') return;
+    if (operacionesGlobales.length > 0) return;
+    descargarOpsCompletadas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, operacionesGlobales.length]);
 
-    descargarOperacionesCliente();
-  }, [filtroProveedor, activeTab]);
+  useEffect(() => {
+    if (operacionesGlobales.length > 0) guardarCacheOps(operacionesGlobales);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operacionesGlobales]);
 
-  // ──────────────────────────────────────────────────────────────────
-  // Traductor de clientes / buscador
-  // ──────────────────────────────────────────────────────────────────
+  const recargarOperaciones = () => {
+    try { sessionStorage.removeItem(SS_OPS); } catch { /* noop */ }
+    setSeleccionadas([]);
+    descargarOpsCompletadas(true);
+  };
+
+  // Refresca AMBAS colecciones (operaciones + facturas) forzando lectura desde Firestore.
+  const recargarTodo = () => {
+    recargarOperaciones();
+    recargarFacturas();
+  };
+
   const getNombreEmpresa = (idOrName: string) => {
     if (!idOrName) return '-';
     const found = empresasList.find(e => e.id === idOrName || e.nombre === idOrName || e.nombreCorto === idOrName);
-    return found ? (found.nombre || found.nombreCorto || idOrName) : idOrName;
+    if (found) return found.nombre || found.nombreCorto || idOrName;
+    const porCatalogo = mapaCatalogos[String(idOrName)];
+    return porCatalogo || idOrName;
   };
 
   const proveedoresFiltradosBuscador = useMemo(() => {
     if (!empresasList.length) return [];
-    // Si no se configuró el tipo de proveedor, se muestran todas las empresas.
     const esProveedor = (emp: any) => {
       if (!ID_TIPO_PROVEEDOR) return true;
       const tipos = emp?.tiposEmpresa;
@@ -355,54 +937,169 @@ export const FacturacionProveedoresDashboard = () => {
     const proveedores = empresasList
       .filter(esProveedor)
       .sort((a: any, b: any) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es', { sensitivity: 'base' }));
-    if (!textoBuscarCliente.trim()) return proveedores.slice(0, 30);
-    const q = textoBuscarCliente.toLowerCase().trim();
+    if (!textoBuscarProveedor.trim()) return proveedores.slice(0, 30);
+    const q = textoBuscarProveedor.toLowerCase().trim();
     return proveedores.filter((c: any) =>
       String(c.nombre || '').toLowerCase().includes(q) ||
       String(c.rfc || '').toLowerCase().includes(q)
     ).slice(0, 30);
-  }, [empresasList, textoBuscarCliente]);
+  }, [empresasList, textoBuscarProveedor]);
 
   const nombreProveedorSeleccionado = useMemo(() => {
-    if (!filtroProveedor || !empresasList.length) return '';
+    if (!filtroProveedor || !empresasList.length) return filtroProveedor || '';
     const cli = empresasList.find(e => e.id === filtroProveedor);
     return cli?.nombre || filtroProveedor;
   }, [filtroProveedor, empresasList]);
 
+  const opIndex = useMemo(() => {
+    const m = new Map<string, { invoice: string; facturaId: string; fecha: string; proveedorId: string; moneda: string }>();
+    facturasGlobales.forEach((f: any) => {
+      const ids = Array.isArray(f.operacionesIds) ? f.operacionesIds : [];
+      ids.forEach((id: any) => {
+        const k = String(id || '');
+        if (k && !m.has(k)) m.set(k, { invoice: f.invoice, facturaId: f.id, fecha: f.fecha, proveedorId: f.proveedorId, moneda: f.monedaProveedor });
+      });
+    });
+    return m;
+  }, [facturasGlobales]);
+
+  const monedaDeProveedor = (provId: any): string => {
+    if (!provId) return '';
+    const empresa = empresasList.find(e => e.id === provId);
+    const idMoneda = empresa?.monedaRef || empresa?.moneda || empresa?.monedaProveedor;
+    if (idMoneda === ID_MXN) return 'MXN';
+    if (idMoneda === ID_USD) return 'USD';
+    return idMoneda ? String(idMoneda) : '';
+  };
+
+  const resolverMoneda = (val: any): string => {
+    const s = String(val || '').trim();
+    if (!s) return '';
+    if (s === ID_USD || s.toUpperCase() === 'USD') return 'USD';
+    if (s === ID_MXN || s.toUpperCase() === 'MXN') return 'MXN';
+    if (s.toUpperCase() === 'N/A') return '';
+    const nombre = mapaCatalogos[s];
+    return nombre || s;
+  };
+
+  const monedaFacturaMostrar = (f: any): string => {
+    const propia = resolverMoneda(f.monedaProveedor);
+    if (propia) return propia;
+    return monedaDeProveedor(f.proveedorId) || 'N/A';
+  };
+
+  const esFacturada = (op: any) => opIndex.has(String(op.id)) || !!op.facturaProveedorId || !!op.facturadoProveedor;
+  const invoiceDeOp = (op: any): string => op.facturaProveedorFolio || opIndex.get(String(op.id))?.invoice || '';
+  const provDeOp = (op: any) => op?.[CAMPO_PROVEEDOR_OP] || op?.proveedorUnidadId;
+
+  const proveedorFacturaId = useMemo(() => {
+    if (filtroProveedor) return filtroProveedor;
+    const ids = new Set<string>();
+    seleccionadas.forEach(id => {
+      const op = operacionesGlobales.find(o => o.id === id);
+      const c = provDeOp(op);
+      if (c) ids.add(String(c));
+    });
+    return ids.size === 1 ? [...ids][0] : '';
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroProveedor, seleccionadas, operacionesGlobales]);
+
+  const seleccionMultiProveedor = useMemo(() => {
+    if (filtroProveedor) return false;
+    const ids = new Set<string>();
+    seleccionadas.forEach(id => {
+      const op = operacionesGlobales.find(o => o.id === id);
+      const c = provDeOp(op);
+      if (c) ids.add(String(c));
+    });
+    return ids.size > 1;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroProveedor, seleccionadas, operacionesGlobales]);
+
+  const nombreProveedorFactura = useMemo(() => {
+    if (!proveedorFacturaId) return '';
+    const porCatalogo = getNombreEmpresa(proveedorFacturaId);
+    if (porCatalogo && porCatalogo !== proveedorFacturaId) return porCatalogo;
+    const op = operacionesGlobales.find(o => String(provDeOp(o) || '') === proveedorFacturaId);
+    return op?.proveedorUnidadNombre || proveedorFacturaId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proveedorFacturaId, empresasList, operacionesGlobales]);
+
   const monedaProveedor = useMemo(() => {
-    if (!filtroProveedor) return '-';
-    const empresa = empresasList.find(e => e.id === filtroProveedor);
-    if (!empresa) return '-';
+    if (!proveedorFacturaId) return '-';
+    const empresa = empresasList.find(e => e.id === proveedorFacturaId);
+    if (!empresa) {
+      const op = operacionesGlobales.find(o => String(provDeOp(o) || '') === proveedorFacturaId);
+      return op?.monedaUnidadNombre || '-';
+    }
     const idMoneda = empresa.monedaRef || empresa.moneda;
     if (idMoneda === ID_MXN) return 'MXN';
     if (idMoneda === ID_USD) return 'USD';
     return idMoneda || 'No definida en catálogo';
-  }, [filtroProveedor, empresasList]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proveedorFacturaId, empresasList, operacionesGlobales]);
 
-  // ──────────────────────────────────────────────────────────────────
-  // (3)+(6) Operaciones filtradas por estado y (5) ordenadas
-  // ──────────────────────────────────────────────────────────────────
-  const esFacturada = (op: any) => !!op.facturaProveedorId || !!op.facturadoProveedor;
+  const valorGenericoOp = (op: any, col: any): any => {
+    if (!col?.sourceField) return '';
+    const fields: string[] = Array.isArray(col.sourceField) ? col.sourceField : [col.sourceField];
+    for (const f of fields) {
+      const v = (op as any)?.[f];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return '';
+  };
 
-  const conteoOps = useMemo(() => {
-    const pendientes = operacionesGlobales.filter(op => !esFacturada(op)).length;
-    const facturadas = operacionesGlobales.filter(esFacturada).length;
-    return { pendientes, facturadas };
-  }, [operacionesGlobales]);
-
-  const valorOrdenOp = (op: any, campo: string): string | number => {
-    switch (campo) {
-      case 'ref': return String(op.numReferencia || op.referencia || op.ref || op.id || '').toLowerCase();
-      case 'fechaServicio': return String(op.fechaServicio || op.createdAt || '');
-      case 'proveedor': return getNombreEmpresa(op[CAMPO_PROVEEDOR_OP] || op.proveedorUnidadId || op.proveedorUnidadNombre).toLowerCase();
-      case 'destino': return String(op.destinoNombre || op.destino || '').toLowerCase();
-      case 'subtotal': return obtenerMontoOperacion(op).subtotal;
-      case 'conv': return obtenerMontoOperacion(op).conv;
-      default: return '';
+  const formatearValorGenericoOp = (val: any, tipo?: string): string => {
+    if (val === '' || val === null || val === undefined) return '-';
+    switch (tipo) {
+      case 'monto':     return formatoMoneda(val);
+      case 'numero':    return String(val);
+      case 'fecha':     return formatearFechaSpanish(String(val));
+      case 'fechaHora': return formatearFechaHora(String(val));
+      case 'moneda':    return mostrarMoneda(String(val));
+      default:          return String(resolverNombre(val));
     }
   };
 
-  // Rango de fechas (sobre fechaServicio). Vacío = sin límite.
+  const fechaOrdenKey = (val: any): string => {
+    const s = String(val || '').trim();
+    if (!s) return '00000000';
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return m[1] + m[2].padStart(2, '0') + m[3].padStart(2, '0');
+    m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    if (m) return m[1] + m[2].padStart(2, '0') + m[3].padStart(2, '0');
+    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (m) return m[3] + m[2].padStart(2, '0') + m[1].padStart(2, '0');
+    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})(?!\d)/);
+    if (m) return '20' + m[3] + m[2].padStart(2, '0') + m[1].padStart(2, '0');
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+    return s;
+  };
+
+  const refNaturalKey = (op: any): string => {
+    const r = String(op.numReferencia || op.referencia || op.ref || op.id || '');
+    return r.toLowerCase().replace(/\d+/g, (n) => n.padStart(12, '0'));
+  };
+
+  const valorOrdenOp = (op: any, campo: string): string | number => {
+    switch (campo) {
+      case 'factura': return String(op.facturaProveedorFolio || '').toLowerCase();
+      case 'ref': return refNaturalKey(op);
+      case 'fechaServicio': return fechaOrdenKey(op.fechaServicio || op.createdAt);
+      case 'proveedor': return getNombreEmpresa(provDeOp(op) || op.proveedorUnidadNombre).toLowerCase();
+      case 'destino': return String(op.destinoNombre || op.destino || '').toLowerCase();
+      case 'subtotal': return obtenerMontoOperacion(op).subtotal;
+      case 'conv': return obtenerMontoOperacion(op).conv;
+      default: {
+        const col = columnasOps.find(c => c.id === campo);
+        const raw = valorGenericoOp(op, col);
+        if (col?.tipo === 'monto' || col?.tipo === 'numero') return Number(raw) || 0;
+        return String(resolverNombre(raw) || '').toLowerCase();
+      }
+    }
+  };
+
   const dentroRangoFecha = (op: any) => {
     if (!fechaDesdeOps && !fechaHastaOps) return true;
     const f = String(op.fechaServicio || op.createdAt || '').slice(0, 10);
@@ -412,31 +1109,113 @@ export const FacturacionProveedoresDashboard = () => {
     return true;
   };
 
+  const coincideProveedorOp = (op: any) => !filtroProveedor || String(provDeOp(op) || '') === filtroProveedor;
+
+  const tipoOpNombre = (op: any): string => txt(op.tipoOperacionNombre, op.tipoOperacionId);
+  const tiposOperacionDisponibles = useMemo(() => {
+    const set = new Set<string>();
+    operacionesGlobales.forEach(op => {
+      const t = tipoOpNombre(op);
+      if (t && t !== '-') set.add(t);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operacionesGlobales, mapaCatalogos]);
+  const coincideTipoOp = (op: any) => !filtroTipoOp || tipoOpNombre(op) === filtroTipoOp;
+
+  // ✅ Proveedores solo factura a proveedores EXTERNOS: se muestran únicamente las
+  //    operaciones de Fletes, y las de Logística cuyo proveedor NO sea Roelca.
+  //    (Transfer y Logística-Roelca usan flota propia; no aplican en Proveedores.)
+  const esFacturableProveedor = (op: any): boolean => {
+    const tipo = String(op?.tipoOperacionNombre || op?.tipoOperacionId || '').toLowerCase();
+    const isFletes = tipo.includes('flete');
+    const isLogistica = tipo.includes('logistica') || tipo.includes('logística');
+    const esRoelca = String(op?.proveedorUnidadNombre || op?.proveedorUnidad || '').toLowerCase().includes('roelca');
+    return isFletes || (isLogistica && !esRoelca);
+  };
+
   const operacionesMostradas = useMemo(() => {
-    if (!filtroProveedor) return [];
+    const q = textoBuscarRemolqueOps.trim().toLowerCase();
+    const coincide = (op: any) => {
+      if (!q) return true;
+      const campos = [
+        op.remolqueNombre, op.remolquePlaca, op.numeroRemolque, op.remolque,
+        op.numReferencia, op.referencia, op.ref, invoiceDeOp(op), op.refCliente,
+        op.clienteNombre, op.proveedorUnidadNombre, op.origenNombre, op.destinoNombre,
+        op.observacionesEjecutivo,
+      ];
+      return campos.some(v => String(v ?? '').toLowerCase().includes(q));
+    };
+    const coincideVista = (op: any) => {
+      if (vistaOps === 'todas') return true;
+      if (vistaOps === 'facturadas') return esFacturada(op);
+      return !esFacturada(op);
+    };
     const lista = operacionesGlobales.filter(op =>
-      (filtroEstadoOps === 'facturadas' ? esFacturada(op) : !esFacturada(op)) && dentroRangoFecha(op)
+      esFacturableProveedor(op) && dentroRangoFecha(op) && coincideProveedorOp(op) && coincideTipoOp(op) && coincideVista(op) && coincide(op)
     );
     const dir = ordenOps.dir === 'asc' ? 1 : -1;
     return [...lista].sort((a, b) => {
       const va = valorOrdenOp(a, ordenOps.campo);
       const vb = valorOrdenOp(b, ordenOps.campo);
-      if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
-      return String(va).localeCompare(String(vb)) * dir;
+      let cmp = (typeof va === 'number' && typeof vb === 'number') ? (va - vb) : String(va).localeCompare(String(vb));
+      cmp *= dir;
+      if (cmp !== 0) return cmp;
+      return refNaturalKey(a).localeCompare(refNaturalKey(b));
     });
-  }, [operacionesGlobales, filtroProveedor, filtroEstadoOps, ordenOps, empresasList, fechaDesdeOps, fechaHastaOps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operacionesGlobales, ordenOps, empresasList, fechaDesdeOps, fechaHastaOps, columnasOps, mapaCatalogos, vistaOps, textoBuscarRemolqueOps, facturasGlobales, filtroProveedor, filtroTipoOp]);
+
+  const resumenOps = useMemo(() => {
+    const enRango = operacionesGlobales.filter(op => esFacturableProveedor(op) && dentroRangoFecha(op) && coincideProveedorOp(op) && coincideTipoOp(op));
+    const facturadas = enRango.filter(op => esFacturada(op)).length;
+    const total = enRango.length;
+    const porFacturar = total - facturadas;
+    return { porFacturar, facturadas, total };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operacionesGlobales, fechaDesdeOps, fechaHastaOps, facturasGlobales, filtroProveedor, filtroTipoOp]);
+
+  const diagnostico = useMemo(() => {
+    const totalFacturas = facturasGlobales.length;
+    const opsFacturadasUnicas = opIndex.size;
+    const porClave = new Map<string, number>();
+    facturasGlobales.forEach((f: any) => {
+      const k = `${String(f.invoice || '').trim().toLowerCase()}__${String(f.proveedorId || '')}`;
+      porClave.set(k, (porClave.get(k) || 0) + 1);
+    });
+    let invoicesDuplicados = 0;
+    porClave.forEach(v => { if (v > 1) invoicesDuplicados++; });
+    let sinMoneda = 0, sinFecha = 0, sinTotal = 0;
+    facturasGlobales.forEach((f: any) => {
+      if (monedaFacturaMostrar(f) === 'N/A') sinMoneda++;
+      if (!String(f.fecha || '').trim()) sinFecha++;
+      if (!(Number(f.subtotalFactura) > 0)) sinTotal++;
+    });
+    const enRango = operacionesGlobales.filter(op => dentroRangoFecha(op));
+    const rangoTotal = enRango.length;
+    const rangoFacturadas = enRango.filter(op => esFacturada(op)).length;
+    const rangoPorFacturar = rangoTotal - rangoFacturadas;
+    const huerfanas = enRango.filter(op => (op.facturadoProveedor || op.facturaProveedorId) && !opIndex.has(String(op.id))).length;
+    return {
+      totalFacturas, opsFacturadasUnicas, invoicesDuplicados,
+      sinMoneda, sinFecha, sinTotal,
+      rangoTotal, rangoFacturadas, rangoPorFacturar, huerfanas,
+      topeFacturas: totalFacturas >= LIMITE_FACTURAS_TODAS,
+      topeOps: topeOpsAlcanzado,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facturasGlobales, opIndex, operacionesGlobales, fechaDesdeOps, fechaHastaOps, empresasList, topeOpsAlcanzado]);
 
   const toggleOrdenOps = (campo: string) =>
     setOrdenOps(prev => prev.campo === campo ? { campo, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { campo, dir: 'asc' });
-
   const flechaOps = (campo: string) => ordenOps.campo === campo ? (ordenOps.dir === 'asc' ? ' ▲' : ' ▼') : '';
 
-  // Valor textual/numérico de cada columna (para el Excel)
   const valorCeldaOps = (op: any, key: string, m: any) => {
     switch (key) {
+      case 'factura': { const inv = invoiceDeOp(op); return inv || (esFacturada(op) ? 'Facturada' : 'Por facturar'); }
       case 'ref': return op.numReferencia || op.referencia || op.ref || op.id;
       case 'fechaServicio': return formatearFechaSpanish(op.fechaServicio || op.createdAt);
-      case 'proveedor': return getNombreEmpresa(op[CAMPO_PROVEEDOR_OP] || op.proveedorUnidadId || op.proveedorUnidadNombre);
+      case 'proveedor': return getNombreEmpresa(provDeOp(op) || op.proveedorUnidadNombre);
       case 'cartaPorte': return op.cartaPorte || op.numeroCartaPorte || op.numDoda || '-';
       case 'destino': return op.destinoNombre || op.destino || '-';
       case 'moneda': return op.monedaUnidadNombre || mostrarMoneda(op.facturadoEnUnidad);
@@ -444,17 +1223,39 @@ export const FacturacionProveedoresDashboard = () => {
       case 'dolares': return m.dol;
       case 'pesos': return m.pes;
       case 'conv': return m.conv;
-      default: return '-';
+      default: {
+        const col = columnasOps.find(c => c.id === key);
+        return formatearValorGenericoOp(valorGenericoOp(op, col), col?.tipo);
+      }
     }
   };
 
-  // Celda con formato visual para la tabla
   const renderCeldaOps = (op: any, key: string, m: any) => {
     const tdBase: React.CSSProperties = { padding: '16px', color: '#c9d1d9', whiteSpace: 'nowrap' };
     switch (key) {
+      case 'factura': {
+        const inv = invoiceDeOp(op);
+        if (inv) return <td key={key} style={{ padding: '16px', whiteSpace: 'nowrap' }}><span style={{ padding: '3px 10px', borderRadius: '12px', fontSize: '0.78rem', fontWeight: 'bold', color: '#58a6ff', border: '1px solid #58a6ff', backgroundColor: 'rgba(88,166,255,0.1)', fontFamily: 'monospace' }}>{inv}</span></td>;
+        return <td key={key} style={{ padding: '16px', whiteSpace: 'nowrap' }}><span style={{ color: '#8b949e', fontSize: '0.8rem' }}>Por facturar</span></td>;
+      }
+      case 'facturaRoelca': {
+        const fc = getFacturaClienteDeOp(op);
+        if (fc && (fc.invoice || fc.facturaId)) {
+          return <td key={key} style={{ padding: '16px', whiteSpace: 'nowrap' }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); setFacturaClienteViendo({ ...fc, opRef: op.numReferencia || op.referencia || op.ref || op.id }); }}
+              title="Ver dónde fue facturada (Facturación de Clientes)"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 10px', borderRadius: '12px', fontSize: '0.78rem', fontWeight: 'bold', color: '#3fb950', border: '1px solid #3fb950', backgroundColor: 'rgba(63,185,80,0.12)', fontFamily: 'monospace', cursor: 'pointer' }}>
+              {fc.invoice || 'Facturada'}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </button>
+          </td>;
+        }
+        return <td key={key} style={{ padding: '16px', whiteSpace: 'nowrap' }}><span style={{ color: '#8b949e', fontSize: '0.8rem' }}>No facturada</span></td>;
+      }
       case 'ref': return <td key={key} style={{ padding: '16px', color: '#58a6ff', fontWeight: 'bold', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{op.numReferencia || op.referencia || op.ref || op.id.substring(0, 6)}</td>;
       case 'fechaServicio': return <td key={key} style={tdBase}>{formatearFechaSpanish(op.fechaServicio || op.createdAt)}</td>;
-      case 'proveedor': return <td key={key} style={tdBase}>{getNombreEmpresa(op[CAMPO_PROVEEDOR_OP] || op.proveedorUnidadId || op.proveedorUnidadNombre)}</td>;
+      case 'proveedor': return <td key={key} style={tdBase}>{getNombreEmpresa(provDeOp(op) || op.proveedorUnidadNombre)}</td>;
       case 'cartaPorte': return <td key={key} style={tdBase}>{op.cartaPorte || op.numeroCartaPorte || op.numDoda || '-'}</td>;
       case 'destino': return <td key={key} style={tdBase}>{op.destinoNombre || op.destino || '-'}</td>;
       case 'moneda': return <td key={key} style={tdBase}>{op.monedaUnidadNombre || mostrarMoneda(op.facturadoEnUnidad)}</td>;
@@ -462,11 +1263,18 @@ export const FacturacionProveedoresDashboard = () => {
       case 'dolares': return <td key={key} style={{ ...tdBase, color: '#10b981' }}>{formatoMoneda(m.dol)}</td>;
       case 'pesos': return <td key={key} style={{ ...tdBase, color: '#3b82f6' }}>{formatoMoneda(m.pes)}</td>;
       case 'conv': return <td key={key} style={{ padding: '16px', color: '#3fb950', fontWeight: 'bold', whiteSpace: 'nowrap' }}>{formatoMoneda(m.conv)}</td>;
-      default: return <td key={key} style={tdBase}>-</td>;
+      default: {
+        const col = columnasOps.find(c => c.id === key);
+        const text = formatearValorGenericoOp(valorGenericoOp(op, col), col?.tipo);
+        if (col?.tipo === 'monto') return <td key={key} style={{ ...tdBase, color: '#3fb950' }}>{text}</td>;
+        if (col?.tipo === 'numero') return <td key={key} style={{ ...tdBase, textAlign: 'right' as const }}>{text}</td>;
+        const long = (col?.tipo === 'texto') && typeof text === 'string' && text.length > 60;
+        if (long) return <td key={key} style={{ ...tdBase, whiteSpace: 'normal', maxWidth: '320px' }}>{text}</td>;
+        return <td key={key} style={tdBase}>{text}</td>;
+      }
     }
   };
 
-  // Drag & drop / visibilidad de columnas de la tabla de operaciones
   const handleDragStartOps = (_e: React.DragEvent, index: number) => setDraggedColOpsIndex(index);
   const handleDragEnterOps = (index: number) => {
     if (draggedColOpsIndex === null || draggedColOpsIndex === index) return;
@@ -482,32 +1290,563 @@ export const FacturacionProveedoresDashboard = () => {
     setColumnasOps(nuevas);
   };
 
-  // (3) Exportar a Excel las operaciones mostradas (respeta cliente, estado,
-  //     rango de fechas y columnas/orden configurados).
-  const exportarExcelOps = () => {
+  // ═══════════════════════════════════════════════════════════════════
+  // (REMISIÓN) Encabezados por moneda + vista previa editable + PDF.
+  // Portado de FacturacionClientesDashboard, adaptado a PROVEEDOR.
+  // ═══════════════════════════════════════════════════════════════════
+  const [emisorMXN, setEmisorMXN] = useState<EmisorRemision>(EMISOR_MXN_DEFAULT);
+  const [emisorUSD, setEmisorUSD] = useState<EmisorRemision>(EMISOR_USD_DEFAULT);
+  const [modalEmisores, setModalEmisores] = useState(false);
+  const [guardandoEmisores, setGuardandoEmisores] = useState(false);
+  const [remisionPreview, setRemisionPreview] = useState<any | null>(null);
+  const [cargandoRemision, setCargandoRemision] = useState(false);
+
+  // Cargar encabezados (emisores) desde localStorage + Firestore (compartido).
+  useEffect(() => {
+    try {
+      const ls = localStorage.getItem(LS_REMISION_EMISORES);
+      if (ls) {
+        const obj = JSON.parse(ls);
+        if (obj?.mxn) setEmisorMXN({ ...EMISOR_MXN_DEFAULT, ...obj.mxn });
+        if (obj?.usd) setEmisorUSD({ ...EMISOR_USD_DEFAULT, ...obj.usd });
+      }
+    } catch { /* noop */ }
+    let activo = true;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, CONFIG_COLUMNAS_COLLECTION, DOC_REMISION_EMISORES));
+        if (!activo || !snap.exists()) return;
+        const data = snap.data() as any;
+        if (data?.mxn) setEmisorMXN({ ...EMISOR_MXN_DEFAULT, ...data.mxn });
+        if (data?.usd) setEmisorUSD({ ...EMISOR_USD_DEFAULT, ...data.usd });
+        try { localStorage.setItem(LS_REMISION_EMISORES, JSON.stringify({ mxn: data?.mxn, usd: data?.usd })); } catch { /* noop */ }
+      } catch (e) { console.error('Error cargando encabezados de remisión:', e); }
+    })();
+    return () => { activo = false; };
+  }, []);
+
+  const guardarEmisores = async () => {
+    setGuardandoEmisores(true);
+    try {
+      const payload = { mxn: emisorMXN, usd: emisorUSD, updatedAt: new Date().toISOString() };
+      try { localStorage.setItem(LS_REMISION_EMISORES, JSON.stringify({ mxn: emisorMXN, usd: emisorUSD })); } catch { /* noop */ }
+      await setDoc(doc(db, CONFIG_COLUMNAS_COLLECTION, DOC_REMISION_EMISORES), payload);
+      setModalEmisores(false);
+    } catch (e) {
+      console.error('Error guardando encabezados de remisión:', e);
+      alert('No se pudo guardar el encabezado de remisiones para todos los usuarios.\nRevisa tus permisos de escritura en Firestore (colección config_columnas).');
+    } finally {
+      setGuardandoEmisores(false);
+    }
+  };
+
+  // Preparar la remisión de una factura de PROVEEDOR → abre el modal editable.
+  const abrirRemision = async (f: any) => {
+    if (!f) return;
+    setCargandoRemision(true);
+    try {
+      const monRaw = monedaFacturaMostrar(f).toUpperCase();
+      const esUSD = monRaw === 'USD';
+      const emisor = esUSD ? emisorUSD : emisorMXN;
+
+      const ids = (Array.from(new Set((f.operacionesIds || []).map((x: any) => String(x)))) as string[]).filter(Boolean).slice(0, 60);
+      const byId = new Map<string, any>();
+      for (let i = 0; i < ids.length; i += 30) {
+        const chunk = ids.slice(i, i + 30);
+        try {
+          const snap = await getDocs(query(collection(db, 'operaciones'), where(documentId(), 'in', chunk)));
+          snap.docs.forEach(d => byId.set(d.id, { id: d.id, ...(d.data() as any) }));
+        } catch (e) { console.warn('No se pudieron leer operaciones para la remisión:', e); }
+      }
+
+      const guardadas: any[] = Array.isArray(f.operacionesGuardadas) && f.operacionesGuardadas.length
+        ? f.operacionesGuardadas
+        : ids.map((id) => ({ id }));
+
+      const filas = guardadas.map((g: any) => {
+        const o = byId.get(String(g.id)) || {};
+        const equipoUnidad = txt(o.unidadNombre, o.unidad);
+        const equipo = equipoUnidad !== '-' ? equipoUnidad : txt(o.remolqueNombre, o.remolquePlaca, o.numeroRemolque);
+        const importe = Number(g.monto) || (o.id ? obtenerMontoOperacion(o).conv : 0) || 0;
+        const ref = refDeOp({ ...g, ...o }) || o.numReferencia || g.ref || '';
+        const fechaFmt = formatearFechaSpanish(o.fechaServicio || o.createdAt || '');
+        const org = txt(o.origenNombre, o.origen);
+        const dst = txt(o.destinoNombre, o.destino);
+        return {
+          ref,
+          fecha: fechaFmt === '-' ? '' : fechaFmt,
+          equipo: equipo === '-' ? '' : equipo,
+          origen: org === '-' ? '' : org,
+          destino: dst === '-' ? '' : dst,
+          descripcion: o.descripcionServicio || o.observacionesEjecutivo || o.descripcionMercancia || '',
+          importe,
+        };
+      });
+
+      const totalCalc = filas.reduce((s: number, r: any) => s + (Number(r.importe) || 0), 0);
+      const total = totalCalc > 0 ? totalCalc : (Number(f.subtotalFactura) || 0);
+
+      const emp: any = empresasList.find(e => e.id === f.proveedorId) || {};
+
+      setRemisionPreview({
+        esUSD,
+        emisorNombre: emisor.facturaNombre,
+        emisorDireccion: emisor.direccion,
+        emisorCiudadEstado: emisor.ciudadEstado,
+        emisorEmail: emisor.email,
+        numero: f.invoice || String(f.id || ''),
+        fecha: String(f.fecha || '').slice(0, 10),
+        clienteNombre: f.proveedorNombre || getNombreEmpresa(f.proveedorId) || '',
+        diasCredito: String(emp.diasCredito ?? emp.credito ?? emp.diasDeCredito ?? ''),
+        direccion: String(emp.direccion ?? emp.domicilio ?? emp.calle ?? ''),
+        numExtInt: String(emp.numExtInt ?? emp.numeroExterior ?? emp.numExt ?? ''),
+        colonia: String(emp.colonia ?? ''),
+        ciudad: String(emp.ciudad ?? emp.municipio ?? ''),
+        moneda: esUSD ? 'Dólares' : 'Pesos',
+        observaciones: '',
+        fechaTipoCambio: '',
+        tipoCambio: '',
+        total,
+        filas,
+      });
+    } catch (e) {
+      console.error('Error preparando la remisión:', e);
+      alert('No se pudo preparar la remisión.');
+    } finally {
+      setCargandoRemision(false);
+    }
+  };
+
+  const generarPDFDeRemision = () => {
+    if (!remisionPreview) return;
+    const data: RemisionData = {
+      emisor: {
+        facturaNombre: remisionPreview.emisorNombre || '',
+        direccion: remisionPreview.emisorDireccion || '',
+        ciudadEstado: remisionPreview.emisorCiudadEstado || '',
+        email: remisionPreview.emisorEmail || '',
+      },
+      numero: remisionPreview.numero || '',
+      fecha: remisionPreview.fecha || '',
+      clienteNombre: remisionPreview.clienteNombre || '',
+      diasCredito: remisionPreview.diasCredito || '',
+      direccion: remisionPreview.direccion || '',
+      numExtInt: remisionPreview.numExtInt || '',
+      colonia: remisionPreview.colonia || '',
+      ciudad: remisionPreview.ciudad || '',
+      moneda: remisionPreview.moneda || '',
+      observaciones: remisionPreview.observaciones || '',
+      fechaTipoCambio: remisionPreview.fechaTipoCambio || '',
+      tipoCambio: remisionPreview.tipoCambio || '',
+      total: Number(remisionPreview.total) || 0,
+      filas: (remisionPreview.filas || []).map((r: any) => ({
+        ref: r.ref || '',
+        fecha: r.fecha || '',
+        equipo: r.equipo || '',
+        origen: r.origen || '',
+        destino: r.destino || '',
+        descripcion: r.descripcion || '',
+        importe: Number(r.importe) || 0,
+      })),
+    };
+    generarRemisionPDF(data);
+  };
+
+  const setRP = (campo: string, valor: any) => setRemisionPreview((prev: any) => prev ? { ...prev, [campo]: valor } : prev);
+  const setRPFila = (idx: number, campo: string, valor: any) =>
+    setRemisionPreview((prev: any) => {
+      if (!prev) return prev;
+      const filas = [...(prev.filas || [])];
+      filas[idx] = { ...filas[idx], [campo]: valor };
+      const total = filas.reduce((s: number, r: any) => s + (Number(r.importe) || 0), 0);
+      return { ...prev, filas, total };
+    });
+  const quitarFilaRemision = (idx: number) =>
+    setRemisionPreview((prev: any) => {
+      if (!prev) return prev;
+      const filas = (prev.filas || []).filter((_: any, i: number) => i !== idx);
+      const total = filas.reduce((s: number, r: any) => s + (Number(r.importe) || 0), 0);
+      return { ...prev, filas, total };
+    });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ✅ (CONFIRMACIÓN DE TARIFA) por operación → pestaña "Asignar Operaciones"
+  // ✅ (RATE DE PROVEEDOR) por factura → pestaña "Historial de Facturas"
+  // Ambos con vista previa editable antes de descargar el PDF (con logo).
+  // ═══════════════════════════════════════════════════════════════════
+  const [confirmacionPreview, setConfirmacionPreview] = useState<any | null>(null);
+  const [ratePreview, setRatePreview] = useState<any | null>(null);
+  const [cargandoRate, setCargandoRate] = useState(false);
+
+  // Nombre del usuario logueado (coordinador que emite la confirmación).
+  const nombreCoordinadorActual = (): string => {
+    try {
+      const u = getAuth().currentUser;
+      return u?.displayName || u?.email || '';
+    } catch { return ''; }
+  };
+
+  // Intenta armar la dirección de una bodega/dirección desde los catálogos cacheados.
+  const direccionDeCatalogo = (id: any): string => {
+    if (id === undefined || id === null || id === '') return '';
+    const alias = ['bodegas', 'direcciones', 'ubicaciones', 'clientesBodegas'];
+    for (const a of alias) {
+      const arr = leerCacheLocal(a);
+      if (!arr) continue;
+      const item = arr.find((x: any) => String(x.id) === String(id));
+      if (item) {
+        const partes = [
+          item.direccion || item.domicilio || item.calle,
+          item.colonia ? `Col. ${item.colonia}` : '',
+          item.cp || item.codigoPostal ? `C.P. ${item.cp || item.codigoPostal}` : '',
+          item.ciudad || item.municipio,
+          item.estado,
+        ].map((p: any) => String(p || '').trim()).filter(Boolean);
+        if (partes.length) return partes.join(', ');
+        if (item.label) return String(item.label);
+      }
+    }
+    return '';
+  };
+
+  const aTextoMoneda = (v: any): string => {
+    const m = String(v || '').toUpperCase();
+    if (m === 'USD' || m.includes('DOLAR') || m.includes('DÓLAR')) return 'Dólares';
+    if (m === 'MXN' || m.includes('PESO')) return 'Pesos';
+    return String(v || '');
+  };
+
+  const abrirConfirmacionTarifa = (e: React.MouseEvent, op: any) => {
+    e.stopPropagation();
+    const m = obtenerMontoOperacion(op);
+    const monedaFact = op.monedaUnidadNombre || mostrarMoneda(op.facturadoEnUnidad);
+    const monedaConvRaw = mostrarMoneda(op.monedaConvenioProv);
+    const monedaConv = monedaConvRaw !== '-' ? monedaConvRaw : monedaFact;
+    const limpiar = (v: string) => (v === '-' ? '' : v);
+    setConfirmacionPreview({
+      coordinador: nombreCoordinadorActual(),
+      referencia: refDeOp(op) || op.numReferencia || String(op.id || ''),
+      remolque: limpiar(txt(op.remolqueNombre, op.remolquePlaca, op.numeroRemolque)),
+      tipoUnidad: limpiar(txt(op.tipoUnidadNombre, op.tipoUnidad)),
+      placasRemolque: limpiar(txt(op.remolquePlaca, op.placasRemolque)),
+      unidad: limpiar(txt(op.unidadProveedor, op.unidadNombre, op.unidad)),
+      operador: limpiar(txt(op.operadorProveedor, op.operadorNombre, op.operador)),
+      fechaServicio: formatearFechaSpanish(op.fechaServicio || op.createdAt),
+      tipoCambio: String(op.tipoCambioAprobado || ''),
+      proveedor: getNombreEmpresa(provDeOp(op) || op.proveedorUnidadNombre) || '',
+      tipoOperacion: limpiar(txt(op.convenioProveedorNombre, op.convenioProveedor, op.convenioNombre, op.convenio)),
+      impoExpoMov: limpiar(tipoOpNombre(op)),
+      clienteOrigen: limpiar(txt(op.origenNombre, op.origen)),
+      ciudadOrigen: direccionDeCatalogo(op.origen),
+      clienteDestino: limpiar(txt(op.destinoNombre, op.destino)),
+      ciudadDestino: direccionDeCatalogo(op.destino),
+      refCliente: String(op.refCliente || ''),
+      facturadoEn: aTextoMoneda(monedaFact),
+      monedaConvenio: aTextoMoneda(monedaConv),
+      // ✅ MONEDA DE PAGO: por defecto es la moneda de facturación, con lo que
+      //   el total inicial (m.conv) coincide con la lógica actual. Al cambiarla
+      //   se recalculan los montos a pagar (ver setCTMonto).
+      monedaPago: aTextoMoneda(monedaFact),
+      convenioProv: String(Number(op.totalAPagarProv) || 0),
+      costosAdic: String(Number(op.cargosAdicionalesProv) || 0),
+      subtotalProv: String(m.subtotal || 0),
+      totalAFacturar: String(m.conv || 0),
+      emisorDireccion: 'MAR DE LAS ANTILLAS #947, COL. LA PAZ, C.P. 88290',
+      emisorCiudad: 'NUEVO LAREDO, TAMPS',
+    });
+  };
+
+  const generarPDFDeConfirmacion = () => {
+    if (!confirmacionPreview) return;
+    const p = confirmacionPreview;
+    const data = {
+      coordinador: p.coordinador || '',
+      referencia: p.referencia || '',
+      remolque: p.remolque || '',
+      tipoUnidad: p.tipoUnidad || '',
+      placasRemolque: p.placasRemolque || '',
+      unidad: p.unidad || '',
+      operador: p.operador || '',
+      fechaServicio: p.fechaServicio || '',
+      tipoCambio: p.tipoCambio || '',
+      proveedor: p.proveedor || '',
+      tipoOperacion: p.tipoOperacion || '',
+      impoExpoMov: p.impoExpoMov || '',
+      clienteOrigen: p.clienteOrigen || '',
+      ciudadOrigen: p.ciudadOrigen || '',
+      clienteDestino: p.clienteDestino || '',
+      ciudadDestino: p.ciudadDestino || '',
+      refCliente: p.refCliente || '',
+      facturadoEn: p.facturadoEn || '',
+      monedaConvenio: p.monedaConvenio || '',
+      convenioProv: p.convenioProv || '0',
+      costosAdic: p.costosAdic || '0',
+      subtotalProv: p.subtotalProv || '0',
+      totalAFacturar: p.totalAFacturar || '0',
+      emisorDireccion: p.emisorDireccion || '',
+      emisorCiudad: p.emisorCiudad || '',
+      // ✅ Moneda de pago (el generador del PDF puede mostrarla junto al total).
+      monedaPago: p.monedaPago || '',
+    } as ConfirmacionTarifaData;
+    generarConfirmacionTarifaPDF(data);
+  };
+
+  const setCT = (campo: string, valor: any) => setConfirmacionPreview((prev: any) => prev ? { ...prev, [campo]: valor } : prev);
+
+  // ✅ MONEDA DE PAGO — normaliza cualquier texto de moneda a USD/MXN.
+  const claveMoneda = (v: any): '' | 'USD' | 'MXN' => {
+    const m = String(v || '').toUpperCase();
+    if (m.includes('USD') || m.includes('DOLAR') || m.includes('DÓLAR')) return 'USD';
+    if (m.includes('MXN') || m.includes('PESO')) return 'MXN';
+    return '';
+  };
+  const redondear2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+
+  // ✅ Recalcula SUBTOTAL y TOTAL A PAGAR según la MONEDA DE PAGO, manteniendo
+  //   la lógica de la moneda de facturación (que sigue siendo el default):
+  //   · subtotal (en moneda del convenio) = convenio prov. + costos adicionales.
+  //   · pago == convenio            → total = subtotal (sin conversión).
+  //   · convenio USD → pago Pesos   → total = subtotal × tipo de cambio.
+  //   · convenio Pesos → pago USD   → total = subtotal ÷ tipo de cambio.
+  //   Se dispara al cambiar: moneda de pago, moneda del convenio, convenio,
+  //   costos adicionales o tipo de cambio. El subtotal y el total siguen
+  //   siendo editables a mano por si se necesita forzar un monto.
+  const setCTMonto = (campo: string, valor: any) => {
+    setConfirmacionPreview((prev: any) => {
+      if (!prev) return prev;
+      const p: any = { ...prev, [campo]: valor };
+      const subtotal = (Number(p.convenioProv) || 0) + (Number(p.costosAdic) || 0);
+      const tc = Number(p.tipoCambio) || 0;
+      const mConv = claveMoneda(p.monedaConvenio);
+      const mPago = claveMoneda(p.monedaPago) || claveMoneda(p.facturadoEn);
+      let total = subtotal;
+      if (mConv && mPago && mConv !== mPago) {
+        if (mConv === 'USD' && mPago === 'MXN') total = subtotal * tc;
+        else if (mConv === 'MXN' && mPago === 'USD') total = tc > 0 ? subtotal / tc : subtotal;
+      }
+      p.subtotalProv = String(redondear2(subtotal));
+      p.totalAFacturar = String(redondear2(total));
+      return p;
+    });
+  };
+
+  // Fecha (YYYY-MM-DD o similar) + N días → DD/MM/YYYY.
+  const sumarDiasAFecha = (fechaISO: any, dias: number): string => {
+    const d = new Date(String(fechaISO || '').slice(0, 10) + 'T00:00:00');
+    if (isNaN(d.getTime())) return '';
+    d.setDate(d.getDate() + (Number(dias) || 0));
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  };
+  const fechaDDMMYYYY = (fechaISO: any): string => sumarDiasAFecha(fechaISO, 0);
+
+  const abrirRate = async (f: any) => {
+    if (!f) return;
+    setCargandoRate(true);
+    try {
+      const ids = (Array.from(new Set((f.operacionesIds || []).map((x: any) => String(x)))) as string[]).filter(Boolean).slice(0, 60);
+      const byId = new Map<string, any>();
+      for (let i = 0; i < ids.length; i += 30) {
+        const chunk = ids.slice(i, i + 30);
+        try {
+          const snap = await getDocs(query(collection(db, 'operaciones'), where(documentId(), 'in', chunk)));
+          snap.docs.forEach(d => byId.set(d.id, { id: d.id, ...(d.data() as any) }));
+        } catch (e) { console.warn('No se pudieron leer operaciones para el rate:', e); }
+      }
+
+      const guardadas: any[] = Array.isArray(f.operacionesGuardadas) && f.operacionesGuardadas.length
+        ? f.operacionesGuardadas
+        : ids.map((id) => ({ id }));
+
+      const filas = guardadas.map((g: any) => {
+        const o = byId.get(String(g.id)) || {};
+        const equipoUnidad = txt(o.unidadProveedor, o.unidadNombre, o.unidad);
+        const equipo = equipoUnidad !== '-' ? equipoUnidad : txt(o.remolqueNombre, o.remolquePlaca, o.numeroRemolque);
+        const proveedorMonto = Number(g.monto) || (o.id ? obtenerMontoOperacion(o).conv : 0) || 0;
+        const cobrado = Number(o.conversionCliente) || 0;
+        const fc = o.id ? getFacturaClienteDeOp(o) : null;
+        const org = txt(o.origenNombre, o.origen);
+        const dst = txt(o.destinoNombre, o.destino);
+        const desc = txt(o.convenioProveedorNombre, o.convenioProveedor, o.convenioNombre, o.convenio);
+        return {
+          ref: refDeOp({ ...g, ...o }) || o.numReferencia || g.ref || '',
+          equipo: equipo === '-' ? '' : equipo,
+          origen: org === '-' ? '' : org,
+          destino: dst === '-' ? '' : dst,
+          descripcion: desc === '-' ? (o.descripcionServicio || o.observacionesEjecutivo || '') : desc,
+          facturaRoelca: (fc && fc.invoice) ? String(fc.invoice) : '',
+          cobrado,
+          proveedor: proveedorMonto,
+        };
+      });
+
+      const emp: any = empresasList.find(e => e.id === f.proveedorId) || {};
+      const dias = String(emp.diasCredito ?? emp.credito ?? emp.diasDeCredito ?? '');
+      const monRaw = monedaFacturaMostrar(f).toUpperCase();
+
+      setRatePreview({
+        fecha: fechaDDMMYYYY(f.fecha) || fechaDDMMYYYY(new Date().toISOString()),
+        facturaProveedor: f.invoice || String(f.id || ''),
+        proveedorNombre: f.proveedorNombre || getNombreEmpresa(f.proveedorId) || '',
+        diasCredito: dias,
+        vencimiento: sumarDiasAFecha(f.fecha, Number(dias) || 0),
+        direccion: String(emp.direccion ?? emp.domicilio ?? emp.calle ?? ''),
+        colonia: String(emp.colonia ?? ''),
+        ciudad: String(emp.ciudad ?? emp.municipio ?? ''),
+        moneda: monRaw === 'USD' ? 'DÓLARES' : 'PESOS',
+        observaciones: '',
+        filas,
+      });
+    } catch (e) {
+      console.error('Error preparando el rate de proveedor:', e);
+      alert('No se pudo preparar el Rate de Proveedor.');
+    } finally {
+      setCargandoRate(false);
+    }
+  };
+
+  const generarPDFDeRate = () => {
+    if (!ratePreview) return;
+    const data: RateProveedorData = {
+      fecha: ratePreview.fecha || '',
+      facturaProveedor: ratePreview.facturaProveedor || '',
+      proveedorNombre: ratePreview.proveedorNombre || '',
+      diasCredito: ratePreview.diasCredito || '',
+      vencimiento: ratePreview.vencimiento || '',
+      direccion: ratePreview.direccion || '',
+      colonia: ratePreview.colonia || '',
+      ciudad: ratePreview.ciudad || '',
+      moneda: ratePreview.moneda || 'PESOS',
+      observaciones: ratePreview.observaciones || '',
+      filas: (ratePreview.filas || []).map((r: any) => ({
+        ref: r.ref || '',
+        equipo: r.equipo || '',
+        origen: r.origen || '',
+        destino: r.destino || '',
+        descripcion: r.descripcion || '',
+        facturaRoelca: r.facturaRoelca || '',
+        cobrado: Number(r.cobrado) || 0,
+        proveedor: Number(r.proveedor) || 0,
+      })),
+    };
+    generarRateProveedorPDF(data);
+  };
+
+  const setRT = (campo: string, valor: any) => setRatePreview((prev: any) => prev ? { ...prev, [campo]: valor } : prev);
+  const setRTFila = (idx: number, campo: string, valor: any) =>
+    setRatePreview((prev: any) => {
+      if (!prev) return prev;
+      const filas = [...(prev.filas || [])];
+      filas[idx] = { ...filas[idx], [campo]: valor };
+      return { ...prev, filas };
+    });
+  const quitarFilaRate = (idx: number) =>
+    setRatePreview((prev: any) => {
+      if (!prev) return prev;
+      const filas = (prev.filas || []).filter((_: any, i: number) => i !== idx);
+      return { ...prev, filas };
+    });
+
+  // Estilos reutilizables de los modales de remisión.
+  const rInputStyle: React.CSSProperties = { width: '100%', padding: '8px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.85rem', boxSizing: 'border-box' };
+  const rLabelStyle: React.CSSProperties = { color: '#8b949e', fontSize: '0.72rem', display: 'block', marginBottom: '4px', fontWeight: 'bold' };
+  const rCellStyle: React.CSSProperties = { padding: '6px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '4px', color: '#c9d1d9', fontSize: '0.8rem', width: '100%', boxSizing: 'border-box' };
+
+  // Exportación a Excel PROFESIONAL (con logo, igual que Clientes).
+  const exportarExcelOps = async () => {
     if (operacionesMostradas.length === 0) return alert('No hay operaciones para exportar con los filtros actuales.');
     const cols = columnasOps.filter(c => c.visible);
     if (cols.length === 0) return alert('Selecciona al menos una columna para exportar.');
-    const datos = operacionesMostradas.map(op => {
+
+    const mapTipo = (t: any): 'texto' | 'fecha' | 'fechaHora' | 'monto' | 'numero' =>
+      (t === 'monto' || t === 'numero' || t === 'fecha' || t === 'fechaHora') ? t : 'texto';
+    const aNum = (v: any): number | null => {
+      const n = Number(String(v ?? '').replace(/[^0-9.\-]/g, ''));
+      return isNaN(n) ? null : n;
+    };
+
+    const columnas = cols.map(c => ({
+      key: c.id,
+      label: c.label,
+      tipo: mapTipo((c as any).tipo),
+      soloCaja: /remolque/i.test(c.label || ''),
+    }));
+
+    const filas = operacionesMostradas.map(op => {
       const m = obtenerMontoOperacion(op);
       const fila: any = {};
-      cols.forEach(col => { fila[col.label] = valorCeldaOps(op, col.id, m); });
+      cols.forEach(c => {
+        const raw = valorCeldaOps(op, c.id, m);
+        const t = mapTipo((c as any).tipo);
+        fila[c.id] = (t === 'monto' || t === 'numero') ? aNum(raw) : raw;
+      });
       return fila;
     });
-    const ws = XLSX.utils.json_to_sheet(datos);
-    const wb = XLSX.utils.book_new();
-    const etiqueta = filtroEstadoOps === 'facturadas' ? 'Facturadas' : 'Pendientes';
-    XLSX.utils.book_append_sheet(wb, ws, `Ops_${etiqueta}`);
-    const cli = (nombreProveedorSeleccionado || 'proveedor').replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 30);
-    const hoy = new Date().toISOString().split('T')[0];
-    XLSX.writeFile(wb, `Operaciones_${etiqueta}_${cli}_${hoy}.xlsx`);
+
+    const provTxt = filtroProveedor ? (nombreProveedorSeleccionado || 'Proveedor') : 'Todos los proveedores';
+    const rangoTxt = (fechaDesdeOps || fechaHastaOps) ? `${fechaDesdeOps || 'inicio'} a ${fechaHastaOps || 'hoy'}` : 'Todas las fechas';
+    const vistaTxt = vistaOps === 'facturadas' ? 'Facturadas' : vistaOps === 'todas' ? 'Todas' : 'Por facturar';
+    const provFile = provTxt.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 30);
+
+    try {
+      await exportarExcelProfesional({
+        nombreArchivo: `Facturacion_Proveedores_${vistaTxt}_${provFile}_${new Date().toISOString().split('T')[0]}.xlsx`,
+        tituloReporte: 'Reporte de Facturación · Operaciones (Proveedores)',
+        subtitulo: `${vistaTxt}  ·  Proveedor: ${provTxt}  ·  ${rangoTxt}  ·  ${filas.length} operaciones`,
+        nombreHoja: 'Operaciones',
+        columnas,
+        filas,
+      });
+    } catch (e) {
+      console.error('Error exportando Excel de operaciones:', e);
+      alert('No se pudo generar el Excel.');
+    }
   };
 
-  // ──────────────────────────────────────────────────────────────────
-  // Selección / resumen
-  // ──────────────────────────────────────────────────────────────────
   const toggleSeleccion = (id: string) => {
+    const op = operacionesGlobales.find(o => o.id === id);
+    if (op && esFacturada(op)) return;
     setSeleccionadas(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+  };
+
+  const abrirModalCostoAdic = () => {
+    setCostoAdicOpId(seleccionadas.length > 0 ? seleccionadas[0] : '');
+    setCostoAdicMonto(''); setCostoAdicConcepto(''); setModalCostoAdic(true);
+  };
+  const abrirCostoAdicParaOp = (opId: string) => {
+    setCostoAdicOpId(opId);
+    setCostoAdicMonto(''); setCostoAdicConcepto(''); setModalCostoAdic(true);
+  };
+
+  const handleGuardarCostoAdic = async () => {
+    const op = operacionesGlobales.find(o => o.id === costoAdicOpId);
+    if (!op) return alert('Selecciona una operación.');
+    const monto = Number(costoAdicMonto);
+    if (!monto || isNaN(monto)) return alert('Captura un monto válido (puede ser negativo para un descuento).');
+    setGuardandoCostoAdic(true);
+    try {
+      const nuevoCargos = (Number(op.cargosAdicionalesProv) || 0) + monto;
+      const { subtotal, dol, pes, conv } = calcularConversionProveedor({ ...op, cargosAdicionalesProv: nuevoCargos });
+      const concepto = costoAdicConcepto.trim();
+      const updates: any = {
+        cargosAdicionalesProv: nuevoCargos,
+        subtotalProv: subtotal,
+        dolaresProv: dol,
+        pesosProv: pes,
+        conversionProv: conv,
+      };
+      if (concepto) {
+        const obsPrev = String(op.observacionesUnidad || '').trim();
+        updates.observacionesUnidad = `${obsPrev ? obsPrev + ' | ' : ''}Costo adicional: ${concepto} (${monto >= 0 ? '+' : ''}${monto})`;
+      }
+      await setDoc(doc(db, 'operaciones', String(op.id)), updates, { merge: true });
+      setOperacionesGlobales(prev => prev.map(o => o.id === op.id ? { ...o, ...updates } : o));
+      setModalCostoAdic(false);
+    } catch (e) {
+      console.error('Error guardando costo adicional:', e);
+      alert('No se pudo guardar el costo adicional.');
+    } finally {
+      setGuardandoCostoAdic(false);
+    }
   };
 
   const resumenSeleccion = useMemo(() => {
@@ -516,67 +1855,119 @@ export const FacturacionProveedoresDashboard = () => {
     seleccionadas.forEach(id => {
       const op = operacionesGlobales.find(o => o.id === id);
       if (op) {
-        subtotal += obtenerMontoOperacion(op).conv; // (2) suma la conversión
+        subtotal += obtenerMontoOperacion(op).conv;
         refs.push(op.numReferencia || op.referencia || op.ref || op.id?.substring(0, 6));
       }
     });
     return { subtotal, refs };
   }, [seleccionadas, operacionesGlobales]);
 
-  // ──────────────────────────────────────────────────────────────────
-  // Guardado de factura
-  // ──────────────────────────────────────────────────────────────────
   const handleGuardarFactura = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!invoiceForm.trim()) return alert('El # de Invoice es obligatorio.');
+    if (seleccionMultiProveedor || !proveedorFacturaId) {
+      return alert('Las operaciones seleccionadas deben ser de un mismo proveedor. Selecciona un proveedor en el filtro o elige operaciones de un solo proveedor.');
+    }
     setGuardando(true);
     try {
       const batch = writeBatch(db);
       const nuevoId = doc(collection(db, 'facturas_proveedores')).id;
-
       const operacionesResumenEstable = seleccionadas.map(id => {
         const op = operacionesGlobales.find(o => o.id === id);
         const montos = op ? obtenerMontoOperacion(op) : { subtotal: 0, conv: 0, dol: 0, pes: 0 };
         return {
           id,
           ref: op?.numReferencia || op?.referencia || op?.ref || id.substring(0, 6),
-          monto: montos.conv,            // (2) conversión
-          subtotalBase: montos.subtotal, // referencia adicional
+          monto: montos.conv,
+          subtotalBase: montos.subtotal,
+          remolque: op ? txt(op.remolqueNombre, op.remolquePlaca, op.numeroRemolque) : '',
         };
       });
-
+      const remolquesFactura = Array.from(new Set(
+        operacionesResumenEstable.map((o: any) => String(o.remolque || '')).filter(r => r && r !== '-')
+      ));
+      const monedaIdFactura = monedaProveedor === 'MXN' ? ID_MXN : (monedaProveedor === 'USD' ? ID_USD : '');
+      const operacionesRefs = operacionesResumenEstable.map((o: any) => o.ref).filter(Boolean);
       const data = {
         invoice: invoiceForm.trim(),
         fecha: fechaForm,
         facturaCcp: facturaCcpForm.trim(),
-        proveedorId: filtroProveedor,
-        proveedorNombre: getNombreEmpresa(filtroProveedor),
+        statusFactura: statusFacturaForm,
+        proveedorId: proveedorFacturaId,
+        proveedorNombre: nombreProveedorFactura || getNombreEmpresa(proveedorFacturaId),
         monedaProveedor,
+        monedaId: monedaIdFactura,                 // ← campo de la colección
         operacionesIds: seleccionadas,
+        operaciones: operacionesRefs,              // ← campo de la colección (refs)
         operacionesGuardadas: operacionesResumenEstable,
+        remolques: remolquesFactura,
         subtotalFactura: resumenSeleccion.subtotal,
         createdAt: new Date().toISOString(),
       };
-
-      batch.set(doc(db, 'facturas_proveedores', nuevoId), data);
+      const invKey = invoiceForm.trim().toLowerCase();
+      const existente = facturasGlobales.find(f =>
+        String(f.invoice || '').trim().toLowerCase() === invKey &&
+        String(f.proveedorId || '') === String(proveedorFacturaId)
+      );
+      let docId = nuevoId;
+      let facturaResultante: any = data;
+      if (existente) {
+        docId = existente.id;
+        const idsPrev: string[] = Array.isArray(existente.operacionesIds) ? existente.operacionesIds.map(String) : [];
+        const idsUnion = Array.from(new Set([...idsPrev, ...seleccionadas]));
+        const guardadasPrev: any[] = Array.isArray(existente.operacionesGuardadas) ? existente.operacionesGuardadas : [];
+        const mapaGuardadas = new Map<string, any>();
+        [...guardadasPrev, ...operacionesResumenEstable].forEach((o: any) => { if (o?.id) mapaGuardadas.set(String(o.id), o); });
+        const guardadasUnion = Array.from(mapaGuardadas.values());
+        const remolquesUnion = Array.from(new Set([
+          ...(Array.isArray(existente.remolques) ? existente.remolques : []),
+          ...remolquesFactura,
+        ].map((r: any) => String(r || '')).filter(r => r && r !== '-')));
+        const subtotalUnion = Number(existente.subtotalFactura || 0) + Number(resumenSeleccion.subtotal || 0);
+        const merge = {
+          invoice: existente.invoice || invoiceForm.trim(),
+          facturaCcp: facturaCcpForm.trim() || existente.facturaCcp || '',
+          statusFactura: statusFacturaForm || existente.statusFactura || 'Facturado',
+          proveedorId: proveedorFacturaId,
+          proveedorNombre: existente.proveedorNombre || data.proveedorNombre,
+          monedaProveedor: existente.monedaProveedor || monedaProveedor,
+          monedaId: existente.monedaId || monedaIdFactura,
+          operacionesIds: idsUnion,
+          operaciones: guardadasUnion.map((o: any) => o.ref).filter(Boolean),
+          operacionesGuardadas: guardadasUnion,
+          remolques: remolquesUnion,
+          subtotalFactura: subtotalUnion,
+          updatedAt: new Date().toISOString(),
+        };
+        batch.set(doc(db, 'facturas_proveedores', docId), merge, { merge: true });
+        facturaResultante = { ...existente, ...merge };
+      } else {
+        batch.set(doc(db, 'facturas_proveedores', docId), data);
+      }
       seleccionadas.forEach(id => {
         batch.update(doc(db, 'operaciones', id), {
-          facturaProveedorId: nuevoId,
+          facturaProveedorId: docId,
           facturaProveedorFolio: invoiceForm.trim(),
           facturadoProveedor: true,
         });
       });
-
       await batch.commit();
       setModalAbierto(false);
+      const idsFacturadas = [...seleccionadas];
+      const invoiceTrim = invoiceForm.trim();
       setSeleccionadas([]);
       setInvoiceForm('');
       setFacturaCcpForm('');
-      // (3) marcar localmente como facturadas para que salgan de "Pendientes"
+      setStatusFacturaForm('Facturado');
       setOperacionesGlobales(prev => prev.map(op =>
-        seleccionadas.includes(op.id) ? { ...op, facturaProveedorId: nuevoId, facturaProveedorFolio: invoiceForm.trim(), facturadoProveedor: true } : op
+        idsFacturadas.includes(op.id) ? { ...op, facturaProveedorId: docId, facturaProveedorFolio: invoiceTrim, facturadoProveedor: true } : op
       ));
-      setFacturasGlobales(prev => [{ id: nuevoId, ...data }, ...prev]);
+      setFacturasGlobales(prev => {
+        if (existente) {
+          return prev.map(f => f.id === docId ? normalizarFactura({ ...facturaResultante, id: docId }) : f);
+        }
+        return [normalizarFactura({ ...data, id: docId }), ...prev];
+      });
       setActiveTab('historial');
     } catch (error) {
       console.error(error);
@@ -586,25 +1977,305 @@ export const FacturacionProveedoresDashboard = () => {
     }
   };
 
+  const handleCambiarStatusFactura = async (factura: any, nuevoStatus: string) => {
+    if (!factura?.id) return;
+    const ids: string[] = Array.isArray(factura.__groupIds) && factura.__groupIds.length ? factura.__groupIds : [factura.id];
+    try {
+      const batch = writeBatch(db);
+      ids.forEach(id => batch.set(doc(db, 'facturas_proveedores', id), { statusFactura: nuevoStatus }, { merge: true }));
+      await batch.commit();
+      setFacturasGlobales(prev => prev.map(f => ids.includes(f.id) ? { ...f, statusFactura: nuevoStatus } : f));
+      setFacturaViendo((prev: any) => (prev && (ids.includes(prev.id) || prev.id === factura.id)) ? { ...prev, statusFactura: nuevoStatus } : prev);
+    } catch (e) {
+      console.error('Error actualizando status de factura:', e);
+      alert('No se pudo actualizar el status de la factura.');
+    }
+  };
+
+  const abrirEditarFactura = (e: React.MouseEvent, f: any) => {
+    e.stopPropagation();
+    setFacturaEditando(f);
+    setEditInvoice(String(f.invoice || ''));
+    setEditFecha(String(f.fecha || '').slice(0, 10));
+    setEditCcp(String(f.facturaCcp || ''));
+    setEditStatus(String(f.statusFactura || 'Facturado'));
+    setEditMoneda(resolverMoneda(f.monedaProveedor) || '');
+    setEditTotal(String(Number(f.subtotalFactura) || 0));
+  };
+
+  const handleGuardarEdicionFactura = async () => {
+    if (!facturaEditando) return;
+    if (!editInvoice.trim()) return alert('El # de Invoice es obligatorio.');
+    setGuardandoEdit(true);
+    try {
+      const ids: string[] = Array.isArray(facturaEditando.__groupIds) && facturaEditando.__groupIds.length ? facturaEditando.__groupIds : [facturaEditando.id];
+      const totalNum = Number(editTotal) || 0;
+      const baseUpdate: any = {
+        invoice: editInvoice.trim(),
+        fecha: editFecha || '',
+        facturaCcp: editCcp.trim(),
+        statusFactura: editStatus,
+        monedaProveedor: editMoneda || 'N/A',
+        updatedAt: new Date().toISOString(),
+      };
+      const batch = writeBatch(db);
+      ids.forEach((id, idx) => {
+        batch.set(doc(db, 'facturas_proveedores', id), { ...baseUpdate, subtotalFactura: idx === 0 ? totalNum : 0 }, { merge: true });
+      });
+      await batch.commit();
+      setFacturasGlobales(prev => prev.map(f => {
+        if (!ids.includes(f.id)) return f;
+        const esPrimero = f.id === ids[0];
+        return normalizarFactura({ ...f, ...baseUpdate, subtotalFactura: esPrimero ? totalNum : 0 });
+      }));
+      setFacturaViendo((prev: any) => (prev && ids.includes(prev.id)) ? { ...prev, ...baseUpdate, subtotalFactura: totalNum } : prev);
+      setFacturaEditando(null);
+    } catch (e) {
+      console.error('Error guardando edición de factura:', e);
+      alert('No se pudo guardar la edición de la factura.');
+    } finally {
+      setGuardandoEdit(false);
+    }
+  };
+
+  const remolquesDeGuardadas = (guardadas: any[]): string[] =>
+    Array.from(new Set((guardadas || []).map((o: any) => String(o?.remolque || '')).filter(r => r && r !== '-')));
+
+  const buildResumenOp = (op: any) => {
+    const m = obtenerMontoOperacion(op);
+    return {
+      id: String(op.id),
+      ref: op.numReferencia || op.referencia || op.ref || String(op.id).substring(0, 6),
+      monto: m.conv,
+      subtotalBase: m.subtotal,
+      remolque: txt(op.remolqueNombre, op.remolquePlaca, op.numeroRemolque),
+    };
+  };
+
+  const aplicarCambiosFacturas = (cambios: any[]) => {
+    setFacturasGlobales(prev => {
+      let arr = [...prev];
+      cambios.forEach((c: any) => {
+        if (c.tipo === 'delete') arr = arr.filter(f => f.id !== c.id);
+        else if (c.tipo === 'update') arr = arr.map(f => f.id === c.id ? normalizarFactura({ ...f, ...c.data }) : f);
+        else if (c.tipo === 'create') arr = [normalizarFactura({ id: c.id, ...c.data }), ...arr];
+      });
+      return arr;
+    });
+  };
+
+  const abrirGestionOp = (e: React.MouseEvent, op: any) => {
+    e.stopPropagation();
+    setGestionOp(op);
+    setGestionInvoice(invoiceDeOp(op) || '');
+  };
+
+  const quitarOpDeFactura = async (op: any) => {
+    const opId = String(op.id);
+    const refTxt = op.numReferencia || op.referencia || op.ref || opId.substring(0, 6);
+    if (!window.confirm(`¿Quitar la operación ${refTxt} de su factura? Volverá a "Pendientes" y se restará su monto de la factura.`)) return;
+    const facturasConOp = facturasGlobales.filter(f => (f.operacionesIds || []).map(String).includes(opId));
+    setGuardandoGestionOp(true);
+    try {
+      const batch = writeBatch(db);
+      const cambios: any[] = [];
+      for (const f of facturasConOp) {
+        const g = (f.operacionesGuardadas || []).find((o: any) => String(o.id) === opId);
+        const monto = g ? (Number(g.monto) || 0) : obtenerMontoOperacion(op).conv;
+        const ids = (f.operacionesIds || []).map(String).filter((id: string) => id !== opId);
+        const guardadas = (f.operacionesGuardadas || []).filter((o: any) => String(o.id) !== opId);
+        const subtotal = Math.max(0, Number(f.subtotalFactura || 0) - monto);
+        if (ids.length === 0) {
+          batch.delete(doc(db, 'facturas_proveedores', f.id));
+          cambios.push({ tipo: 'delete', id: f.id });
+        } else {
+          const data = { operacionesIds: ids, operacionesGuardadas: guardadas, remolques: remolquesDeGuardadas(guardadas), subtotalFactura: subtotal, updatedAt: new Date().toISOString() };
+          batch.set(doc(db, 'facturas_proveedores', f.id), data, { merge: true });
+          cambios.push({ tipo: 'update', id: f.id, data });
+        }
+      }
+      batch.update(doc(db, 'operaciones', opId), { facturaProveedorId: null, facturaProveedorFolio: null, facturadoProveedor: false });
+      await batch.commit();
+      aplicarCambiosFacturas(cambios);
+      setOperacionesGlobales(prev => prev.map(o => o.id === opId ? { ...o, facturaProveedorId: null, facturaProveedorFolio: null, facturadoProveedor: false } : o));
+      setGestionOp(null);
+    } catch (e) {
+      console.error('Error quitando operación de la factura:', e);
+      alert('No se pudo quitar la operación de la factura.');
+    } finally {
+      setGuardandoGestionOp(false);
+    }
+  };
+
+  const editarInvoiceDeOp = async (op: any, nuevoInvoiceRaw: string) => {
+    const nuevoInvoice = String(nuevoInvoiceRaw || '').trim();
+    if (!nuevoInvoice) return alert('Captura un número de factura.');
+    const opId = String(op.id);
+    const provId = String(provDeOp(op) || '');
+    const facturasConOp = facturasGlobales.filter(f => (f.operacionesIds || []).map(String).includes(opId));
+    setGuardandoGestionOp(true);
+    try {
+      const batch = writeBatch(db);
+      const cambios: any[] = [];
+
+      let resumenOrigen: any = null;
+      let metaCarry: any = null;
+      for (const f of facturasConOp) {
+        if (!metaCarry) metaCarry = { statusFactura: f.statusFactura, monedaProveedor: f.monedaProveedor, facturaCcp: f.facturaCcp, fecha: f.fecha, proveedorNombre: f.proveedorNombre };
+        const g = (f.operacionesGuardadas || []).find((o: any) => String(o.id) === opId);
+        if (g && !resumenOrigen) resumenOrigen = g;
+      }
+      if (!resumenOrigen) resumenOrigen = buildResumenOp(op);
+      const montoOp = Number(resumenOrigen.monto) || 0;
+
+      for (const f of facturasConOp) {
+        const ids = (f.operacionesIds || []).map(String).filter((id: string) => id !== opId);
+        const guardadas = (f.operacionesGuardadas || []).filter((o: any) => String(o.id) !== opId);
+        const subtotal = Math.max(0, Number(f.subtotalFactura || 0) - montoOp);
+        if (ids.length === 0) {
+          batch.delete(doc(db, 'facturas_proveedores', f.id));
+          cambios.push({ tipo: 'delete', id: f.id });
+        } else {
+          const data = { operacionesIds: ids, operacionesGuardadas: guardadas, remolques: remolquesDeGuardadas(guardadas), subtotalFactura: subtotal, updatedAt: new Date().toISOString() };
+          batch.set(doc(db, 'facturas_proveedores', f.id), data, { merge: true });
+          cambios.push({ tipo: 'update', id: f.id, data });
+        }
+      }
+
+      const target = facturasGlobales.find(f =>
+        String(f.invoice || '').trim().toLowerCase() === nuevoInvoice.toLowerCase() &&
+        String(f.proveedorId || '') === provId &&
+        !facturasConOp.some(fc => fc.id === f.id)
+      );
+      let targetId: string;
+      if (target) {
+        const ids = Array.from(new Set([...(target.operacionesIds || []).map(String), opId]));
+        const mapG = new Map<string, any>();
+        [...(target.operacionesGuardadas || []), resumenOrigen].forEach((o: any) => { if (o?.id) mapG.set(String(o.id), o); });
+        const guardadas = Array.from(mapG.values());
+        const subtotal = Number(target.subtotalFactura || 0) + montoOp;
+        targetId = target.id;
+        const data = { invoice: target.invoice || nuevoInvoice, operacionesIds: ids, operacionesGuardadas: guardadas, remolques: remolquesDeGuardadas(guardadas), subtotalFactura: subtotal, updatedAt: new Date().toISOString() };
+        batch.set(doc(db, 'facturas_proveedores', targetId), data, { merge: true });
+        cambios.push({ tipo: 'update', id: targetId, data });
+      } else {
+        targetId = doc(collection(db, 'facturas_proveedores')).id;
+        const data: any = {
+          invoice: nuevoInvoice,
+          fecha: metaCarry?.fecha || '',
+          facturaCcp: metaCarry?.facturaCcp || '',
+          statusFactura: metaCarry?.statusFactura || 'Facturado',
+          proveedorId: provId,
+          proveedorNombre: metaCarry?.proveedorNombre || getNombreEmpresa(provId),
+          monedaProveedor: metaCarry?.monedaProveedor || 'N/A',
+          operacionesIds: [opId],
+          operacionesGuardadas: [resumenOrigen],
+          remolques: remolquesDeGuardadas([resumenOrigen]),
+          subtotalFactura: montoOp,
+          createdAt: new Date().toISOString(),
+        };
+        batch.set(doc(db, 'facturas_proveedores', targetId), data);
+        cambios.push({ tipo: 'create', id: targetId, data });
+      }
+
+      batch.update(doc(db, 'operaciones', opId), { facturaProveedorId: targetId, facturaProveedorFolio: nuevoInvoice, facturadoProveedor: true });
+      await batch.commit();
+      aplicarCambiosFacturas(cambios);
+      setOperacionesGlobales(prev => prev.map(o => o.id === opId ? { ...o, facturaProveedorId: targetId, facturaProveedorFolio: nuevoInvoice, facturadoProveedor: true } : o));
+      setGestionOp(null);
+    } catch (e) {
+      console.error('Error editando # de factura de la operación:', e);
+      alert('No se pudo cambiar el número de factura de la operación.');
+    } finally {
+      setGuardandoGestionOp(false);
+    }
+  };
+
+  const agregarOpAFactura = async (facturaGrupo: any, op: any) => {
+    const opId = String(op.id);
+    const rawId = (Array.isArray(facturaGrupo.__groupIds) && facturaGrupo.__groupIds.length) ? facturaGrupo.__groupIds[0] : facturaGrupo.id;
+    const rawDoc = facturasGlobales.find(f => f.id === rawId) || facturaGrupo;
+    const resumen = buildResumenOp(op);
+    const monto = Number(resumen.monto) || 0;
+    setAgregandoRef(true);
+    try {
+      const ids = Array.from(new Set([...(rawDoc.operacionesIds || []).map(String), opId]));
+      const mapG = new Map<string, any>();
+      [...(rawDoc.operacionesGuardadas || []), resumen].forEach((o: any) => { if (o?.id) mapG.set(String(o.id), o); });
+      const guardadas = Array.from(mapG.values());
+      const data = {
+        operacionesIds: ids,
+        operacionesGuardadas: guardadas,
+        remolques: remolquesDeGuardadas(guardadas),
+        subtotalFactura: Number(rawDoc.subtotalFactura || 0) + monto,
+        updatedAt: new Date().toISOString(),
+      };
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'facturas_proveedores', rawId), data, { merge: true });
+      batch.update(doc(db, 'operaciones', opId), { facturaProveedorId: rawId, facturaProveedorFolio: rawDoc.invoice || facturaGrupo.invoice, facturadoProveedor: true });
+      await batch.commit();
+      setFacturasGlobales(prev => prev.map(f => f.id === rawId ? normalizarFactura({ ...f, ...data }) : f));
+      setOperacionesGlobales(prev => prev.map(o => o.id === opId ? { ...o, facturaProveedorId: rawId, facturaProveedorFolio: rawDoc.invoice || facturaGrupo.invoice, facturadoProveedor: true } : o));
+      const aplicarEnGrupo = (g: any) => {
+        if (!g) return g;
+        const mismoGrupo = (Array.isArray(g.__groupIds) ? g.__groupIds : [g.id]).includes(rawId) || g.id === facturaGrupo.id;
+        if (!mismoGrupo) return g;
+        const mapG2 = new Map<string, any>();
+        [...(g.operacionesGuardadas || []), resumen].forEach((o: any) => { if (o?.id) mapG2.set(String(o.id), o); });
+        const guardadas2 = Array.from(mapG2.values());
+        return { ...g, operacionesIds: Array.from(new Set([...(g.operacionesIds || []).map(String), opId])), operacionesGuardadas: guardadas2, remolques: remolquesDeGuardadas(guardadas2), subtotalFactura: Number(g.subtotalFactura || 0) + monto };
+      };
+      setAgregarRefFactura((prev: any) => aplicarEnGrupo(prev));
+      setFacturaViendo((prev: any) => aplicarEnGrupo(prev));
+    } catch (e) {
+      console.error('Error agregando operación a la factura:', e);
+      alert('No se pudo agregar la operación a la factura.');
+    } finally {
+      setAgregandoRef(false);
+    }
+  };
+
+  const candidatosPendientes = useMemo(() => {
+    if (!agregarRefFactura) return [];
+    const provId = String(agregarRefFactura.proveedorId || '');
+    const q = busquedaRefPendiente.trim().toLowerCase();
+    const lista = operacionesGlobales.filter(op => {
+      if (esFacturada(op)) return false;
+      if (provId && String(provDeOp(op) || '') !== provId) return false;
+      if (!q) return true;
+      const campos = [op.numReferencia, op.referencia, op.ref, op.remolqueNombre, op.remolquePlaca, op.numeroRemolque];
+      return campos.some(v => String(v ?? '').toLowerCase().includes(q));
+    });
+    return lista.slice(0, 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agregarRefFactura, operacionesGlobales, busquedaRefPendiente, facturasGlobales]);
+
   const handleEliminarFactura = async (e: React.MouseEvent, facData: any) => {
     e.stopPropagation();
-    if (window.confirm(`¿Estás seguro de eliminar la factura ${facData.invoice}? Las operaciones asociadas quedarán liberadas nuevamente.`)) {
+    const ids: string[] = Array.isArray(facData.__groupIds) && facData.__groupIds.length ? facData.__groupIds : [facData.id];
+    const aviso = ids.length > 1
+      ? `¿Eliminar las ${ids.length} facturas con el número ${facData.invoice}? Las operaciones asociadas quedarán liberadas nuevamente.`
+      : `¿Estás seguro de eliminar la factura ${facData.invoice}? Las operaciones asociadas quedarán liberadas nuevamente.`;
+    if (window.confirm(aviso)) {
       try {
         const batch = writeBatch(db);
-        batch.delete(doc(db, 'facturas_proveedores', facData.id));
-        if (Array.isArray(facData.operacionesIds)) {
-          facData.operacionesIds.forEach((opId: string) => {
-            batch.update(doc(db, 'operaciones', opId), {
-              facturaProveedorId: null,
-              facturaProveedorFolio: null,
-              facturadoProveedor: false,
+        const idsLiberadas: string[] = [];
+        ids.forEach(fid => batch.delete(doc(db, 'facturas_proveedores', fid)));
+        const docs: any[] = Array.isArray(facData.__groupDocs) && facData.__groupDocs.length ? facData.__groupDocs : [facData];
+        docs.forEach((d: any) => {
+          if (Array.isArray(d.operacionesIds)) {
+            d.operacionesIds.forEach((opId: string) => {
+              idsLiberadas.push(opId);
+              batch.update(doc(db, 'operaciones', opId), {
+                facturaProveedorId: null,
+                facturaProveedorFolio: null,
+                facturadoProveedor: false,
+              });
             });
-          });
-        }
+          }
+        });
         await batch.commit();
-        setFacturasGlobales(prev => prev.filter(f => f.id !== facData.id));
-        // liberar localmente las operaciones (vuelven a Pendientes)
-        const idsLiberadas: string[] = Array.isArray(facData.operacionesIds) ? facData.operacionesIds : [];
+        setFacturasGlobales(prev => prev.filter(f => !ids.includes(f.id)));
         setOperacionesGlobales(prev => prev.map(op =>
           idsLiberadas.includes(op.id) ? { ...op, facturaProveedorId: null, facturaProveedorFolio: null, facturadoProveedor: false } : op
         ));
@@ -615,11 +2286,9 @@ export const FacturacionProveedoresDashboard = () => {
     }
   };
 
-  // ──────────────────────────────────────────────────────────────────
-  // (5) Historial: orden + paginación
-  // ──────────────────────────────────────────────────────────────────
   const valorOrdenFac = (f: any, campo: string): string | number => {
     switch (campo) {
+      case 'statusFactura': return String(f.statusFactura || '').toLowerCase();
       case 'invoice': return String(f.invoice || '').toLowerCase();
       case 'fecha': return String(f.fecha || '');
       case 'proveedor': return String(f.proveedorNombre || '').toLowerCase();
@@ -633,17 +2302,139 @@ export const FacturacionProveedoresDashboard = () => {
 
   const historialOrdenado = useMemo(() => {
     const dir = ordenFac.dir === 'asc' ? 1 : -1;
-    return [...facturasGlobales].sort((a, b) => {
+    const q = textoBuscarFactura.trim().toLowerCase();
+    const coincideTexto = (f: any) => {
+      if (!q) return true;
+      if (String(f.invoice || '').toLowerCase().includes(q)) return true;
+      if (String(f.proveedorNombre || '').toLowerCase().includes(q)) return true;
+      if (String(f.statusFactura || '').toLowerCase().includes(q)) return true;
+      if (f.proveedorId) { const nom = getNombreEmpresa(f.proveedorId); if (nom && nom.toLowerCase().includes(q)) return true; }
+      if (String(f.facturaCcp || '').toLowerCase().includes(q)) return true;
+      if (String(f.monedaProveedor || '').toLowerCase().includes(q)) return true;
+      if (Array.isArray(f.remolques) && f.remolques.some((r: any) => String(r || '').toLowerCase().includes(q))) return true;
+      if (Array.isArray(f.operacionesGuardadas)) {
+        if (f.operacionesGuardadas.some((op: any) => {
+          const info = opInfoMap[String(op?.id || '')] || {};
+          return String(op?.ref || '').toLowerCase().includes(q) ||
+            String(op?.remolque || '').toLowerCase().includes(q) ||
+            String(info.ref || '').toLowerCase().includes(q) ||
+            String(info.remolque || '').toLowerCase().includes(q);
+        })) return true;
+      }
+      return false;
+    };
+    const coincideProveedor = (f: any) => !filtroProveedor || String(f.proveedorId || '') === filtroProveedor;
+    const coincideFechas = (f: any) => {
+      if (!fechaDesdeHist && !fechaHastaHist) return true;
+      const fc = String(f.fecha || '').slice(0, 10);
+      if (!fc) return false;
+      if (fechaDesdeHist && fc < fechaDesdeHist) return false;
+      if (fechaHastaHist && fc > fechaHastaHist) return false;
+      return true;
+    };
+    const filtradas = facturasGlobales.filter(f => coincideTexto(f) && coincideProveedor(f) && coincideFechas(f));
+    const grupos = new Map<string, any>();
+    for (const f of filtradas) {
+      const key = `${String(f.invoice || f.id).trim().toLowerCase()}__${String(f.proveedorId || '')}`;
+      if (!grupos.has(key)) {
+        grupos.set(key, {
+          ...f,
+          operacionesIds: Array.isArray(f.operacionesIds) ? [...f.operacionesIds] : [],
+          operacionesGuardadas: Array.isArray(f.operacionesGuardadas) ? [...f.operacionesGuardadas] : [],
+          remolques: Array.isArray(f.remolques) ? [...f.remolques] : [],
+          subtotalFactura: Number(f.subtotalFactura) || 0,
+          __groupIds: [f.id],
+          __groupDocs: [f],
+        });
+      } else {
+        const g = grupos.get(key);
+        g.__groupIds.push(f.id);
+        g.__groupDocs.push(f);
+        const setIds = new Set<string>([...(g.operacionesIds || []).map(String), ...((f.operacionesIds || []).map(String))]);
+        g.operacionesIds = Array.from(setIds);
+        const mapG = new Map<string, any>();
+        [...(g.operacionesGuardadas || []), ...(f.operacionesGuardadas || [])].forEach((o: any) => { if (o?.id) mapG.set(String(o.id), o); });
+        g.operacionesGuardadas = Array.from(mapG.values());
+        g.remolques = Array.from(new Set([...(g.remolques || []), ...((f.remolques) || [])].map((r: any) => String(r || '')).filter(Boolean)));
+        g.subtotalFactura = Number(g.subtotalFactura || 0) + (Number(f.subtotalFactura) || 0);
+        if (String(f.fecha || '') > String(g.fecha || '')) g.fecha = f.fecha;
+        if (!g.createdAt || (f.createdAt && String(f.createdAt) < String(g.createdAt))) g.createdAt = f.createdAt || g.createdAt;
+        const rank = (s: any) => { const t = String(s || '').toLowerCase(); if (t.includes('cancel')) return 3; if (t.includes('no')) return 2; return 1; };
+        if (rank(f.statusFactura) > rank(g.statusFactura)) g.statusFactura = f.statusFactura;
+      }
+    }
+    let agrupadas = Array.from(grupos.values());
+    if (filtroStatusFactura && filtroStatusFactura !== 'Todos') {
+      agrupadas = agrupadas.filter(g => String(g.statusFactura || 'Facturado') === filtroStatusFactura);
+    }
+    return agrupadas.sort((a, b) => {
       const va = valorOrdenFac(a, ordenFac.campo);
       const vb = valorOrdenFac(b, ordenFac.campo);
       if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [facturasGlobales, ordenFac]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facturasGlobales, ordenFac, textoBuscarFactura, filtroProveedor, fechaDesdeHist, fechaHastaHist, opInfoMap, filtroStatusFactura]);
+
+  const resumenHistorial = useMemo(() => {
+    let totalUSD = 0, totalMXN = 0, totalSinMoneda = 0, totalOps = 0;
+    historialOrdenado.forEach(f => {
+      const monto = Number(f.subtotalFactura) || 0;
+      const mon = monedaFacturaMostrar(f).toUpperCase();
+      if (mon === 'USD') totalUSD += monto;
+      else if (mon === 'MXN') totalMXN += monto;
+      else totalSinMoneda += monto;
+      totalOps += Array.isArray(f.operacionesIds) ? f.operacionesIds.length : 0;
+    });
+    return { cuenta: historialOrdenado.length, totalUSD, totalMXN, totalSinMoneda, totalOps };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historialOrdenado]);
+
+  const conteoStatus = useMemo(() => {
+    const q = textoBuscarFactura.trim().toLowerCase();
+    const coincideTexto = (f: any) => {
+      if (!q) return true;
+      if (String(f.invoice || '').toLowerCase().includes(q)) return true;
+      if (String(f.proveedorNombre || '').toLowerCase().includes(q)) return true;
+      if (String(f.statusFactura || '').toLowerCase().includes(q)) return true;
+      if (f.proveedorId) { const nom = getNombreEmpresa(f.proveedorId); if (nom && nom.toLowerCase().includes(q)) return true; }
+      if (String(f.facturaCcp || '').toLowerCase().includes(q)) return true;
+      if (String(f.monedaProveedor || '').toLowerCase().includes(q)) return true;
+      if (Array.isArray(f.remolques) && f.remolques.some((r: any) => String(r || '').toLowerCase().includes(q))) return true;
+      return false;
+    };
+    const coincideProveedor = (f: any) => !filtroProveedor || String(f.proveedorId || '') === filtroProveedor;
+    const coincideFechas = (f: any) => {
+      if (!fechaDesdeHist && !fechaHastaHist) return true;
+      const fc = String(f.fecha || '').slice(0, 10);
+      if (!fc) return false;
+      if (fechaDesdeHist && fc < fechaDesdeHist) return false;
+      if (fechaHastaHist && fc > fechaHastaHist) return false;
+      return true;
+    };
+    const base = facturasGlobales.filter(f => coincideTexto(f) && coincideProveedor(f) && coincideFechas(f));
+    const c = { Todos: base.length } as Record<string, number>;
+    base.forEach((f: any) => {
+      const s = (String(f.statusFactura || 'Facturado').trim()) || 'Facturado';
+      c[s] = (c[s] || 0) + 1;
+    });
+    return c;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facturasGlobales, textoBuscarFactura, filtroProveedor, fechaDesdeHist, fechaHastaHist]);
+
+  const statusBotones = useMemo(() => {
+    const orden = ['Facturado', 'No Facturado', 'Cancelado'];
+    const otros = Object.keys(conteoStatus).filter(k => k !== 'Todos');
+    otros.sort((a, b) => {
+      const ia = orden.indexOf(a); const ib = orden.indexOf(b);
+      if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      return a.localeCompare(b, 'es', { sensitivity: 'base' });
+    });
+    return ['Todos', ...otros];
+  }, [conteoStatus]);
 
   const toggleOrdenFac = (campo: string) =>
     setOrdenFac(prev => prev.campo === campo ? { campo, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { campo, dir: 'asc' });
-
   const flechaFac = (campo: string) => ordenFac.campo === campo ? (ordenFac.dir === 'asc' ? ' ▲' : ' ▼') : '';
 
   const totalPaginas = Math.ceil(historialOrdenado.length / registrosPorPagina);
@@ -651,22 +2442,98 @@ export const FacturacionProveedoresDashboard = () => {
   const indexFirst = indexLast - registrosPorPagina;
   const registrosVisibles = historialOrdenado.slice(indexFirst, indexLast);
 
+  const pareceReferencia = (s: any): boolean => /^[A-Za-z]{1,6}[-\s]?\d{3,}/.test(String(s || '').trim());
+
+  useEffect(() => {
+    const fuentes: any[] = activeTab === 'historial' ? [...registrosVisibles] : [];
+    if (facturaViendo) fuentes.push(facturaViendo);
+    if (agregarRefFactura) fuentes.push(agregarRefFactura);
+    if (fuentes.length === 0) return;
+    const faltantes = new Set<string>();
+    const considerar = (id: string) => {
+      const k = String(id || '').trim();
+      if (!k || opInfoMap[k]) return;
+      if (pareceReferencia(k)) return;
+      if (k.length < 6) return;
+      faltantes.add(k);
+    };
+    const considerarValor = (valor: any) => String(valor || '').split(/[,\s]+/).forEach(t => considerar(t));
+    fuentes.forEach((f: any) => {
+      (Array.isArray(f.operacionesGuardadas) ? f.operacionesGuardadas : []).forEach((op: any) => {
+        considerar(String(op?.id || ''));
+        considerarValor(op?.ref);
+      });
+      (Array.isArray(f.operacionesIds) ? f.operacionesIds : []).forEach((id: any) => considerar(String(id || '')));
+    });
+    if (faltantes.size === 0) return;
+    let activo = true;
+    (async () => {
+      const ids = Array.from(faltantes).slice(0, 150);
+      const nuevos: Record<string, any> = {};
+      for (let i = 0; i < ids.length; i += 30) {
+        const chunk = ids.slice(i, i + 30);
+        try {
+          const snap = await getDocs(query(collection(db, 'operaciones'), where(documentId(), 'in', chunk)));
+          snap.docs.forEach(d => {
+            const o: any = { id: d.id, ...(d.data() as any) };
+            nuevos[d.id] = {
+              ref: o.numReferencia || o.referencia || o.ref || d.id,
+              remolque: txt(o.remolqueNombre, o.remolquePlaca, o.numeroRemolque),
+              moneda: o.monedaUnidadNombre || mostrarMoneda(o.facturadoEnUnidad),
+              proveedorId: provDeOp(o) || '',
+            };
+          });
+        } catch (e) { console.warn('No se pudo resolver lote de operaciones del historial:', e); }
+      }
+      if (activo && Object.keys(nuevos).length) setOpInfoMap(prev => ({ ...prev, ...nuevos }));
+    })();
+    return () => { activo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registrosVisibles, facturaViendo, agregarRefFactura, activeTab]);
+
+  const refDeOp = (op: any): string => {
+    const id = String(op?.id || '');
+    const directos = [op?.numReferencia, op?.referencia, op?.ref].map((v: any) => String(v || '')).filter(Boolean);
+    const refDirecta = directos.find(pareceReferencia);
+    if (refDirecta) return refDirecta;
+    const info = opInfoMap[id];
+    if (info?.ref && pareceReferencia(String(info.ref))) return String(info.ref);
+    const tokens = new Set<string>();
+    [id, ...directos].forEach(v => String(v).split(/[,\s]+/).forEach(t => { if (t) tokens.add(t); }));
+    const resueltas: string[] = [];
+    tokens.forEach(t => { const i = opInfoMap[t]; if (i?.ref && pareceReferencia(String(i.ref))) resueltas.push(String(i.ref)); });
+    if (resueltas.length) return Array.from(new Set(resueltas)).join(', ');
+    return directos[0] || (info?.ref ? String(info.ref) : '') || id;
+  };
+
   const irPaginaSiguiente = () => setPaginaActual(p => Math.min(p + 1, totalPaginas));
   const irPaginaAnterior = () => setPaginaActual(p => Math.max(p - 1, 1));
+  useEffect(() => { setPaginaActual(1); }, [filtroProveedor, ordenFac, fechaDesdeHist, fechaHastaHist, textoBuscarFactura, filtroStatusFactura]);
+  useEffect(() => { setPaginaOps(1); }, [filtroProveedor, ordenOps, fechaDesdeOps, fechaHastaOps, textoBuscarRemolqueOps, vistaOps, operacionesGlobales, filtroTipoOp]);
 
-  useEffect(() => { setPaginaActual(1); }, [filtroProveedor, ordenFac]);
+  const nombreProveedorFactura_ = (f: any): string => {
+    if (f.proveedorNombre) return f.proveedorNombre;
+    if (f.proveedor) return f.proveedor;
+    if (f.proveedorId) {
+      const nom = getNombreEmpresa(f.proveedorId);
+      if (nom && nom !== f.proveedorId) return nom;
+    }
+    return '-';
+  };
 
-  // ──────────────────────────────────────────────────────────────────
-  // (1) Columnas configurables — valor por columna + export
-  // ──────────────────────────────────────────────────────────────────
   const valorCeldaFactura = (f: any, colId: string): any => {
     switch (colId) {
+      case 'statusFactura': return f.statusFactura || 'Facturado';
       case 'invoice': return f.invoice || '';
       case 'fecha': return formatearFechaSpanish(f.fecha);
-      case 'proveedor': return f.proveedorNombre || '-';
-      case 'moneda': return f.monedaProveedor || 'N/A';
+      case 'proveedor': return nombreProveedorFactura_(f);
+      case 'moneda': return monedaFacturaMostrar(f);
       case 'facturaCcp': return f.facturaCcp || '-';
       case 'cantOps': return f.operacionesIds?.length || 0;
+      case 'referencias':
+        return Array.isArray(f.operacionesGuardadas)
+          ? f.operacionesGuardadas.map((op: any) => refDeOp(op)).filter(Boolean).join(', ')
+          : '-';
       case 'total': return Number(f.subtotalFactura) || 0;
       case 'createdAt': return f.createdAt ? formatearFechaHora(f.createdAt) : '-';
       default: return '-';
@@ -675,12 +2542,30 @@ export const FacturacionProveedoresDashboard = () => {
 
   const renderCeldaFactura = (f: any, colId: string) => {
     switch (colId) {
+      case 'statusFactura': return chipStatusFactura(f.statusFactura);
       case 'invoice': return <span style={{ color: '#D84315', fontWeight: 'bold', fontFamily: 'monospace' }}>{f.invoice}</span>;
       case 'fecha': return <span style={{ color: '#c9d1d9' }}>{formatearFechaSpanish(f.fecha)}</span>;
-      case 'proveedor': return <span style={{ color: '#f0f6fc' }}>{f.proveedorNombre || '-'}</span>;
-      case 'moneda': return <span style={{ color: '#10b981', fontWeight: 'bold' }}>{f.monedaProveedor || 'N/A'}</span>;
+      case 'proveedor': return <span style={{ color: '#f0f6fc' }}>{nombreProveedorFactura_(f)}</span>;
+      case 'moneda': { const mon = monedaFacturaMostrar(f); return <span style={{ color: mon === 'N/A' ? '#8b949e' : '#10b981', fontWeight: 'bold' }}>{mon}</span>; }
       case 'facturaCcp': return <span style={{ color: '#c9d1d9' }}>{f.facturaCcp || '-'}</span>;
       case 'cantOps': return <span style={{ color: '#8b949e' }}>{f.operacionesIds?.length || 0}</span>;
+      case 'referencias': {
+        const ops: any[] = Array.isArray(f.operacionesGuardadas) ? f.operacionesGuardadas : [];
+        if (ops.length === 0) return <span style={{ color: '#8b949e' }}>-</span>;
+        return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxWidth: '420px', whiteSpace: 'normal' }}>
+            {ops.map((op: any, idx: number) => (
+              <button
+                key={`${f.id}_ref_${op?.id || idx}`}
+                onClick={(e) => { e.stopPropagation(); if (op?.id) verDetalleOperacion(op.id); }}
+                title="Ver detalle de la operación"
+                style={{ backgroundColor: '#21262d', border: '1px solid #58a6ff', color: '#58a6ff', padding: '3px 8px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                {refDeOp(op)}
+              </button>
+            ))}
+          </div>
+        );
+      }
       case 'total': return <span style={{ color: '#58a6ff', fontWeight: 'bold' }}>{formatoMoneda(f.subtotalFactura)}</span>;
       case 'createdAt': return <span style={{ color: '#8b949e' }}>{f.createdAt ? formatearFechaHora(f.createdAt) : '-'}</span>;
       default: return '-';
@@ -691,20 +2576,17 @@ export const FacturacionProveedoresDashboard = () => {
     if (historialOrdenado.length === 0) return alert('No hay datos para exportar.');
     const columnasVisibles = columnasFactura.filter(c => c.visible);
     if (columnasVisibles.length === 0) return alert('Selecciona al menos una columna para exportar.');
-
     const datosExcel = historialOrdenado.map(f => {
       const fila: any = {};
       columnasVisibles.forEach(col => { fila[col.label] = valorCeldaFactura(f, col.id); });
       return fila;
     });
-
     const worksheet = XLSX.utils.json_to_sheet(datosExcel);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Facturas_Proveedores');
     XLSX.writeFile(workbook, `Facturas_Proveedores_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  // Drag & drop / visibilidad de columnas
   const handleDragStart = (_e: React.DragEvent, index: number) => setDraggedColIndex(index);
   const handleDragEnter = (index: number) => {
     if (draggedColIndex === null || draggedColIndex === index) return;
@@ -720,13 +2602,10 @@ export const FacturacionProveedoresDashboard = () => {
     setColumnasFactura(nuevas);
   };
 
-  // ──────────────────────────────────────────────────────────────────
-  // (4) Detalle de operación
-  // ──────────────────────────────────────────────────────────────────
   const verDetalleOperacion = async (opId: string) => {
     if (!opId) return;
     setCargandoDetalle(true);
-    setPestañaDetalleActiva('unidad');
+    setPestañaDetalleActiva('general');
     try {
       const snap = await getDoc(doc(db, 'operaciones', String(opId)));
       if (snap.exists()) {
@@ -741,12 +2620,11 @@ export const FacturacionProveedoresDashboard = () => {
     setCargandoDetalle(false);
   };
 
-  // Banderas para el detalle (mismas reglas que OperacionesDashboard)
   const det = operacionDetalle;
   const evalTipoOpText = String(det?.tipoOperacionNombre || det?.tipoOperacionId || '').toLowerCase();
-  const evalIsTransfer = evalTipoOpText.includes('transfer');
   const evalIsFletes = evalTipoOpText.includes('fletes') || evalTipoOpText.includes('flete');
   const evalIsLogistica = evalTipoOpText.includes('logistica') || evalTipoOpText.includes('logística');
+  const evalIsTransfer = evalTipoOpText.includes('transfer');
   const evalIsRoelca = String(det?.proveedorUnidadNombre || det?.proveedorUnidad || '').toLowerCase().includes('roelca');
   const showDetailInternalFleet = evalIsTransfer || ((evalIsLogistica || evalIsFletes) && evalIsRoelca);
   const showDetailExternalFleet = (evalIsLogistica || evalIsFletes) && !evalIsRoelca;
@@ -759,19 +2637,76 @@ export const FacturacionProveedoresDashboard = () => {
     { id: 'cobrar', label: 'Por Cobrar' },
   ];
 
-  // ──────────────────────────────────────────────────────────────────
-  // Estilos auxiliares
-  // ──────────────────────────────────────────────────────────────────
   const tabStyle = (active: boolean) => ({
     padding: '12px 24px', background: 'none', border: 'none', cursor: 'pointer',
     color: active ? '#f0f6fc' : '#8b949e', borderBottom: active ? '2px solid #D84315' : '2px solid transparent',
     fontWeight: active ? 'bold' : 'normal' as any,
   });
-
   const thOrdenStyle: React.CSSProperties = { padding: '16px', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' };
   const selectOrdenStyle: React.CSSProperties = { backgroundColor: '#161b22', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px', padding: '8px 10px', fontSize: '0.85rem' };
   const btnDirStyle: React.CSSProperties = { backgroundColor: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px', padding: '8px 12px', cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' };
-  const dateInputStyle: React.CSSProperties = { backgroundColor: '#161b22', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px', padding: '7px 10px', fontSize: '0.85rem', colorScheme: 'dark' };
+  const dateInputStyle: React.CSSProperties = { backgroundColor: '#161b22', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px', padding: '9px 10px', fontSize: '0.9rem', colorScheme: 'dark' };
+
+  const segBtnStyle = (active: boolean, col: string): React.CSSProperties => ({
+    padding: '8px 14px', border: 'none', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 'bold', whiteSpace: 'nowrap',
+    backgroundColor: active ? `${col}22` : 'transparent',
+    color: active ? col : '#8b949e',
+    borderBottom: active ? `2px solid ${col}` : '2px solid transparent',
+  });
+
+  const BuscadorProveedor = () => (
+    <div style={{ flex: 1, minWidth: '280px', position: 'relative' }}>
+      <label style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>PROVEEDOR (opcional)</label>
+      {filtroProveedor ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#161b22', border: '1px solid #10b981', borderRadius: '6px', minHeight: '20px' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+          <span style={{ color: '#10b981', fontWeight: 'bold', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nombreProveedorSeleccionado}</span>
+          <button onClick={() => { setFiltroProveedor(''); setTextoBuscarProveedor(''); setMostrarSugerenciasProveedor(false); setSeleccionadas([]); }} title="Quitar proveedor" style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', padding: '0 4px', fontSize: '1rem', lineHeight: 1 }}>✕</button>
+        </div>
+      ) : (
+        <div style={{ position: 'relative' }}>
+          <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#10b981' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" placeholder="Buscar proveedor por nombre o RFC (opcional)..." value={textoBuscarProveedor}
+            onChange={(e) => { setTextoBuscarProveedor(e.target.value); setMostrarSugerenciasProveedor(true); }}
+            onFocus={() => setMostrarSugerenciasProveedor(true)} onBlur={() => setTimeout(() => setMostrarSugerenciasProveedor(false), 180)}
+            style={{ width: '100%', padding: '10px 10px 10px 32px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
+        </div>
+      )}
+      {!filtroProveedor && mostrarSugerenciasProveedor && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', maxHeight: '320px', overflowY: 'auto', zIndex: 100, marginTop: '4px', boxShadow: '0 6px 16px rgba(0,0,0,0.5)' }}>
+          {proveedoresFiltradosBuscador.length === 0 ? (
+            <div style={{ padding: '14px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>{textoBuscarProveedor.trim() ? 'Sin coincidencias' : 'No hay proveedores cargados'}</div>
+          ) : (
+            <>
+              <div style={{ padding: '6px 12px', fontSize: '0.7rem', color: '#8b949e', borderBottom: '1px solid #21262d', backgroundColor: '#161b22' }}>{proveedoresFiltradosBuscador.length} {proveedoresFiltradosBuscador.length === 1 ? 'proveedor' : 'proveedores'}{textoBuscarProveedor.trim() ? '' : ' (primeros 30)'}</div>
+              {proveedoresFiltradosBuscador.map((cli: any) => (
+                <div key={cli.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setFiltroProveedor(cli.id); setTextoBuscarProveedor(''); setMostrarSugerenciasProveedor(false); setSeleccionadas([]); }}
+                  style={{ padding: '10px 12px', cursor: 'pointer', color: '#c9d1d9', fontSize: '0.88rem', borderBottom: '1px solid #21262d', transition: 'background-color 0.15s' }}
+                  onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}>
+                  <div style={{ fontWeight: '500' }}>{cli.nombre || cli.id}</div>
+                  {cli.rfc && <div style={{ color: '#8b949e', fontSize: '0.75rem', marginTop: '2px' }}>{cli.rfc}</div>}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const OPS_POR_PAGINA = 100;
+  const totalPaginasOps = Math.max(1, Math.ceil(operacionesMostradas.length / OPS_POR_PAGINA));
+  const paginaOpsSegura = Math.min(paginaOps, totalPaginasOps);
+  const operacionesPagina = operacionesMostradas.slice((paginaOpsSegura - 1) * OPS_POR_PAGINA, paginaOpsSegura * OPS_POR_PAGINA);
+
+  const filtrosActivos = activeTab === 'operaciones'
+    ? [fechaDesdeOps, fechaHastaOps, textoBuscarRemolqueOps, filtroTipoOp, filtroProveedor].filter(Boolean).length
+    : [textoBuscarFactura, fechaDesdeHist, fechaHastaHist, filtroProveedor].filter(Boolean).length;
+  const limpiarFiltros = () => {
+    if (activeTab === 'operaciones') { setFechaDesdeOps(''); setFechaHastaOps(''); setTextoBuscarRemolqueOps(''); setFiltroTipoOp(''); }
+    else { setTextoBuscarFactura(''); setFechaDesdeHist(''); setFechaHastaHist(''); }
+    setFiltroProveedor(''); setTextoBuscarProveedor('');
+  };
 
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease' }}>
@@ -782,154 +2717,238 @@ export const FacturacionProveedoresDashboard = () => {
         <button onClick={() => setActiveTab('historial')} style={tabStyle(activeTab === 'historial')}>Historial de Facturas</button>
       </div>
 
-      {/* ════════════════════ ASIGNAR OPERACIONES ════════════════════ */}
-      {activeTab === 'operaciones' ? (
-        <div className="animation-fade-in">
-          {/* Buscador de cliente */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginBottom: '20px', alignItems: 'flex-end', backgroundColor: '#0d1117', padding: '20px', borderRadius: '8px', border: '1px solid #30363d' }}>
-            <div style={{ flex: 1, minWidth: '320px', position: 'relative' }}>
-              <label style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>PROVEEDOR ★</label>
-              {filtroProveedor ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#161b22', border: '1px solid #10b981', borderRadius: '6px', minHeight: '20px' }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                  <span style={{ color: '#10b981', fontWeight: 'bold', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nombreProveedorSeleccionado}</span>
-                  <button onClick={() => { setFiltroProveedor(''); setTextoBuscarCliente(''); setMostrarSugerenciasCliente(false); setSeleccionadas([]); }} title="Cambiar proveedor" style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', padding: '0 4px', fontSize: '1rem', lineHeight: 1 }}>✕</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <button onClick={() => setFiltrosAbiertos(true)} title="Mostrar filtros"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 16px', backgroundColor: '#161b22', border: `1px solid ${filtrosActivos > 0 ? '#D84315' : '#30363d'}`, borderRadius: '8px', color: '#c9d1d9', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.88rem' }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+          Filtros
+          {filtrosActivos > 0 && <span style={{ backgroundColor: '#D84315', color: '#fff', borderRadius: '10px', padding: '1px 8px', fontSize: '0.72rem' }}>{filtrosActivos}</span>}
+        </button>
+        {filtrosActivos > 0 && (
+          <button onClick={limpiarFiltros} style={{ ...btnDirStyle, color: '#8b949e' }} title="Quitar todos los filtros">✕ Limpiar filtros</button>
+        )}
+        {activeTab === 'operaciones' && filtroTipoOp && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 10px', backgroundColor: 'rgba(163,113,247,0.1)', border: '1px solid #a371f7', borderRadius: '14px', color: '#a371f7', fontSize: '0.8rem', fontWeight: 'bold' }}>
+            {filtroTipoOp}
+            <button onClick={() => setFiltroTipoOp('')} style={{ background: 'transparent', border: 'none', color: '#a371f7', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1 }}>✕</button>
+          </span>
+        )}
+        {filtroProveedor && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 10px', backgroundColor: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', borderRadius: '14px', color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold' }}>
+            {nombreProveedorSeleccionado}
+            <button onClick={() => { setFiltroProveedor(''); setTextoBuscarProveedor(''); }} style={{ background: 'transparent', border: 'none', color: '#10b981', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1 }}>✕</button>
+          </span>
+        )}
+      </div>
+
+      {filtrosAbiertos && (
+        <div onClick={() => setFiltrosAbiertos(false)} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1400, backdropFilter: 'blur(2px)' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: '380px', maxWidth: '92%', backgroundColor: '#0d1117', borderLeft: '1px solid #30363d', boxShadow: '-8px 0 28px rgba(0,0,0,0.5)', padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', zIndex: 1401, animation: 'fadeIn 0.15s ease' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #30363d', paddingBottom: '12px' }}>
+              <h3 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.05rem' }}>Filtros · {activeTab === 'operaciones' ? 'Operaciones' : 'Historial'}</h3>
+              <button onClick={() => setFiltrosAbiertos(false)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+
+            {activeTab === 'operaciones' ? (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold' }}># REMOLQUE / REFERENCIA (opcional)</label>
+                  <div style={{ position: 'relative' }}>
+                    <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#58a6ff' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text" placeholder="Buscar por # remolque o referencia..." value={textoBuscarRemolqueOps}
+                      onChange={(e) => setTextoBuscarRemolqueOps(e.target.value)}
+                      style={{ width: '100%', padding: '9px 10px 9px 32px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
+                    {textoBuscarRemolqueOps && (
+                      <button onClick={() => setTextoBuscarRemolqueOps('')} title="Limpiar" style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '0.95rem' }}>✕</button>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <div style={{ position: 'relative' }}>
-                  <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#10b981' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                  <input type="text" placeholder="Buscar proveedor por nombre o RFC..." value={textoBuscarCliente}
-                    onChange={(e) => { setTextoBuscarCliente(e.target.value); setMostrarSugerenciasCliente(true); }}
-                    onFocus={() => setMostrarSugerenciasCliente(true)} onBlur={() => setTimeout(() => setMostrarSugerenciasCliente(false), 180)}
-                    style={{ width: '100%', padding: '10px 10px 10px 32px', backgroundColor: '#161b22', border: '1px solid #10b981', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
-                </div>
-              )}
-              {!filtroProveedor && mostrarSugerenciasCliente && (
-                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', maxHeight: '320px', overflowY: 'auto', zIndex: 100, marginTop: '4px', boxShadow: '0 6px 16px rgba(0,0,0,0.5)' }}>
-                  {proveedoresFiltradosBuscador.length === 0 ? (
-                    <div style={{ padding: '14px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>{textoBuscarCliente.trim() ? 'Sin coincidencias' : 'No hay proveedores cargados'}</div>
-                  ) : (
-                    <>
-                      <div style={{ padding: '6px 12px', fontSize: '0.7rem', color: '#8b949e', borderBottom: '1px solid #21262d', backgroundColor: '#161b22' }}>{proveedoresFiltradosBuscador.length} {proveedoresFiltradosBuscador.length === 1 ? 'proveedor' : 'proveedores'}{textoBuscarCliente.trim() ? '' : ' (primeros 30)'}</div>
-                      {proveedoresFiltradosBuscador.map((cli: any) => (
-                        <div key={cli.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setFiltroProveedor(cli.id); setTextoBuscarCliente(''); setMostrarSugerenciasCliente(false); setSeleccionadas([]); }}
-                          style={{ padding: '10px 12px', cursor: 'pointer', color: '#c9d1d9', fontSize: '0.88rem', borderBottom: '1px solid #21262d', transition: 'background-color 0.15s' }}
-                          onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                          <div style={{ fontWeight: '500' }}>{cli.nombre || cli.id}</div>
-                          {cli.rfc && <div style={{ color: '#8b949e', fontSize: '0.75rem', marginTop: '2px' }}>{cli.rfc}</div>}
-                        </div>
-                      ))}
-                    </>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ color: '#a371f7', fontSize: '0.8rem', fontWeight: 'bold' }}>TIPO DE OPERACIÓN (opcional)</label>
+                  <select value={filtroTipoOp} onChange={(e) => setFiltroTipoOp(e.target.value)}
+                    style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', border: `1px solid ${filtroTipoOp ? '#a371f7' : '#30363d'}`, borderRadius: '6px', color: filtroTipoOp ? '#a371f7' : '#c9d1d9', fontSize: '0.9rem', fontWeight: filtroTipoOp ? 'bold' : 'normal', boxSizing: 'border-box' }}>
+                    <option value="">Todos los tipos ({tiposOperacionDisponibles.length})</option>
+                    {tiposOperacionDisponibles.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  {tiposOperacionDisponibles.length === 0 && (
+                    <span style={{ color: '#6e7681', fontSize: '0.72rem' }}>Carga las operaciones para ver los tipos disponibles.</span>
                   )}
                 </div>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold' }}>FECHA DESDE</label>
+                    <input type="date" value={fechaDesdeOps} onChange={(e) => setFechaDesdeOps(e.target.value)} style={{ ...dateInputStyle, width: '100%', boxSizing: 'border-box' }} />
+                  </div>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold' }}>FECHA HASTA</label>
+                    <input type="date" value={fechaHastaOps} onChange={(e) => setFechaHastaOps(e.target.value)} style={{ ...dateInputStyle, width: '100%', boxSizing: 'border-box' }} />
+                  </div>
+                </div>
+                {(fechaDesdeOps || fechaHastaOps) && (
+                  <button onClick={() => { setFechaDesdeOps(''); setFechaHastaOps(''); }} style={{ ...btnDirStyle, color: '#8b949e', alignSelf: 'flex-start' }} title="Quitar filtro de fechas">✕ Limpiar fechas</button>
+                )}
+                {BuscadorProveedor()}
+                <div style={{ color: '#6e7681', fontSize: '0.75rem' }}>
+                  Por defecto se muestran <b style={{ color: '#8b949e' }}>todas</b> las operaciones completadas. El rango de fechas y el proveedor son <b style={{ color: '#8b949e' }}>opcionales</b> para acotar.
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ color: '#58a6ff', fontSize: '0.8rem', fontWeight: 'bold' }}>BUSCAR EN HISTORIAL</label>
+                  <div style={{ position: 'relative' }}>
+                    <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#58a6ff' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text" placeholder="Factura, proveedor, status, referencia o # remolque..." value={textoBuscarFactura} onChange={(e) => setTextoBuscarFactura(e.target.value)}
+                      style={{ width: '100%', padding: '10px 10px 10px 32px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
+                    {textoBuscarFactura && (
+                      <button onClick={() => setTextoBuscarFactura('')} title="Limpiar búsqueda" style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '0.95rem' }}>✕</button>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold' }}>FECHA DESDE</label>
+                    <input type="date" value={fechaDesdeHist} onChange={(e) => setFechaDesdeHist(e.target.value)} style={{ ...dateInputStyle, width: '100%', boxSizing: 'border-box' }} />
+                  </div>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold' }}>FECHA HASTA</label>
+                    <input type="date" value={fechaHastaHist} onChange={(e) => setFechaHastaHist(e.target.value)} style={{ ...dateInputStyle, width: '100%', boxSizing: 'border-box' }} />
+                  </div>
+                </div>
+                {(fechaDesdeHist || fechaHastaHist) && (
+                  <button onClick={() => { setFechaDesdeHist(''); setFechaHastaHist(''); }} style={{ ...btnDirStyle, color: '#8b949e', alignSelf: 'flex-start' }} title="Quitar filtro de fechas">✕ Limpiar fechas</button>
+                )}
+                {BuscadorProveedor()}
+                <div style={{ color: '#6e7681', fontSize: '0.75rem' }}>
+                  Por defecto se muestran <b style={{ color: '#8b949e' }}>todas</b> las facturas (sin filtro de fechas). Las facturas importadas sin fecha se ocultan al filtrar por fecha.
+                </div>
+              </>
+            )}
+
+            <div style={{ marginTop: 'auto', display: 'flex', gap: '10px', borderTop: '1px solid #30363d', paddingTop: '14px' }}>
+              <button onClick={limpiarFiltros} style={{ flex: 1, padding: '10px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Limpiar</button>
+              <button onClick={() => setFiltrosAbiertos(false)} style={{ flex: 1, padding: '10px', backgroundColor: '#D84315', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Aplicar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'operaciones' ? (
+        <div className="animation-fade-in">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '16px' }}>
+            <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '16px 20px' }}>
+              <span style={{ display: 'block', color: '#8b949e', fontSize: '0.78rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Operaciones en espera por facturar</span>
+              <span style={{ color: '#f59e0b', fontSize: '1.8rem', fontWeight: 'bold' }}>{resumenOps.porFacturar}</span>
+            </div>
+            <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '16px 20px' }}>
+              <span style={{ display: 'block', color: '#8b949e', fontSize: '0.78rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Operaciones ya facturadas (en historial)</span>
+              <span style={{ color: '#10b981', fontSize: '1.8rem', fontWeight: 'bold' }}>{resumenOps.facturadas}</span>
+            </div>
+            <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '16px 20px' }}>
+              <span style={{ display: 'block', color: '#8b949e', fontSize: '0.78rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Total completadas cargadas</span>
+              <span style={{ color: '#58a6ff', fontSize: '1.8rem', fontWeight: 'bold' }}>{resumenOps.total}</span>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '6px 8px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', border: '1px solid #30363d', borderRadius: '6px', overflow: 'hidden' }}>
+              <button onClick={() => { setVistaOps('pendientes'); setSeleccionadas([]); }} style={segBtnStyle(vistaOps === 'pendientes', '#f59e0b')}>Pendientes ({resumenOps.porFacturar})</button>
+              <button onClick={() => { setVistaOps('facturadas'); setSeleccionadas([]); }} style={segBtnStyle(vistaOps === 'facturadas', '#10b981')}>Facturadas ({resumenOps.facturadas})</button>
+              <button onClick={() => { setVistaOps('todas'); setSeleccionadas([]); }} style={segBtnStyle(vistaOps === 'todas', '#58a6ff')}>Todas ({resumenOps.total})</button>
+            </div>
+            <span style={{ color: '#6e7681', fontSize: '0.78rem' }}>
+              {vistaOps === 'facturadas' ? 'Solo lectura (las facturadas no se seleccionan).' : vistaOps === 'todas' ? 'Pendientes seleccionables; facturadas marcadas en verde.' : 'Operaciones listas para generar factura.'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '12px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <span style={{ color: '#8b949e', fontSize: '0.8rem' }}>Ordenar:</span>
+              <select value={ordenOps.campo} onChange={(e) => setOrdenOps(prev => ({ ...prev, campo: e.target.value }))} style={selectOrdenStyle}>
+                {columnasOps.filter(c => c.visible && c.orden).map(c => (
+                  <option key={c.id} value={c.id}>{c.label}</option>
+                ))}
+              </select>
+              <button onClick={() => setOrdenOps(prev => ({ ...prev, dir: prev.dir === 'asc' ? 'desc' : 'asc' }))} style={btnDirStyle} title="Cambiar dirección">
+                {ordenOps.dir === 'asc' ? '▲ Asc' : '▼ Desc'}
+              </button>
+              <span style={{ color: '#8b949e', fontSize: '0.8rem' }}>
+                {operacionesMostradas.length} {operacionesMostradas.length === 1 ? 'mostrada' : 'mostradas'}
+              </span>
+            </div>
+
+            <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '180px', maxWidth: '440px' }}>
+              <input type="text" placeholder="Buscar operación (ref, remolque, cliente, origen...)" value={textoBuscarRemolqueOps}
+                onChange={(e) => setTextoBuscarRemolqueOps(e.target.value)}
+                style={{ width: '100%', padding: '8px 30px 8px 12px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.85rem', boxSizing: 'border-box' }} />
+              {textoBuscarRemolqueOps && (
+                <button onClick={() => setTextoBuscarRemolqueOps('')} title="Limpiar" style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '0.95rem' }}>✕</button>
               )}
             </div>
 
-            <button disabled={seleccionadas.length === 0 || filtroEstadoOps === 'facturadas'} onClick={() => setModalAbierto(true)}
-              style={{ padding: '10px 20px', backgroundColor: (seleccionadas.length > 0 && filtroEstadoOps !== 'facturadas') ? '#D84315' : '#30363d', color: '#fff', border: 'none', borderRadius: '6px', cursor: (seleccionadas.length > 0 && filtroEstadoOps !== 'facturadas') ? 'pointer' : 'not-allowed', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
-              Generar Factura ({seleccionadas.length})
-            </button>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button onClick={recargarTodo} disabled={cargandoFacturas} style={btnDirStyle} title="Volver a leer operaciones y facturas desde la base de datos (limpia la caché)">↻ Recargar</button>
+              <button onClick={() => setModalColumnasOps(true)} style={btnDirStyle} title="Elegir y reordenar columnas">⚙ Configurar Columnas</button>
+              <button title="Editar el encabezado de las remisiones (emisor por moneda: USD→Camila, MXN→Rolando)" onClick={() => setModalEmisores(true)} style={{ ...btnDirStyle, borderColor: '#fb923c', color: '#fb923c' }}>⚙ Encabezado Remisión</button>
+              <button onClick={exportarExcelOps} disabled={operacionesMostradas.length === 0}
+                style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', fontWeight: 'bold', fontSize: '0.85rem', whiteSpace: 'nowrap',
+                  cursor: operacionesMostradas.length === 0 ? 'not-allowed' : 'pointer',
+                  backgroundColor: operacionesMostradas.length === 0 ? '#30363d' : '#1a7f37',
+                  color: operacionesMostradas.length === 0 ? '#8b949e' : '#fff' }}>
+                ⬇ Exportar Excel
+              </button>
+              <button disabled={seleccionadas.length === 0} onClick={abrirModalCostoAdic}
+                style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #58a6ff', backgroundColor: 'transparent', color: seleccionadas.length === 0 ? '#484f58' : '#58a6ff', fontWeight: 'bold', fontSize: '0.85rem', whiteSpace: 'nowrap', cursor: seleccionadas.length === 0 ? 'not-allowed' : 'pointer' }}
+                title="Agregar un costo adicional al proveedor en una operación seleccionada">
+                ➕ Costo adicional
+              </button>
+              <button disabled={seleccionadas.length === 0 || seleccionMultiProveedor} onClick={() => { setStatusFacturaForm('Facturado'); setModalAbierto(true); }}
+                style={{ padding: '8px 20px', backgroundColor: (seleccionadas.length > 0 && !seleccionMultiProveedor) ? '#D84315' : '#30363d', color: '#fff', border: 'none', borderRadius: '6px', cursor: (seleccionadas.length > 0 && !seleccionMultiProveedor) ? 'pointer' : 'not-allowed', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                Generar Factura ({seleccionadas.length})
+              </button>
+            </div>
           </div>
 
-          {/* (6) Filtros Pendientes / Facturadas + (5) Orden */}
-          {filtroProveedor && (
-            <>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button onClick={() => { setFiltroEstadoOps('pendientes'); }}
-                  style={{ padding: '8px 18px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem',
-                    border: `1px solid ${filtroEstadoOps === 'pendientes' ? '#ef4444' : '#30363d'}`,
-                    backgroundColor: filtroEstadoOps === 'pendientes' ? 'rgba(239,68,68,0.15)' : 'transparent',
-                    color: filtroEstadoOps === 'pendientes' ? '#ef4444' : '#8b949e' }}>
-                  ● Pendientes ({conteoOps.pendientes})
-                </button>
-                <button onClick={() => { setFiltroEstadoOps('facturadas'); setSeleccionadas([]); }}
-                  style={{ padding: '8px 18px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.85rem',
-                    border: `1px solid ${filtroEstadoOps === 'facturadas' ? '#10b981' : '#30363d'}`,
-                    backgroundColor: filtroEstadoOps === 'facturadas' ? 'rgba(16,185,129,0.15)' : 'transparent',
-                    color: filtroEstadoOps === 'facturadas' ? '#10b981' : '#8b949e' }}>
-                  ● Facturadas ({conteoOps.facturadas})
-                </button>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ color: '#8b949e', fontSize: '0.8rem' }}>Ordenar:</span>
-                <select value={ordenOps.campo} onChange={(e) => setOrdenOps(prev => ({ ...prev, campo: e.target.value }))} style={selectOrdenStyle}>
-                  <option value="ref">Referencia</option>
-                  <option value="fechaServicio">Fecha Servicio</option>
-                  <option value="proveedor">Proveedor</option>
-                  <option value="destino">Destino</option>
-                  <option value="subtotal">Subtotal</option>
-                  <option value="conv">Conversión</option>
-                </select>
-                <button onClick={() => setOrdenOps(prev => ({ ...prev, dir: prev.dir === 'asc' ? 'desc' : 'asc' }))} style={btnDirStyle} title="Cambiar dirección">
-                  {ordenOps.dir === 'asc' ? '▲ Asc' : '▼ Desc'}
-                </button>
-              </div>
+          {topeOpsAlcanzado && (
+            <div style={{ backgroundColor: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.4)', color: '#f59e0b', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px', fontSize: '0.85rem' }}>
+              Se alcanzó el tope de <b>{LIMITE_OPS_TODAS}</b> operaciones cargadas, por lo que podría haber más que no se muestran. Usa el <b>rango de fechas</b> o el <b>proveedor</b> para acotar.
             </div>
-
-            {/* (3) Rango de fechas + Configurar columnas + Exportar Excel */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '16px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '12px 16px' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', alignItems: 'flex-end' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ color: '#8b949e', fontSize: '0.72rem', fontWeight: 'bold' }}>FECHA DESDE</label>
-                  <input type="date" value={fechaDesdeOps} onChange={(e) => setFechaDesdeOps(e.target.value)} style={dateInputStyle} />
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <label style={{ color: '#8b949e', fontSize: '0.72rem', fontWeight: 'bold' }}>FECHA HASTA</label>
-                  <input type="date" value={fechaHastaOps} onChange={(e) => setFechaHastaOps(e.target.value)} style={dateInputStyle} />
-                </div>
-                {(fechaDesdeOps || fechaHastaOps) && (
-                  <button onClick={() => { setFechaDesdeOps(''); setFechaHastaOps(''); }} style={{ ...btnDirStyle, color: '#8b949e' }} title="Quitar filtro de fechas">
-                    ✕ Limpiar fechas
-                  </button>
-                )}
-                <span style={{ color: '#8b949e', fontSize: '0.8rem' }}>
-                  {operacionesMostradas.length} {operacionesMostradas.length === 1 ? 'operación' : 'operaciones'}
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button onClick={() => setModalColumnasOps(true)} style={btnDirStyle} title="Elegir y reordenar columnas">
-                  ⚙ Configurar Columnas
-                </button>
-                <button onClick={exportarExcelOps} disabled={operacionesMostradas.length === 0}
-                  style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', fontWeight: 'bold', fontSize: '0.85rem', whiteSpace: 'nowrap',
-                    cursor: operacionesMostradas.length === 0 ? 'not-allowed' : 'pointer',
-                    backgroundColor: operacionesMostradas.length === 0 ? '#30363d' : '#1a7f37',
-                    color: operacionesMostradas.length === 0 ? '#8b949e' : '#fff' }}>
-                  ⬇ Exportar Excel ({filtroEstadoOps === 'facturadas' ? 'Facturadas' : 'Pendientes'})
-                </button>
-              </div>
-            </div>
-            </>
           )}
 
-          {/* Resumen de selección */}
-          {seleccionadas.length > 0 && filtroEstadoOps === 'pendientes' && (
+          {seleccionMultiProveedor && (
+            <div style={{ backgroundColor: 'rgba(248,81,73,0.08)', border: '1px solid rgba(248,81,73,0.4)', color: '#ff7b72', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px', fontSize: '0.85rem' }}>
+              Seleccionaste operaciones de <b>distintos proveedores</b>. Una factura debe ser de un solo proveedor: usa el filtro de proveedor o selecciona operaciones del mismo proveedor.
+            </div>
+          )}
+
+          {seleccionadas.length > 0 && !seleccionMultiProveedor && (
             <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '20px', marginBottom: '20px', animation: 'fadeIn 0.3s ease' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
                 <div style={{ borderRight: '1px solid #30363d' }}>
-                  <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Operaciones Seleccionadas</span>
+                  <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Seleccionadas</span>
                   <span style={{ color: '#58a6ff', fontSize: '1.8rem', fontWeight: 'bold' }}>{seleccionadas.length}</span>
                 </div>
                 <div style={{ borderRight: '1px solid #30363d' }}>
                   <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Conversión Estimada</span>
                   <span style={{ color: '#3fb950', fontSize: '1.8rem', fontWeight: 'bold' }}>{formatoMoneda(resumenSeleccion.subtotal)}</span>
                 </div>
+                <div style={{ borderRight: '1px solid #30363d' }}>
+                  <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Proveedor</span>
+                  <span style={{ color: '#f0f6fc', fontSize: '1.1rem', fontWeight: 'bold' }}>{nombreProveedorFactura || '—'}</span>
+                </div>
                 <div>
-                  <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Moneda del Proveedor</span>
+                  <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Moneda</span>
                   <span style={{ color: '#D84315', fontSize: '1.8rem', fontWeight: 'bold' }}>{monedaProveedor}</span>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Tabla de operaciones */}
           <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 380px)', backgroundColor: '#161b22' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead style={{ backgroundColor: '#1f2937', color: '#8b949e', fontSize: '0.8rem', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
+                  <th style={{ padding: '16px', textAlign: 'center', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}>ACCIONES</th>
                   <th style={{ padding: '16px', width: '50px', textAlign: 'center', borderBottom: '1px solid #30363d', whiteSpace: 'nowrap' }}></th>
                   {columnasOps.filter(c => c.visible).map(col => (
                     <th key={col.id}
@@ -941,28 +2960,41 @@ export const FacturacionProveedoresDashboard = () => {
                 </tr>
               </thead>
               <tbody>
-                {!filtroProveedor ? (
-                  <tr><td colSpan={columnasOps.filter(c => c.visible).length + 1} style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Selecciona un Proveedor en el filtro superior para ver las operaciones completadas.</td></tr>
-                ) : cargandoOperaciones ? (
-                  <tr><td colSpan={columnasOps.filter(c => c.visible).length + 1} style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Cargando últimas 100 operaciones completadas del proveedor...</td></tr>
+                {cargandoOperaciones ? (
+                  <tr><td colSpan={columnasOps.filter(c => c.visible).length + 2} style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>Cargando todas las operaciones completadas...</td></tr>
                 ) : operacionesMostradas.length === 0 ? (
-                  <tr><td colSpan={columnasOps.filter(c => c.visible).length + 1} style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>
-                    {filtroEstadoOps === 'pendientes'
-                      ? 'No hay operaciones pendientes de facturar para este proveedor.'
-                      : 'No hay operaciones facturadas para este proveedor.'}
-                  </td></tr>
+                  <tr><td colSpan={columnasOps.filter(c => c.visible).length + 2} style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>No hay operaciones {vistaOps === 'facturadas' ? 'facturadas' : vistaOps === 'pendientes' ? 'pendientes' : 'completadas'} con los filtros actuales{filtroProveedor ? ' para el proveedor seleccionado' : ''}.</td></tr>
                 ) : (
-                  operacionesMostradas.map(op => {
+                  operacionesPagina.map(op => {
                     const m = obtenerMontoOperacion(op);
-                    const seleccionable = filtroEstadoOps === 'pendientes';
+                    const yaFacturada = esFacturada(op);
                     return (
-                      <tr key={op.id} onClick={() => seleccionable && toggleSeleccion(op.id)}
-                        style={{ cursor: seleccionable ? 'pointer' : 'default', borderBottom: '1px solid #21262d', backgroundColor: seleccionadas.includes(op.id) ? 'rgba(216,67,21,0.1)' : 'transparent' }}>
-                        <td style={{ padding: '16px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                          {seleccionable ? (
-                            <input type="checkbox" checked={seleccionadas.includes(op.id)} readOnly style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                      <tr key={op.id} onClick={() => { if (!yaFacturada) toggleSeleccion(op.id); }}
+                        style={{ cursor: yaFacturada ? 'default' : 'pointer', borderBottom: '1px solid #21262d', backgroundColor: seleccionadas.includes(op.id) ? 'rgba(216,67,21,0.1)' : (yaFacturada ? 'rgba(16,185,129,0.04)' : 'transparent') }}>
+                        <td style={{ padding: '12px 16px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          {yaFacturada ? (
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                              <button onClick={(e) => abrirConfirmacionTarifa(e, op)} title="Generar la Confirmación de Tarifa a Proveedor en PDF"
+                                style={{ backgroundColor: 'transparent', border: '1px solid #fb923c', color: '#fb923c', borderRadius: '6px', padding: '5px 10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>📋 Tarifa</button>
+                              <button onClick={(e) => abrirGestionOp(e, op)} title="Editar el # de factura de esta operación"
+                                style={{ backgroundColor: 'transparent', border: '1px solid #f59e0b', color: '#f59e0b', borderRadius: '6px', padding: '5px 10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>✎ #</button>
+                              <button onClick={(e) => { e.stopPropagation(); quitarOpDeFactura(op); }} title="Quitar esta operación de la factura (vuelve a Pendientes)"
+                                style={{ backgroundColor: 'transparent', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '6px', padding: '5px 10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>✕ Quitar</button>
+                            </div>
                           ) : (
-                            <span title={op.facturaProveedorFolio || 'Facturada'} style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#10b981' }} />
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                              <button onClick={(e) => abrirConfirmacionTarifa(e, op)} title="Generar la Confirmación de Tarifa a Proveedor en PDF"
+                                style={{ backgroundColor: 'transparent', border: '1px solid #fb923c', color: '#fb923c', borderRadius: '6px', padding: '5px 10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>📋 Tarifa</button>
+                              <button onClick={(e) => { e.stopPropagation(); abrirCostoAdicParaOp(op.id); }} title="Agregar costo adicional a esta operación"
+                                style={{ backgroundColor: 'transparent', border: '1px solid #58a6ff', color: '#58a6ff', borderRadius: '6px', padding: '5px 10px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>＋ Costo</button>
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '16px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          {yaFacturada ? (
+                            <span title="Ya facturada" style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#10b981' }} />
+                          ) : (
+                            <input type="checkbox" checked={seleccionadas.includes(op.id)} readOnly style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#ffffff' }} />
                           )}
                         </td>
                         {columnasOps.filter(c => c.visible).map(col => renderCeldaOps(op, col.id, m))}
@@ -973,54 +3005,59 @@ export const FacturacionProveedoresDashboard = () => {
               </tbody>
             </table>
           </div>
+          {totalPaginasOps > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', marginTop: '16px' }}>
+              <button onClick={() => setPaginaOps(p => Math.max(1, p - 1))} disabled={paginaOpsSegura === 1}
+                style={{ padding: '8px 16px', background: 'none', border: '1px solid #30363d', borderRadius: '6px', cursor: paginaOpsSegura === 1 ? 'not-allowed' : 'pointer', color: paginaOpsSegura === 1 ? '#484f58' : '#c9d1d9' }}>Anterior</button>
+              <span style={{ color: '#8b949e', fontSize: '0.85rem' }}>
+                Página {paginaOpsSegura} / {totalPaginasOps} · {operacionesMostradas.length} operaciones
+              </span>
+              <button onClick={() => setPaginaOps(p => Math.min(totalPaginasOps, p + 1))} disabled={paginaOpsSegura === totalPaginasOps}
+                style={{ padding: '8px 16px', background: 'none', border: '1px solid #30363d', borderRadius: '6px', cursor: paginaOpsSegura === totalPaginasOps ? 'not-allowed' : 'pointer', color: paginaOpsSegura === totalPaginasOps ? '#484f58' : '#c9d1d9' }}>Siguiente</button>
+            </div>
+          )}
         </div>
 
       ) : (
-        /* ════════════════════ HISTORIAL DE FACTURAS ════════════════════ */
         <div className="animation-fade-in">
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginBottom: '20px', alignItems: 'flex-end', backgroundColor: '#0d1117', padding: '20px', borderRadius: '8px', border: '1px solid #30363d' }}>
-            <div style={{ flex: 1, minWidth: '320px', position: 'relative' }}>
-              <label style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>PROVEEDOR ★</label>
-              {filtroProveedor ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px', backgroundColor: '#161b22', border: '1px solid #10b981', borderRadius: '6px', minHeight: '20px' }}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                  <span style={{ color: '#10b981', fontWeight: 'bold', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nombreProveedorSeleccionado}</span>
-                  <button onClick={() => { setFiltroProveedor(''); setTextoBuscarCliente(''); setMostrarSugerenciasCliente(false); }} title="Cambiar proveedor" style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', padding: '0 4px', fontSize: '1rem', lineHeight: 1 }}>✕</button>
-                </div>
-              ) : (
-                <div style={{ position: 'relative' }}>
-                  <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#10b981' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                  <input type="text" placeholder="Buscar proveedor por nombre o RFC..." value={textoBuscarCliente}
-                    onChange={(e) => { setTextoBuscarCliente(e.target.value); setMostrarSugerenciasCliente(true); }}
-                    onFocus={() => setMostrarSugerenciasCliente(true)} onBlur={() => setTimeout(() => setMostrarSugerenciasCliente(false), 180)}
-                    style={{ width: '100%', padding: '10px 10px 10px 32px', backgroundColor: '#161b22', border: '1px solid #10b981', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
-                </div>
-              )}
-              {!filtroProveedor && mostrarSugerenciasCliente && (
-                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', maxHeight: '320px', overflowY: 'auto', zIndex: 100, marginTop: '4px', boxShadow: '0 6px 16px rgba(0,0,0,0.5)' }}>
-                  {proveedoresFiltradosBuscador.length === 0 ? (
-                    <div style={{ padding: '14px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>{textoBuscarCliente.trim() ? 'Sin coincidencias' : 'No hay proveedores cargados'}</div>
-                  ) : (
-                    <>
-                      <div style={{ padding: '6px 12px', fontSize: '0.7rem', color: '#8b949e', borderBottom: '1px solid #21262d', backgroundColor: '#161b22' }}>{proveedoresFiltradosBuscador.length} {proveedoresFiltradosBuscador.length === 1 ? 'proveedor' : 'proveedores'}{textoBuscarCliente.trim() ? '' : ' (primeros 30)'}</div>
-                      {proveedoresFiltradosBuscador.map((cli: any) => (
-                        <div key={cli.id} onMouseDown={(e) => e.preventDefault()} onClick={() => { setFiltroProveedor(cli.id); setTextoBuscarCliente(''); setMostrarSugerenciasCliente(false); }}
-                          style={{ padding: '10px 12px', cursor: 'pointer', color: '#c9d1d9', fontSize: '0.88rem', borderBottom: '1px solid #21262d', transition: 'background-color 0.15s' }}
-                          onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = '#21262d'} onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                          <div style={{ fontWeight: '500' }}>{cli.nombre || cli.id}</div>
-                          {cli.rfc && <div style={{ color: '#8b949e', fontSize: '0.75rem', marginTop: '2px' }}>{cli.rfc}</div>}
-                        </div>
-                      ))}
-                    </>
-                  )}
-                </div>
-              )}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
+            <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '20px' }}>
+              <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '6px' }}>Facturas Listadas</span>
+              <span style={{ color: '#58a6ff', fontSize: '2rem', fontWeight: 'bold' }}>{resumenHistorial.cuenta}</span>
             </div>
+            <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '20px' }}>
+              <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '6px' }}>Ops. Facturadas</span>
+              <span style={{ color: '#3fb950', fontSize: '2rem', fontWeight: 'bold' }}>{resumenHistorial.totalOps}</span>
+            </div>
+            <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '20px' }}>
+              <span style={{ display: 'block', color: '#D84315', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '6px' }}>Total Facturado (USD)</span>
+              <span style={{ color: '#10b981', fontSize: '1.5rem', fontWeight: 'bold' }}>{formatoMoneda(resumenHistorial.totalUSD)}</span>
+            </div>
+            <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '20px' }}>
+              <span style={{ display: 'block', color: '#D84315', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '6px' }}>Total Facturado (MXN)</span>
+              <span style={{ color: '#3b82f6', fontSize: '1.5rem', fontWeight: 'bold' }}>{formatoMoneda(resumenHistorial.totalMXN)}</span>
+            </div>
+          </div>
 
-            {/* (5) Orden del historial */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '6px 8px', flexWrap: 'wrap' }}>
+            <span style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', paddingLeft: '4px' }}>Status:</span>
+            <div style={{ display: 'flex', border: '1px solid #30363d', borderRadius: '6px', overflow: 'hidden', flexWrap: 'wrap' }}>
+              {statusBotones.map(s => {
+                const col = s === 'Todos' ? '#58a6ff' : colorStatusFactura(s);
+                return (
+                  <button key={s} onClick={() => setFiltroStatusFactura(s)} style={segBtnStyle(filtroStatusFactura === s, col)}>
+                    {s} ({conteoStatus[s] ?? 0})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '8px', padding: '12px 16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ color: '#8b949e', fontSize: '0.8rem' }}>Ordenar:</span>
               <select value={ordenFac.campo} onChange={(e) => setOrdenFac(prev => ({ ...prev, campo: e.target.value }))} style={selectOrdenStyle}>
+                <option value="statusFactura">Status</option>
                 <option value="invoice">Factura</option>
                 <option value="fecha">Fecha</option>
                 <option value="proveedor">Proveedor</option>
@@ -1031,20 +3068,16 @@ export const FacturacionProveedoresDashboard = () => {
               <button onClick={() => setOrdenFac(prev => ({ ...prev, dir: prev.dir === 'asc' ? 'desc' : 'asc' }))} style={btnDirStyle} title="Cambiar dirección">
                 {ordenFac.dir === 'asc' ? '▲ Asc' : '▼ Desc'}
               </button>
+              <span style={{ color: '#8b949e', fontSize: '0.8rem' }}>{historialOrdenado.length} {historialOrdenado.length === 1 ? 'factura' : 'facturas'}</span>
             </div>
-
-            {/* (1) Configurar columnas */}
-            <button title="Configurar columnas" onClick={() => setModalColumnas(true)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent', border: '1px solid #8b949e', color: '#c9d1d9', padding: '10px 14px', borderRadius: '6px', cursor: 'pointer', height: 'fit-content', gap: '6px' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-            </button>
-
-            {/* (1) Exportar Excel (columnas configurables) */}
-            <button title="Exportar a Excel" onClick={exportarCSV} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent', border: '1px solid #8b949e', color: '#c9d1d9', padding: '10px 14px', borderRadius: '6px', cursor: 'pointer', height: 'fit-content' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            </button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button title="Verificar consistencia de la facturación" onClick={() => setModalDiagnostico(true)} style={{ ...btnDirStyle, borderColor: '#58a6ff', color: '#58a6ff' }}>🩺 Verificar</button>
+              <button title="Configurar columnas" onClick={() => setModalColumnas(true)} style={btnDirStyle}>⚙ Configurar Columnas</button>
+              <button title="Exportar a Excel" onClick={exportarCSV} style={{ ...btnDirStyle, backgroundColor: '#1a7f37', color: '#fff', border: 'none' }}>⬇ Exportar Excel</button>
+            </div>
           </div>
 
-          <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 280px)', backgroundColor: '#161b22' }}>
+          <div className="table-container" style={{ border: '1px solid #30363d', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 380px)', backgroundColor: '#161b22' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead style={{ backgroundColor: '#1f2937', color: '#8b949e', fontSize: '0.8rem', position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr>
@@ -1057,12 +3090,14 @@ export const FacturacionProveedoresDashboard = () => {
                 </tr>
               </thead>
               <tbody>
-                {!filtroProveedor ? (
-                  <tr><td colSpan={columnasFactura.filter(c => c.visible).length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>Selecciona un proveedor para ver su historial de facturas.</td></tr>
-                ) : cargandoFacturas ? (
-                  <tr><td colSpan={columnasFactura.filter(c => c.visible).length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>Cargando últimas 100 facturas del proveedor...</td></tr>
+                {cargandoFacturas ? (
+                  <tr><td colSpan={columnasFactura.filter(c => c.visible).length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>Cargando facturas...</td></tr>
                 ) : registrosVisibles.length === 0 ? (
-                  <tr><td colSpan={columnasFactura.filter(c => c.visible).length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>Este proveedor no tiene facturas registradas.</td></tr>
+                  <tr><td colSpan={columnasFactura.filter(c => c.visible).length + 1} style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+                    {facturasGlobales.length === 0
+                      ? 'Aún no hay facturas registradas.'
+                      : `No se encontraron facturas con los filtros actuales${textoBuscarFactura ? ` (búsqueda: "${textoBuscarFactura}")` : ''}${filtroStatusFactura !== 'Todos' ? ` (status: "${filtroStatusFactura}")` : ''}${filtroProveedor ? ' para el proveedor seleccionado' : ''}.`}
+                  </td></tr>
                 ) : (
                   registrosVisibles.map(f => (
                     <tr key={f.id} style={{ borderBottom: '1px solid #21262d' }}>
@@ -1070,6 +3105,12 @@ export const FacturacionProveedoresDashboard = () => {
                         <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                           <button title="Ver Ficha" onClick={() => setFacturaViendo(f)} style={{ background: 'transparent', border: '1px solid #3b82f6', borderRadius: '4px', color: '#3b82f6', cursor: 'pointer', padding: '6px', display: 'flex' }}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                          </button>
+                          <button title="Generar el Rate de Proveedor en PDF (relación de referencias de esta factura)" disabled={cargandoRate} onClick={() => abrirRate(f)} style={{ background: 'transparent', border: '1px solid #10b981', borderRadius: '4px', color: '#10b981', cursor: cargandoRate ? 'not-allowed' : 'pointer', padding: '6px', display: 'flex', opacity: cargandoRate ? 0.6 : 1 }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+                          </button>
+                          <button title="Editar Factura" onClick={(e) => abrirEditarFactura(e, f)} style={{ background: 'transparent', border: '1px solid #f59e0b', borderRadius: '4px', color: '#f59e0b', cursor: 'pointer', padding: '6px', display: 'flex' }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                           </button>
                           <button title="Eliminar Factura" onClick={(e) => handleEliminarFactura(e, f)} style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px', display: 'flex' }}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
@@ -1095,7 +3136,6 @@ export const FacturacionProveedoresDashboard = () => {
         </div>
       )}
 
-      {/* ════════════════════ (1) MODAL CONFIGURAR COLUMNAS ════════════════════ */}
       {modalColumnas && (
         <div className="modal-overlay" style={{ zIndex: 2000, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)', backgroundColor: 'rgba(0,0,0,0.7)' }}>
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '720px', maxWidth: '95%', padding: '24px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
@@ -1103,7 +3143,7 @@ export const FacturacionProveedoresDashboard = () => {
               <h3 style={{ margin: 0, color: '#f0f6fc' }}>Configurar Columnas</h3>
               <button onClick={() => setModalColumnas(false)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
-            <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '20px' }}>Arrastra para reordenar. Desmarca las que quieras ocultar de la tabla y del Excel.</p>
+            <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '20px' }}>Arrastra para reordenar. Desmarca las que quieras ocultar de la tabla y del Excel. <b style={{ color: '#58a6ff' }}>Esta configuración se guarda y se aplica para todos los usuarios.</b></p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: '60vh', overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
               {columnasFactura.map((col, idx) => (
                 <li key={col.id} draggable onDragStart={(e) => handleDragStart(e, idx)} onDragEnter={() => handleDragEnter(idx)} onDragEnd={() => setDraggedColIndex(null)} onDragOver={(e) => e.preventDefault()}
@@ -1115,39 +3155,118 @@ export const FacturacionProveedoresDashboard = () => {
               ))}
             </ul>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px', borderTop: '1px solid #30363d', paddingTop: '16px' }}>
-              <button onClick={() => setModalColumnas(false)} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 32px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Aplicar Cambios</button>
+              <button onClick={guardarConfigColumnasHistorial} disabled={guardandoCols} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 32px', borderRadius: '6px', cursor: guardandoCols ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: guardandoCols ? 0.7 : 1 }}>{guardandoCols ? 'Guardando...' : 'Guardar para todos'}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ═══════════ MODAL CONFIGURAR COLUMNAS (Asignar Operaciones) ═══════════ */}
       {modalColumnasOps && (
         <div className="modal-overlay" style={{ zIndex: 2000, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)', backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '720px', maxWidth: '95%', padding: '24px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px', borderBottom: '1px solid #30363d', paddingBottom: '12px' }}>
-              <h3 style={{ margin: 0, color: '#f0f6fc' }}>Configurar Columnas</h3>
-              <button onClick={() => setModalColumnasOps(false)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '860px', maxWidth: '95%', padding: '24px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #30363d', paddingBottom: '12px' }}>
+              <div>
+                <h3 style={{ margin: 0, color: '#f0f6fc' }}>Configurar Columnas</h3>
+                <span style={{ color: '#8b949e', fontSize: '0.78rem' }}>
+                  {columnasOps.filter(c => c.visible).length} visibles de {columnasOps.length} disponibles
+                </span>
+              </div>
+              <button onClick={() => { setModalColumnasOps(false); setBusquedaColOps(''); }} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
-            <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '20px' }}>Arrastra para reordenar. Desmarca las que quieras ocultar de la tabla y del Excel.</p>
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: '60vh', overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-              {columnasOps.map((col, idx) => (
-                <li key={col.id} draggable onDragStart={(e) => handleDragStartOps(e, idx)} onDragEnter={() => handleDragEnterOps(idx)} onDragEnd={() => setDraggedColOpsIndex(null)} onDragOver={(e) => e.preventDefault()}
-                  style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', backgroundColor: draggedColOpsIndex === idx ? '#1f2937' : '#161b22', border: '1px solid #30363d', borderRadius: '6px', cursor: 'grab' }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b949e" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-                  <input type="checkbox" checked={col.visible} onChange={() => toggleColumnaVisibleOps(idx)} style={{ cursor: 'pointer', transform: 'scale(1.2)' }} />
-                  <span style={{ color: col.visible ? '#c9d1d9' : '#484f58', fontSize: '0.85rem', fontWeight: col.visible ? 'bold' : 'normal' }}>{col.label}</span>
-                </li>
-              ))}
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: '220px', position: 'relative' }}>
+                <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#58a6ff' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" placeholder="Buscar columna por nombre o grupo..." value={busquedaColOps} onChange={(e) => setBusquedaColOps(e.target.value)}
+                  style={{ width: '100%', padding: '8px 8px 8px 32px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.88rem', boxSizing: 'border-box' }} />
+              </div>
+              <button onClick={() => setColumnasOps(cs => cs.map(c => ({ ...c, visible: false })))} style={{ ...btnDirStyle, color: '#8b949e' }} title="Ocultar todas">Ocultar todas</button>
+              <button onClick={() => setColumnasOps(cs => cs.map(c => ({ ...c, visible: true })))} style={{ ...btnDirStyle, color: '#10b981' }} title="Mostrar todas">Mostrar todas</button>
+              <button onClick={() => setColumnasOps(COLUMNAS_OPS_BASE.map(c => ({ ...c })))} style={{ ...btnDirStyle, color: '#D84315' }} title="Restablecer al estado por defecto">Restablecer</button>
+            </div>
+            <p style={{ color: '#8b949e', fontSize: '0.8rem', marginBottom: '14px' }}>
+              Arrastra para reordenar. Marca las que quieras ver en la tabla y en el Excel. El grupo entre paréntesis indica de qué pestaña del detalle viene el campo. <b style={{ color: '#58a6ff' }}>Esta configuración se guarda y se aplica para todos los usuarios.</b>
+            </p>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: '60vh', overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+              {columnasOps
+                .map((col, idx) => ({ col, idx }))
+                .filter(({ col }) => {
+                  if (!busquedaColOps.trim()) return true;
+                  const q = busquedaColOps.trim().toLowerCase();
+                  return String(col.label || '').toLowerCase().includes(q) || String(col.grupo || '').toLowerCase().includes(q) || String(col.id || '').toLowerCase().includes(q);
+                })
+                .map(({ col, idx }) => (
+                  <li key={col.id} draggable={!busquedaColOps} onDragStart={(e) => handleDragStartOps(e, idx)} onDragEnter={() => handleDragEnterOps(idx)} onDragEnd={() => setDraggedColOpsIndex(null)} onDragOver={(e) => e.preventDefault()}
+                    style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', backgroundColor: draggedColOpsIndex === idx ? '#1f2937' : '#161b22', border: '1px solid #30363d', borderRadius: '6px', cursor: busquedaColOps ? 'default' : 'grab' }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b949e" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                    <input type="checkbox" checked={col.visible} onChange={() => toggleColumnaVisibleOps(idx)} style={{ cursor: 'pointer', transform: 'scale(1.2)' }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }}>
+                      <span style={{ color: col.visible ? '#c9d1d9' : '#484f58', fontSize: '0.85rem', fontWeight: col.visible ? 'bold' : 'normal', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
+                      {col.grupo && (
+                        <span style={{ color: '#6e7681', fontSize: '0.7rem' }}>({col.grupo})</span>
+                      )}
+                    </div>
+                  </li>
+                ))}
             </ul>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px', borderTop: '1px solid #30363d', paddingTop: '16px' }}>
-              <button onClick={() => setModalColumnasOps(false)} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 32px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Aplicar Cambios</button>
+              <button onClick={guardarConfigColumnasOps} disabled={guardandoCols} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 32px', borderRadius: '6px', cursor: guardandoCols ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: guardandoCols ? 0.7 : 1 }}>{guardandoCols ? 'Guardando...' : 'Guardar para todos'}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ════════════════════ MODAL GENERAR FACTURA ════════════════════ */}
+      {modalCostoAdic && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1700, padding: '20px', backdropFilter: 'blur(6px)' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '520px', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', borderBottom: '1px solid #30363d', paddingBottom: '16px' }}>
+              <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.2rem' }}>Costo adicional al proveedor</h2>
+              <button onClick={() => setModalCostoAdic(false)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <p style={{ color: '#8b949e', fontSize: '0.82rem', marginBottom: '16px' }}>
+              Se suma a los <b style={{ color: '#c9d1d9' }}>Cargos Adicionales</b> del proveedor en la operación elegida y se recalcula su subtotal/conversión. Usa un monto negativo para aplicar un descuento.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>OPERACIÓN</label>
+                <select value={costoAdicOpId} onChange={e => setCostoAdicOpId(e.target.value)}
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: '6px', boxSizing: 'border-box' }}>
+                  <option value="">-- Selecciona una operación --</option>
+                  {Array.from(new Set([costoAdicOpId, ...seleccionadas].filter(Boolean))).map(id => {
+                    const o = operacionesGlobales.find(x => x.id === id);
+                    const ref = o?.numReferencia || o?.referencia || o?.ref || String(id).substring(0, 6);
+                    return <option key={id} value={id}>{ref}</option>;
+                  })}
+                </select>
+              </div>
+              {(() => {
+                const o = operacionesGlobales.find(x => x.id === costoAdicOpId);
+                if (!o) return null;
+                const mm = obtenerMontoOperacion(o);
+                return (
+                  <div style={{ backgroundColor: '#010409', border: '1px dashed #30363d', borderRadius: '8px', padding: '12px 14px', fontSize: '0.82rem', color: '#8b949e' }}>
+                    Cargos actuales: <b style={{ color: '#c9d1d9' }}>{formatoMoneda(o.cargosAdicionalesProv)}</b> · Conversión actual: <b style={{ color: '#3fb950' }}>{formatoMoneda(mm.conv)}</b>
+                  </div>
+                );
+              })()}
+              <div>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>MONTO ADICIONAL (en la moneda del convenio)</label>
+                <input type="number" step="any" value={costoAdicMonto} onChange={e => setCostoAdicMonto(e.target.value)} placeholder="Ej. 150.00"
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#D84315', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '1.05rem', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>CONCEPTO (opcional)</label>
+                <input type="text" value={costoAdicConcepto} onChange={e => setCostoAdicConcepto(e.target.value)} placeholder="Ej. Estadía, maniobras, demora..."
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '18px', marginTop: '20px' }}>
+              <button onClick={() => setModalCostoAdic(false)} disabled={guardandoCostoAdic} style={{ padding: '8px 24px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={handleGuardarCostoAdic} disabled={guardandoCostoAdic || !costoAdicOpId} style={{ padding: '8px 24px', backgroundColor: '#238636', color: '#fff', border: 'none', borderRadius: '6px', cursor: (guardandoCostoAdic || !costoAdicOpId) ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: (guardandoCostoAdic || !costoAdicOpId) ? 0.7 : 1 }}>{guardandoCostoAdic ? 'Guardando...' : 'Agregar costo'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {modalAbierto && (
         <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px', backdropFilter: 'blur(8px)' }}>
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto', padding: '24px' }}>
@@ -1158,7 +3277,7 @@ export const FacturacionProveedoresDashboard = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#010409', padding: '16px', borderRadius: '8px', border: '1px dashed #30363d', marginBottom: '24px' }}>
               <div>
                 <span style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Proveedor</span>
-                <span style={{ color: '#f0f6fc', fontSize: '1.1rem', fontWeight: 'bold' }}>{getNombreEmpresa(filtroProveedor)}</span>
+                <span style={{ color: '#f0f6fc', fontSize: '1.1rem', fontWeight: 'bold' }}>{nombreProveedorFactura || getNombreEmpresa(proveedorFacturaId)}</span>
               </div>
               <div style={{ textAlign: 'center', borderLeft: '1px solid #30363d', borderRight: '1px solid #30363d', padding: '0 20px' }}>
                 <span style={{ display: 'block', color: '#8b949e', fontSize: '0.75rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '4px' }}>Moneda Proveedor</span>
@@ -1171,6 +3290,13 @@ export const FacturacionProveedoresDashboard = () => {
             </div>
             <form onSubmit={handleGuardarFactura}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>STATUS DE LA FACTURA</label>
+                  <select value={statusFacturaForm} onChange={e => setStatusFacturaForm(e.target.value)}
+                    style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: colorStatusFactura(statusFacturaForm), border: `1px solid ${colorStatusFactura(statusFacturaForm)}`, borderRadius: '4px', fontWeight: 'bold' }}>
+                    {STATUS_FACTURA_OPCIONES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
                 <div style={{ gridColumn: 'span 2' }}>
                   <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>N° DE FACTURA DEL PROVEEDOR</label>
                   <input type="text" required placeholder="Ej. A-1234" value={invoiceForm} onChange={e => setInvoiceForm(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#D84315', border: '1px solid #30363d', borderRadius: '4px', fontWeight: 'bold', fontSize: '1.1rem' }} />
@@ -1193,7 +3319,40 @@ export const FacturacionProveedoresDashboard = () => {
         </div>
       )}
 
-      {/* ════════════════════ MODAL FICHA DE FACTURA ════════════════════ */}
+      {facturaClienteViendo && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1850, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', backdropFilter: 'blur(4px)' }} onClick={() => setFacturaClienteViendo(null)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '460px', overflow: 'hidden' }}>
+            <div style={{ padding: '18px 22px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.1rem' }}>Factura Roelca (Cliente)</h3>
+              <button onClick={() => setFacturaClienteViendo(null)} style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.3rem', lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ padding: '22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ backgroundColor: 'rgba(63,185,80,0.1)', border: '1px solid rgba(63,185,80,0.4)', borderRadius: '8px', padding: '12px 14px', color: '#3fb950', fontSize: '0.85rem' }}>
+                Esta operación <strong>ya fue facturada al cliente</strong> en <strong>Facturación de Clientes</strong>.
+              </div>
+              {[
+                ['Operación', facturaClienteViendo.opRef],
+                ['# Factura Cliente', facturaClienteViendo.invoice || '-'],
+                ['Cliente', facturaClienteViendo.clienteNombre || '-'],
+                ['Fecha de la factura', facturaClienteViendo.fecha ? formatearFechaSpanish(facturaClienteViendo.fecha) : '-'],
+                ['Status', facturaClienteViendo.statusFactura || '-'],
+                ['Moneda', facturaClienteViendo.moneda || '-'],
+                ['Total facturado', formatoMoneda(facturaClienteViendo.total)],
+              ].map(([label, val]: any, i: number) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '12px', borderBottom: '1px solid #21262d', paddingBottom: '8px' }}>
+                  <span style={{ color: '#8b949e', fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</span>
+                  <span style={{ color: '#f0f6fc', fontSize: '0.92rem', fontWeight: 600, textAlign: 'right' }}>{val}</span>
+                </div>
+              ))}
+              <div style={{ color: '#6e7681', fontSize: '0.72rem' }}>Ref. factura (id): {facturaClienteViendo.facturaId}</div>
+            </div>
+            <div style={{ padding: '14px 22px', borderTop: '1px solid #30363d', textAlign: 'right' }}>
+              <button onClick={() => setFacturaClienteViendo(null)} style={{ padding: '9px 22px', backgroundColor: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {facturaViendo && (
         <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1500, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', backdropFilter: 'blur(4px)' }}>
           <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '800px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
@@ -1202,6 +3361,18 @@ export const FacturacionProveedoresDashboard = () => {
               <button onClick={() => setFacturaViendo(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
             <div style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: '#161b22', padding: '12px 16px', borderRadius: '8px', border: '1px solid #30363d', marginBottom: '20px', flexWrap: 'wrap' }}>
+                <span style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Status de la factura</span>
+                <span style={{ padding: '4px 12px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold', color: colorStatusFactura(facturaViendo.statusFactura), border: `1px solid ${colorStatusFactura(facturaViendo.statusFactura)}`, backgroundColor: `${colorStatusFactura(facturaViendo.statusFactura)}1a`, whiteSpace: 'nowrap' }}>{facturaViendo.statusFactura || 'Facturado'}</span>
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: '#8b949e', fontSize: '0.78rem' }}>Cambiar a:</span>
+                  <select value={facturaViendo.statusFactura || 'Facturado'} onChange={(e) => handleCambiarStatusFactura(facturaViendo, e.target.value)}
+                    style={{ backgroundColor: '#0d1117', border: `1px solid ${colorStatusFactura(facturaViendo.statusFactura)}`, color: colorStatusFactura(facturaViendo.statusFactura), borderRadius: '6px', padding: '6px 10px', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer' }}>
+                    {STATUS_FACTURA_OPCIONES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '24px' }}>
                 <div style={{ gridColumn: 'span 3', display: 'flex', justifyContent: 'space-between', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', alignItems: 'center' }}>
                   <div>
@@ -1210,7 +3381,7 @@ export const FacturacionProveedoresDashboard = () => {
                   </div>
                   <div style={{ textAlign: 'center' }}>
                     <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Moneda</span>
-                    <span style={{ color: '#10b981', fontSize: '1.1rem', fontWeight: 'bold' }}>{facturaViendo.monedaProveedor || 'N/A'}</span>
+                    <span style={{ color: '#10b981', fontSize: '1.1rem', fontWeight: 'bold' }}>{monedaFacturaMostrar(facturaViendo)}</span>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Fecha de Facturación</span>
@@ -1219,7 +3390,7 @@ export const FacturacionProveedoresDashboard = () => {
                 </div>
                 <div>
                   <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Proveedor Facturado</span>
-                  <span style={{ color: '#f0f6fc', fontSize: '1.1rem', fontWeight: 'bold' }}>{facturaViendo.proveedorNombre || '-'}</span>
+                  <span style={{ color: '#f0f6fc', fontSize: '1.1rem', fontWeight: 'bold' }}>{facturaViendo.proveedorNombre || getNombreEmpresa(facturaViendo.proveedorId) || '-'}</span>
                 </div>
                 <div>
                   <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Referencia</span>
@@ -1232,18 +3403,25 @@ export const FacturacionProveedoresDashboard = () => {
 
                 <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '0' }} /></div>
 
-                {/* ✅ (4) Referencias clicables -> abren el detalle de la operación */}
                 <div style={{ gridColumn: 'span 3', marginTop: '8px' }}>
-                  <span style={{ display: 'block', color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '12px' }}>
-                    Referencias / Operaciones Facturadas ({facturaViendo.operacionesGuardadas?.length || 0}) — haz clic para ver el detalle
-                  </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                    <span style={{ color: '#8b949e', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                      Referencias / Operaciones Facturadas ({facturaViendo.operacionesGuardadas?.length || 0}) — haz clic para ver el detalle
+                    </span>
+                    <button
+                      onClick={() => { setAgregarRefFactura(facturaViendo); setBusquedaRefPendiente(''); if (operacionesGlobales.length === 0) descargarOpsCompletadas(); }}
+                      title="Agregar una operación pendiente (sin facturar) a esta factura"
+                      style={{ backgroundColor: 'transparent', border: '1px solid #10b981', color: '#10b981', borderRadius: '6px', padding: '7px 14px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                      ＋ Agregar referencia
+                    </button>
+                  </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
                     {facturaViendo.operacionesGuardadas?.map((op: any) => (
                       <button key={op.id} onClick={() => verDetalleOperacion(op.id)} title="Ver detalle de la operación"
                         style={{ backgroundColor: '#21262d', border: '1px solid #58a6ff', padding: '8px 14px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '4px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s' }}
                         onMouseEnter={(e: any) => { e.currentTarget.style.backgroundColor = '#1f2d44'; e.currentTarget.style.borderColor = '#79b8ff'; }}
                         onMouseLeave={(e: any) => { e.currentTarget.style.backgroundColor = '#21262d'; e.currentTarget.style.borderColor = '#58a6ff'; }}>
-                        <span style={{ color: '#58a6ff', fontSize: '0.9rem', fontFamily: 'monospace', fontWeight: 'bold' }}>{op.ref}</span>
+                        <span style={{ color: '#58a6ff', fontSize: '0.9rem', fontFamily: 'monospace', fontWeight: 'bold' }}>{refDeOp(op)}</span>
                         <span style={{ color: '#3fb950', fontSize: '0.85rem' }}>{formatoMoneda(op.monto)}</span>
                       </button>
                     )) || <span style={{ color: '#8b949e' }}>Sin detalle de operaciones.</span>}
@@ -1252,13 +3430,252 @@ export const FacturacionProveedoresDashboard = () => {
               </div>
             </div>
             <div style={{ padding: '16px 24px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #30363d', backgroundColor: '#161b22' }}>
+              <button onClick={() => abrirRate(facturaViendo)} disabled={cargandoRate}
+                title="Generar el Rate de Proveedor en PDF (relación de referencias de esta factura)"
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#10b981', color: '#0d1117', border: 'none', borderRadius: '6px', padding: '8px 16px', cursor: cargandoRate ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.85rem', opacity: cargandoRate ? 0.7 : 1, marginRight: '8px' }}>
+                📄 {cargandoRate ? 'Preparando...' : 'Rate Proveedor'}
+              </button>
+              <button onClick={() => abrirRemision(facturaViendo)} disabled={cargandoRemision}
+                title="Generar la Remisión en PDF de esta factura"
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#fb923c', color: '#0d1117', border: 'none', borderRadius: '6px', padding: '8px 16px', cursor: cargandoRemision ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.85rem', opacity: cargandoRemision ? 0.7 : 1, marginRight: '8px' }}>
+                🧾 {cargandoRemision ? 'Preparando...' : 'Remisión'}
+              </button>
               <button onClick={() => setFacturaViendo(null)} className="btn btn-outline" style={{ padding: '8px 24px', borderRadius: '6px', color: '#c9d1d9', border: '1px solid #30363d', background: 'transparent', cursor: 'pointer' }}>Cerrar Ficha</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ════════════════════ (4) MODAL DETALLE DE OPERACIÓN ════════════════════ */}
+      {modalDiagnostico && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1900, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', backdropFilter: 'blur(4px)' }} onClick={() => setModalDiagnostico(false)}>
+          <div style={{ width: '720px', maxWidth: '100%', maxHeight: '92vh', overflowY: 'auto', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ padding: '20px 24px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: '#f0f6fc', fontSize: '1.15rem', fontWeight: 'bold' }}>🩺 Verificación de Facturación (Proveedores)</span>
+              <button onClick={() => setModalDiagnostico(false)} style={{ background: 'transparent', border: 'none', color: '#8b949e', fontSize: '1.4rem', cursor: 'pointer' }}>×</button>
+            </div>
+            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+              {cargandoFacturas && (
+                <div style={{ color: '#f59e0b', fontSize: '0.85rem' }}>Cargando facturas… los números pueden cambiar al terminar.</div>
+              )}
+              <div>
+                <div style={{ color: '#8b949e', fontSize: '0.78rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '10px' }}>Resumen global (facturas cargadas)</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                  {[
+                    { lbl: 'Facturas', val: diagnostico.totalFacturas, col: '#58a6ff' },
+                    { lbl: 'Ops facturadas (únicas)', val: diagnostico.opsFacturadasUnicas, col: '#3fb950' },
+                    { lbl: 'Invoices duplicados', val: diagnostico.invoicesDuplicados, col: diagnostico.invoicesDuplicados > 0 ? '#f85149' : '#3fb950' },
+                  ].map((c, i) => (
+                    <div key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '8px', padding: '14px' }}>
+                      <div style={{ color: '#8b949e', fontSize: '0.72rem', textTransform: 'uppercase' }}>{c.lbl}</div>
+                      <div style={{ color: c.col, fontSize: '1.5rem', fontWeight: 'bold' }}>{c.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: '#8b949e', fontSize: '0.78rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '10px' }}>Operaciones cargadas (pestaña “Asignar Operaciones”)</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                  {[
+                    { lbl: (fechaDesdeOps || fechaHastaOps) ? 'Completadas en rango' : 'Completadas (todas)', val: diagnostico.rangoTotal, col: '#c9d1d9' },
+                    { lbl: 'Ya facturadas', val: diagnostico.rangoFacturadas, col: '#3fb950' },
+                    { lbl: 'Por facturar', val: diagnostico.rangoPorFacturar, col: '#f59e0b' },
+                  ].map((c, i) => (
+                    <div key={i} style={{ backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '8px', padding: '14px' }}>
+                      <div style={{ color: '#8b949e', fontSize: '0.72rem', textTransform: 'uppercase' }}>{c.lbl}</div>
+                      <div style={{ color: c.col, fontSize: '1.5rem', fontWeight: 'bold' }}>{c.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ color: '#8b949e', fontSize: '0.78rem', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '10px' }}>Posibles pendientes a revisar</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.88rem' }}>
+                  {[
+                    { ok: diagnostico.huerfanas === 0, txt: diagnostico.huerfanas === 0 ? 'No hay operaciones marcadas como facturadas sin factura asociada.' : `${diagnostico.huerfanas} operación(es) marcadas como facturadas pero sin factura que las referencie.` },
+                    { ok: diagnostico.invoicesDuplicados === 0, txt: diagnostico.invoicesDuplicados === 0 ? 'No hay invoices duplicados (mismo # y proveedor).' : `${diagnostico.invoicesDuplicados} invoice(s) aparecen duplicados (mismo # y proveedor).` },
+                    { ok: diagnostico.sinMoneda === 0, txt: diagnostico.sinMoneda === 0 ? 'Todas las facturas resuelven su moneda.' : `${diagnostico.sinMoneda} factura(s) sin moneda (ni propia ni por proveedor).`, warn: true },
+                    { ok: diagnostico.sinFecha === 0, txt: diagnostico.sinFecha === 0 ? 'Todas las facturas tienen fecha.' : `${diagnostico.sinFecha} factura(s) sin fecha de facturación.`, warn: true },
+                    { ok: diagnostico.sinTotal === 0, txt: diagnostico.sinTotal === 0 ? 'Todas las facturas tienen total.' : `${diagnostico.sinTotal} factura(s) con total en $0 (datos importados sin monto).`, warn: true },
+                    { ok: !diagnostico.topeFacturas, txt: diagnostico.topeFacturas ? `Se alcanzó el tope de ${LIMITE_FACTURAS_TODAS} facturas cargadas: podría faltar información.` : `Se cargaron todas las facturas (sin alcanzar el tope de ${LIMITE_FACTURAS_TODAS}).` },
+                  ].map((r, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', color: r.ok ? '#3fb950' : (r.warn ? '#f59e0b' : '#f85149') }}>
+                      <span style={{ flexShrink: 0 }}>{r.ok ? '✓' : (r.warn ? '⚠' : '✕')}</span>
+                      <span style={{ color: '#c9d1d9' }}>{r.txt}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ backgroundColor: 'rgba(88,166,255,0.06)', border: '1px solid rgba(88,166,255,0.3)', borderRadius: '8px', padding: '12px 14px', color: '#8b949e', fontSize: '0.8rem' }}>
+                Nota: el total en $0 y la fecha vacía en facturas importadas vienen del sistema anterior. La moneda se completa con la del proveedor cuando la factura no la trae. El # de referencia (TR) y el # de remolque se resuelven al ver cada página del historial.
+              </div>
+            </div>
+            <div style={{ padding: '16px 24px', borderTop: '1px solid #30363d', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button onClick={() => { try { sessionStorage.removeItem(SS_FACTURAS); } catch {} ; setFacturasGlobales([]); setOpInfoMap({}); setModalDiagnostico(false); }}
+                style={{ ...btnDirStyle }} title="Volver a leer todas las facturas desde la base de datos">↻ Recargar facturas</button>
+              <button onClick={() => setModalDiagnostico(false)} style={{ padding: '8px 24px', borderRadius: '6px', backgroundColor: '#D84315', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {gestionOp && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1750, padding: '20px', backdropFilter: 'blur(6px)' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '520px', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '18px', borderBottom: '1px solid #30363d', paddingBottom: '14px' }}>
+              <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.15rem' }}>Gestionar operación facturada</h2>
+              <button onClick={() => setGestionOp(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <div style={{ backgroundColor: '#010409', border: '1px dashed #30363d', borderRadius: '8px', padding: '12px 14px', marginBottom: '18px', fontSize: '0.85rem', color: '#8b949e' }}>
+              Operación: <b style={{ color: '#58a6ff', fontFamily: 'monospace' }}>{gestionOp.numReferencia || gestionOp.referencia || gestionOp.ref || String(gestionOp.id).substring(0, 6)}</b><br />
+              Factura actual: <b style={{ color: '#D84315', fontFamily: 'monospace' }}>{invoiceDeOp(gestionOp) || '—'}</b>
+            </div>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '6px' }}>NUEVO NÚMERO DE FACTURA</label>
+              <input type="text" value={gestionInvoice} onChange={e => setGestionInvoice(e.target.value)} placeholder="Ej. A-1234"
+                style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#D84315', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '1.05rem', boxSizing: 'border-box' }} />
+              <p style={{ color: '#6e7681', fontSize: '0.75rem', marginTop: '8px' }}>
+                La operación se moverá a la factura con ese número (del mismo proveedor). Si no existe, se crea; si la factura original queda sin operaciones, se elimina. El Historial se actualiza solo.
+              </p>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '16px', flexWrap: 'wrap' }}>
+              <button onClick={() => quitarOpDeFactura(gestionOp)} disabled={guardandoGestionOp}
+                style={{ padding: '8px 18px', backgroundColor: 'transparent', color: '#ef4444', border: '1px solid #ef4444', borderRadius: '6px', cursor: guardandoGestionOp ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: guardandoGestionOp ? 0.7 : 1 }}>
+                ✕ Quitar de la factura
+              </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={() => setGestionOp(null)} disabled={guardandoGestionOp} style={{ padding: '8px 18px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer' }}>Cancelar</button>
+                <button onClick={() => editarInvoiceDeOp(gestionOp, gestionInvoice)} disabled={guardandoGestionOp || !gestionInvoice.trim()}
+                  style={{ padding: '8px 18px', backgroundColor: '#238636', color: '#fff', border: 'none', borderRadius: '6px', cursor: (guardandoGestionOp || !gestionInvoice.trim()) ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: (guardandoGestionOp || !gestionInvoice.trim()) ? 0.7 : 1 }}>
+                  {guardandoGestionOp ? 'Guardando...' : 'Cambiar número'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {agregarRefFactura && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1750, padding: '20px', backdropFilter: 'blur(6px)' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '640px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '14px', borderBottom: '1px solid #30363d', paddingBottom: '14px' }}>
+              <div>
+                <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.15rem' }}>Agregar referencia a la factura</h2>
+                <span style={{ color: '#8b949e', fontSize: '0.8rem' }}>
+                  Factura <b style={{ color: '#D84315', fontFamily: 'monospace' }}>{agregarRefFactura.invoice}</b> · {agregarRefFactura.proveedorNombre || getNombreEmpresa(agregarRefFactura.proveedorId) || '-'}
+                </span>
+              </div>
+              <button onClick={() => setAgregarRefFactura(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <div style={{ position: 'relative', marginBottom: '12px' }}>
+              <svg style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#10b981' }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input type="text" autoFocus placeholder="Buscar operación pendiente por referencia o # remolque..." value={busquedaRefPendiente} onChange={e => setBusquedaRefPendiente(e.target.value)}
+                style={{ width: '100%', padding: '10px 10px 10px 32px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.9rem', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #30363d', borderRadius: '8px', backgroundColor: '#010409' }}>
+              {cargandoOperaciones ? (
+                <div style={{ padding: '30px', textAlign: 'center', color: '#8b949e' }}>Cargando operaciones pendientes...</div>
+              ) : operacionesGlobales.length === 0 ? (
+                <div style={{ padding: '24px', textAlign: 'center', color: '#8b949e' }}>
+                  No hay operaciones cargadas.
+                  <div style={{ marginTop: '12px' }}>
+                    <button onClick={() => descargarOpsCompletadas(true)} style={{ ...btnDirStyle, color: '#58a6ff', margin: '0 auto' }}>↻ Cargar operaciones</button>
+                  </div>
+                </div>
+              ) : candidatosPendientes.length === 0 ? (
+                <div style={{ padding: '24px', textAlign: 'center', color: '#8b949e' }}>
+                  No se encontraron operaciones pendientes{agregarRefFactura.proveedorId ? ' de este proveedor' : ''}{busquedaRefPendiente.trim() ? ` para "${busquedaRefPendiente}"` : ''}.
+                </div>
+              ) : (
+                candidatosPendientes.map((op: any) => {
+                  const mm = obtenerMontoOperacion(op);
+                  return (
+                    <div key={op.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '10px 14px', borderBottom: '1px solid #21262d' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ color: '#58a6ff', fontFamily: 'monospace', fontWeight: 'bold', fontSize: '0.9rem' }}>{op.numReferencia || op.referencia || op.ref || String(op.id).substring(0, 6)}</div>
+                        <div style={{ color: '#8b949e', fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {formatearFechaSpanish(op.fechaServicio || op.createdAt)} · {txt(op.remolqueNombre, op.remolquePlaca, op.numeroRemolque)} · {formatoMoneda(mm.conv)}
+                        </div>
+                      </div>
+                      <button onClick={() => agregarOpAFactura(agregarRefFactura, op)} disabled={agregandoRef}
+                        style={{ flexShrink: 0, backgroundColor: '#238636', color: '#fff', border: 'none', borderRadius: '6px', padding: '7px 14px', cursor: agregandoRef ? 'not-allowed' : 'pointer', fontSize: '0.8rem', fontWeight: 'bold', opacity: agregandoRef ? 0.7 : 1 }}>
+                        ＋ Agregar
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #30363d', paddingTop: '14px', marginTop: '14px' }}>
+              <span style={{ color: '#6e7681', fontSize: '0.78rem' }}>Solo se muestran operaciones <b style={{ color: '#8b949e' }}>sin facturar</b>{agregarRefFactura.proveedorId ? ' del mismo proveedor' : ''} (máx. 50).</span>
+              <button onClick={() => setAgregarRefFactura(null)} style={{ padding: '8px 20px', backgroundColor: '#D84315', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Listo</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {facturaEditando && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1600, padding: '20px', backdropFilter: 'blur(6px)' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', borderBottom: '1px solid #30363d', paddingBottom: '16px' }}>
+              <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.2rem' }}>Editar Factura</h2>
+              <button onClick={() => setFacturaEditando(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+
+            <div style={{ backgroundColor: '#010409', border: '1px dashed #30363d', borderRadius: '8px', padding: '12px 14px', marginBottom: '18px', fontSize: '0.82rem', color: '#8b949e' }}>
+              Proveedor: <b style={{ color: '#c9d1d9' }}>{facturaEditando.proveedorNombre || getNombreEmpresa(facturaEditando.proveedorId) || '-'}</b>
+              {Array.isArray(facturaEditando.__groupIds) && facturaEditando.__groupIds.length > 1 && (
+                <span> · <b style={{ color: '#f59e0b' }}>{facturaEditando.__groupIds.length} documentos agrupados</b> (el total se asigna al primero)</span>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>STATUS DE LA FACTURA</label>
+                <select value={editStatus} onChange={e => setEditStatus(e.target.value)}
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: colorStatusFactura(editStatus), border: `1px solid ${colorStatusFactura(editStatus)}`, borderRadius: '6px', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                  {STATUS_FACTURA_OPCIONES.map(s => <option key={s} value={s}>{s}</option>)}
+                  {!STATUS_FACTURA_OPCIONES.includes(editStatus) && editStatus && <option value={editStatus}>{editStatus}</option>}
+                </select>
+              </div>
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>NÚMERO DE FACTURA</label>
+                <input type="text" value={editInvoice} onChange={e => setEditInvoice(e.target.value)} placeholder="Ej. A-1234"
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#D84315', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', fontSize: '1.05rem', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>FECHA DE FACTURACIÓN</label>
+                <input type="date" value={editFecha} onChange={e => setEditFecha(e.target.value)}
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', boxSizing: 'border-box', colorScheme: 'dark' }} />
+              </div>
+              <div>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>MONEDA</label>
+                <select value={editMoneda} onChange={e => setEditMoneda(e.target.value)}
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#10b981', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', boxSizing: 'border-box' }}>
+                  <option value="">(Sin definir / del proveedor)</option>
+                  <option value="USD">USD</option>
+                  <option value="MXN">MXN</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>TOTAL FACTURADO</label>
+                <input type="number" step="any" value={editTotal} onChange={e => setEditTotal(e.target.value)} placeholder="0.00"
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#3fb950', border: '1px solid #30363d', borderRadius: '6px', fontWeight: 'bold', boxSizing: 'border-box' }} />
+              </div>
+              <div>
+                <label style={{ color: '#8b949e', fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>REFERENCIA (Opcional)</label>
+                <input type="text" value={editCcp} onChange={e => setEditCcp(e.target.value)} placeholder="Referencia interna..."
+                  style={{ width: '100%', padding: '10px', backgroundColor: '#161b22', color: '#fff', border: '1px solid #30363d', borderRadius: '6px', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '18px' }}>
+              <button onClick={() => setFacturaEditando(null)} disabled={guardandoEdit} style={{ padding: '8px 24px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={handleGuardarEdicionFactura} disabled={guardandoEdit} style={{ padding: '8px 24px', backgroundColor: '#238636', color: '#fff', border: 'none', borderRadius: '6px', cursor: guardandoEdit ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: guardandoEdit ? 0.7 : 1 }}>{guardandoEdit ? 'Guardando...' : 'Guardar cambios'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {(operacionDetalle || cargandoDetalle) && (
         <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1800, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', backdropFilter: 'blur(4px)' }}>
           <div className="form-card detail-card" style={{ width: '1100px', maxWidth: '100%', maxHeight: '94vh', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', display: 'flex', flexDirection: 'column' }}>
@@ -1272,7 +3689,7 @@ export const FacturacionProveedoresDashboard = () => {
                       <h2 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.25rem', fontWeight: 600, letterSpacing: '-0.5px' }}>Detalle de Operación</h2>
                       <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <span style={{ color: '#D84315', fontWeight: 'bold', fontSize: '1.1rem', letterSpacing: '0.5px' }}>{det.ref || det.id?.substring(0, 6)}</span>
-                        <span style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', padding: '4px 12px', borderRadius: '12px', fontSize: '0.85rem', border: '1px solid rgba(16, 185, 129, 0.3)', fontWeight: 'bold' }}>{det.statusNombre || det.status || '-'}</span>
+                        <span style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', padding: '4px 12px', borderRadius: '12px', fontSize: '0.85rem', border: '1px solid rgba(16, 185, 129, 0.3)', fontWeight: 'bold' }}>{txt(det.statusNombre, det.status)}</span>
                       </div>
                     </div>
                     <button onClick={() => setOperacionDetalle(null)} style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%' }} onMouseEnter={(e) => e.currentTarget.style.color = '#f0f6fc'} onMouseLeave={(e) => e.currentTarget.style.color = '#8b949e'}>
@@ -1291,33 +3708,31 @@ export const FacturacionProveedoresDashboard = () => {
                 </div>
 
                 <div className="detail-content" style={{ padding: '18px 32px', overflowY: 'auto', flex: 1 }}>
-                  {/* GENERAL */}
                   {pestañaDetalleActiva === 'general' && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Operación</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.tipoOperacionNombre || det.tipoOperacionId || '-'}</span></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Servicio / Status</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.fechaServicio)} <span style={{ color: '#30363d', margin: '0 8px' }}>|</span> <span style={{ color: '#10b981', fontWeight: 'bold' }}>{det.statusNombre || det.status || '-'}</span></span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Operación</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.tipoOperacionNombre, det.tipoOperacionId)}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Servicio / Status</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.fechaServicio)} <span style={{ color: '#30363d', margin: '0 8px' }}>|</span> <span style={{ color: '#10b981', fontWeight: 'bold' }}>{txt(det.statusNombre, det.status)}</span></span></div>
                       {evalIsFletes ? (
                         <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Cita</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{formatearFechaHora(det.fechaCita)}</span></div>
                       ) : (<div></div>)}
                       <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '8px 0' }} /></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Paga)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.clienteNombre || det.nombreCliente || det.clientePaga)}</span></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio (Tarifa)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.convenioNombre || det.convenio || '-'}</span></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># de Remolque</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.remolqueNombre || det.remolquePlaca || det.numeroRemolque || '-'}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Paga)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.clienteNombre, det.nombreCliente, det.clientePaga)}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio (Tarifa)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.convenioNombre, det.convenio)}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># de Remolque</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.remolqueNombre, det.remolquePlaca, det.numeroRemolque)}</span></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Ref Cliente</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.refCliente)}</span></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Origen</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.origenNombre || det.origen || '-'}</span></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Destino</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.destinoNombre || det.destino || '-'}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Origen</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.origenNombre, det.origen)}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Destino</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.destinoNombre, det.destino)}</span></div>
                       <div style={{ gridColumn: '1 / -1', marginTop: '8px' }}><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Observaciones Ejecutivo</span><div style={{ color: '#c9d1d9', fontWeight: 500, backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', minHeight: '60px' }}>{mostrarDato(det.observacionesEjecutivo)}</div></div>
                     </div>
                   )}
 
-                  {/* PEDIMENTO */}
                   {pestañaDetalleActiva === 'pedimento' && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
-                      <div style={{ gridColumn: 'span 2' }}><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Mercancía)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.clienteMercanciaNombre || det.clienteMercancia || '-'}</span></div>
+                      <div style={{ gridColumn: 'span 2' }}><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Mercancía)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.clienteMercanciaNombre, det.clienteMercancia)}</span></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Descripción de la Mercancía</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.descripcionMercancia)}</span></div>
                       <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '8px 0' }} /></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cantidad (Enteros)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.cantidad)}</span></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Embalaje</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.embalajeNombre || det.embalaje || '-'}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Embalaje</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.embalajeNombre, det.embalaje)}</span></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Peso (Kg)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.pesoKg)}</span></div>
                       <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '8px 0' }} /></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># DODA</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.numDoda)}</span></div>
@@ -1325,28 +3740,26 @@ export const FacturacionProveedoresDashboard = () => {
                     </div>
                   )}
 
-                  {/* MANIFIESTOS */}
                   {pestañaDetalleActiva === 'manifiestos' && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># de Entry's</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.numeroEntrys)}</span></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cantidad de Entry's</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.cantEntrys)}</span></div>
                       <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '8px 0' }} /></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># Manifiesto</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarDato(det.numManifiesto)}</span></div>
-                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Servicios</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.provServiciosNombre || det.provServicios || '-'}</span></div>
+                      <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Servicios</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.provServiciosNombre, det.provServicios)}</span></div>
                       <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Costo Manifiesto ($)</span><span style={{ color: '#c9d1d9', fontWeight: 'bold', fontSize: '1.05rem' }}>{formatoMoneda(det.montoManifiesto)}</span></div>
                     </div>
                   )}
 
-                  {/* UNIDAD */}
                   {pestañaDetalleActiva === 'unidad' && (
                     <div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
-                        <div style={{ gridColumn: 'span 3' }}><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Transporte</span><span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '1.1rem' }}>{det.proveedorUnidadNombre || det.proveedorUnidad || '-'}</span></div>
+                        <div style={{ gridColumn: 'span 3' }}><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Transporte</span><span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '1.1rem' }}>{txt(det.proveedorUnidadNombre, det.proveedorUnidad)}</span></div>
                       </div>
                       <div style={{ backgroundColor: '#161b22', padding: '20px', borderRadius: '12px', border: '1px solid #30363d', marginBottom: '24px' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '16px' }}>
                           <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Facturado En:</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.monedaUnidadNombre || mostrarMoneda(det.facturadoEnUnidad)}</span></div>
-                          <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio Proveedor</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.convenioProveedorNombre || det.convenioProveedor || '-'}</span></div>
+                          <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio Proveedor</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.convenioProveedorNombre, det.convenioProveedor)}</span></div>
                           <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Moneda del Convenio (Base)</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{mostrarMoneda(det.monedaConvenioProv)}</span></div>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', paddingTop: '16px', borderTop: '1px solid #30363d', marginBottom: '16px' }}>
@@ -1364,8 +3777,8 @@ export const FacturacionProveedoresDashboard = () => {
                       {showDetailInternalFleet && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
                           <div style={{ gridColumn: 'span 3' }}><h4 style={{ color: '#f0f6fc', margin: '0 0 8px 0' }}>Flota Operativa (Roelca)</h4></div>
-                          <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Unidad Asignada</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.unidadNombre || det.unidad || '-'}</span></div>
-                          <div style={{ gridColumn: 'span 2' }}><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Operador Asignado</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{det.operadorNombre || det.operador || '-'}</span></div>
+                          <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Unidad Asignada</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.unidadNombre, det.unidad)}</span></div>
+                          <div style={{ gridColumn: 'span 2' }}><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Operador Asignado</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{txt(det.operadorNombre, det.operador)}</span></div>
                           <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '0' }} /></div>
                           <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Sueldo del Operador</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{formatoMoneda(det.sueldoOperador)}</span></div>
                           <div><span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Sueldo Extra</span><span style={{ color: '#c9d1d9', fontWeight: 500, fontSize: '1.05rem' }}>{formatoMoneda(det.sueldoExtra)}</span></div>
@@ -1399,7 +3812,6 @@ export const FacturacionProveedoresDashboard = () => {
                     </div>
                   )}
 
-                  {/* COBRAR */}
                   {pestañaDetalleActiva === 'cobrar' && (
                     <div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
@@ -1435,6 +3847,345 @@ export const FacturacionProveedoresDashboard = () => {
           </div>
         </div>
       )}
+
+      {/* ════════════════ MODAL ENCABEZADO (EMISOR) DE REMISIONES ════════════════ */}
+      {modalEmisores && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1900, padding: '20px', backdropFilter: 'blur(6px)' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '760px', maxHeight: '92vh', overflowY: 'auto', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', borderBottom: '1px solid #30363d', paddingBottom: '14px' }}>
+              <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.2rem' }}>Encabezado de las Remisiones</h2>
+              <button onClick={() => setModalEmisores(false)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <p style={{ color: '#8b949e', fontSize: '0.82rem', margin: '12px 0 20px' }}>
+              El nombre y los datos que van en la parte superior de la remisión dependen de la <b style={{ color: '#c9d1d9' }}>moneda</b> de la factura:
+              las remisiones en <b style={{ color: '#3b82f6' }}>PESOS (MXN)</b> salen a nombre de <b style={{ color: '#c9d1d9' }}>Rolando</b> y las de
+              <b style={{ color: '#10b981' }}> DÓLARES (USD)</b> a nombre de <b style={{ color: '#c9d1d9' }}>Camila</b>. Esta configuración se guarda para todos los usuarios.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+              {/* MXN → Rolando */}
+              <div style={{ border: '1px solid #3b82f6', borderRadius: '10px', padding: '16px', backgroundColor: 'rgba(59,130,246,0.05)' }}>
+                <div style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: '0.9rem', marginBottom: '12px' }}>PESOS (MXN) · Rolando</div>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={rLabelStyle}>NOMBRE (aparece arriba)</label>
+                  <input type="text" value={emisorMXN.facturaNombre} onChange={e => setEmisorMXN({ ...emisorMXN, facturaNombre: e.target.value })} style={rInputStyle} />
+                </div>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={rLabelStyle}>DIRECCIÓN</label>
+                  <input type="text" value={emisorMXN.direccion} onChange={e => setEmisorMXN({ ...emisorMXN, direccion: e.target.value })} style={rInputStyle} />
+                </div>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={rLabelStyle}>CIUDAD / ESTADO / TEL.</label>
+                  <input type="text" value={emisorMXN.ciudadEstado} onChange={e => setEmisorMXN({ ...emisorMXN, ciudadEstado: e.target.value })} style={rInputStyle} />
+                </div>
+                <div>
+                  <label style={rLabelStyle}>EMAIL</label>
+                  <input type="text" value={emisorMXN.email} onChange={e => setEmisorMXN({ ...emisorMXN, email: e.target.value })} style={rInputStyle} />
+                </div>
+              </div>
+
+              {/* USD → Camila */}
+              <div style={{ border: '1px solid #10b981', borderRadius: '10px', padding: '16px', backgroundColor: 'rgba(16,185,129,0.05)' }}>
+                <div style={{ color: '#10b981', fontWeight: 'bold', fontSize: '0.9rem', marginBottom: '12px' }}>DÓLARES (USD) · Camila</div>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={rLabelStyle}>NOMBRE (aparece arriba)</label>
+                  <input type="text" value={emisorUSD.facturaNombre} onChange={e => setEmisorUSD({ ...emisorUSD, facturaNombre: e.target.value })} style={rInputStyle} />
+                </div>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={rLabelStyle}>DIRECCIÓN</label>
+                  <input type="text" value={emisorUSD.direccion} onChange={e => setEmisorUSD({ ...emisorUSD, direccion: e.target.value })} style={rInputStyle} />
+                </div>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={rLabelStyle}>CIUDAD / ESTADO / TEL.</label>
+                  <input type="text" value={emisorUSD.ciudadEstado} onChange={e => setEmisorUSD({ ...emisorUSD, ciudadEstado: e.target.value })} style={rInputStyle} />
+                </div>
+                <div>
+                  <label style={rLabelStyle}>EMAIL</label>
+                  <input type="text" value={emisorUSD.email} onChange={e => setEmisorUSD({ ...emisorUSD, email: e.target.value })} style={rInputStyle} />
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '18px', marginTop: '20px' }}>
+              <button onClick={() => setModalEmisores(false)} disabled={guardandoEmisores} style={{ padding: '8px 24px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={guardarEmisores} disabled={guardandoEmisores} style={{ padding: '8px 24px', backgroundColor: '#D84315', color: '#fff', border: 'none', borderRadius: '6px', cursor: guardandoEmisores ? 'not-allowed' : 'pointer', fontWeight: 'bold', opacity: guardandoEmisores ? 0.7 : 1 }}>{guardandoEmisores ? 'Guardando...' : 'Guardar para todos'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════════════ MODAL VISTA PREVIA DE REMISIÓN (editable) ════════════════ */}
+      {remisionPreview && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1850, padding: '20px', backdropFilter: 'blur(6px)', overflowY: 'auto' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '100%', maxWidth: '960px', margin: 'auto', padding: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', borderBottom: '1px solid #30363d', paddingBottom: '14px' }}>
+              <div>
+                <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.2rem' }}>Remisión · vista previa</h2>
+                <span style={{ color: remisionPreview.esUSD ? '#10b981' : '#3b82f6', fontSize: '0.82rem', fontWeight: 'bold' }}>
+                  {remisionPreview.esUSD ? 'DÓLARES (USD) → Camila' : 'PESOS (MXN) → Rolando'}
+                </span>
+              </div>
+              <button onClick={() => setRemisionPreview(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <p style={{ color: '#8b949e', fontSize: '0.8rem', margin: '10px 0 18px' }}>
+              Revisa y edita lo que necesites; luego pulsa <b style={{ color: '#fb923c' }}>Generar PDF</b>. Se descargará la remisión en PDF con el logo.
+            </p>
+
+            {/* Emisor (encabezado) */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#fb923c', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>ENCABEZADO (EMISOR)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+                <div><label style={rLabelStyle}>NOMBRE</label><input type="text" value={remisionPreview.emisorNombre} onChange={e => setRP('emisorNombre', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>EMAIL</label><input type="text" value={remisionPreview.emisorEmail} onChange={e => setRP('emisorEmail', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>DIRECCIÓN</label><input type="text" value={remisionPreview.emisorDireccion} onChange={e => setRP('emisorDireccion', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>CIUDAD / ESTADO / TEL.</label><input type="text" value={remisionPreview.emisorCiudadEstado} onChange={e => setRP('emisorCiudadEstado', e.target.value)} style={rInputStyle} /></div>
+              </div>
+            </div>
+
+            {/* Datos de la remisión y del proveedor */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#58a6ff', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>DATOS DE LA REMISIÓN Y DEL PROVEEDOR</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+                <div><label style={rLabelStyle}># REMISIÓN</label><input type="text" value={remisionPreview.numero} onChange={e => setRP('numero', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>FECHA</label><input type="text" value={remisionPreview.fecha} onChange={e => setRP('fecha', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>DENOMINACIÓN</label><input type="text" value={remisionPreview.moneda} onChange={e => setRP('moneda', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>DÍAS CRÉDITO</label><input type="text" value={remisionPreview.diasCredito} onChange={e => setRP('diasCredito', e.target.value)} style={rInputStyle} /></div>
+                <div style={{ gridColumn: 'span 2' }}><label style={rLabelStyle}>PROVEEDOR</label><input type="text" value={remisionPreview.clienteNombre} onChange={e => setRP('clienteNombre', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>NUM. EXT/INT</label><input type="text" value={remisionPreview.numExtInt} onChange={e => setRP('numExtInt', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>COLONIA</label><input type="text" value={remisionPreview.colonia} onChange={e => setRP('colonia', e.target.value)} style={rInputStyle} /></div>
+                <div style={{ gridColumn: 'span 3' }}><label style={rLabelStyle}>DIRECCIÓN</label><input type="text" value={remisionPreview.direccion} onChange={e => setRP('direccion', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>CIUDAD</label><input type="text" value={remisionPreview.ciudad} onChange={e => setRP('ciudad', e.target.value)} style={rInputStyle} /></div>
+              </div>
+            </div>
+
+            {/* Renglones de servicios */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#3fb950', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>SERVICIOS ({(remisionPreview.filas || []).length})</div>
+              <div style={{ overflowX: 'auto', border: '1px solid #30363d', borderRadius: '8px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '820px' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#161b22', color: '#8b949e', fontSize: '0.72rem' }}>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>REF#</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>FECHA</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>EQ.</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>ORIGEN</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>DESTINO</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>DESCRIPCIÓN</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>IMPORTE</th>
+                      <th style={{ padding: '8px' }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(remisionPreview.filas || []).map((r: any, idx: number) => (
+                      <tr key={idx} style={{ borderTop: '1px solid #21262d' }}>
+                        <td style={{ padding: '4px' }}><input value={r.ref} onChange={e => setRPFila(idx, 'ref', e.target.value)} style={{ ...rCellStyle, minWidth: '90px' }} /></td>
+                        <td style={{ padding: '4px' }}><input value={r.fecha} onChange={e => setRPFila(idx, 'fecha', e.target.value)} style={{ ...rCellStyle, minWidth: '90px' }} /></td>
+                        <td style={{ padding: '4px' }}><input value={r.equipo} onChange={e => setRPFila(idx, 'equipo', e.target.value)} style={{ ...rCellStyle, minWidth: '60px' }} /></td>
+                        <td style={{ padding: '4px' }}><input value={r.origen} onChange={e => setRPFila(idx, 'origen', e.target.value)} style={{ ...rCellStyle, minWidth: '110px' }} /></td>
+                        <td style={{ padding: '4px' }}><input value={r.destino} onChange={e => setRPFila(idx, 'destino', e.target.value)} style={{ ...rCellStyle, minWidth: '110px' }} /></td>
+                        <td style={{ padding: '4px' }}><input value={r.descripcion} onChange={e => setRPFila(idx, 'descripcion', e.target.value)} style={{ ...rCellStyle, minWidth: '160px' }} /></td>
+                        <td style={{ padding: '4px' }}><input type="number" step="any" value={r.importe} onChange={e => setRPFila(idx, 'importe', e.target.value)} style={{ ...rCellStyle, minWidth: '90px', textAlign: 'right', color: '#3fb950' }} /></td>
+                        <td style={{ padding: '4px', textAlign: 'center' }}>
+                          <button onClick={() => quitarFilaRemision(idx)} title="Quitar renglón" style={{ background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '4px', cursor: 'pointer', padding: '4px 8px', fontSize: '0.75rem' }}>✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                    {(remisionPreview.filas || []).length === 0 && (
+                      <tr><td colSpan={8} style={{ padding: '16px', textAlign: 'center', color: '#8b949e', fontSize: '0.82rem' }}>Sin renglones.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Pie: tipo de cambio, total, observaciones */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
+              <div><label style={rLabelStyle}>FECHA TIPO DE CAMBIO (DOF)</label><input type="text" value={remisionPreview.fechaTipoCambio} onChange={e => setRP('fechaTipoCambio', e.target.value)} placeholder="Ej. 24/06/2026" style={rInputStyle} /></div>
+              <div><label style={rLabelStyle}>TIPO DE CAMBIO</label><input type="text" value={remisionPreview.tipoCambio} onChange={e => setRP('tipoCambio', e.target.value)} placeholder="Ej. 17.5505" style={rInputStyle} /></div>
+              <div><label style={rLabelStyle}>TOTAL</label><input type="number" step="any" value={remisionPreview.total} onChange={e => setRP('total', e.target.value)} style={{ ...rInputStyle, color: '#3fb950', fontWeight: 'bold' }} /></div>
+              <div style={{ gridColumn: 'span 3' }}><label style={rLabelStyle}>OBSERVACIONES</label><input type="text" value={remisionPreview.observaciones} onChange={e => setRP('observaciones', e.target.value)} style={rInputStyle} /></div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '18px' }}>
+              <button onClick={() => setRemisionPreview(null)} style={{ padding: '8px 24px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer' }}>Cerrar</button>
+              <button onClick={generarPDFDeRemision} style={{ padding: '8px 24px', backgroundColor: '#fb923c', color: '#0d1117', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>🧾 Generar PDF</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ (CONFIRMACIÓN DE TARIFA) Vista previa editable → PDF */}
+      {confirmacionPreview && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 2600, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', backdropFilter: 'blur(4px)' }} onClick={() => setConfirmacionPreview(null)}>
+          <div style={{ width: '860px', maxWidth: '100%', maxHeight: '92vh', overflowY: 'auto', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #30363d', paddingBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.2rem' }}>📋 Confirmación de Tarifa a Proveedor</h2>
+                <span style={{ color: '#fb923c', fontSize: '0.82rem', fontWeight: 'bold', fontFamily: 'monospace' }}>{confirmacionPreview.referencia}</span>
+              </div>
+              <button onClick={() => setConfirmacionPreview(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <p style={{ color: '#8b949e', fontSize: '0.8rem', margin: '10px 0 18px' }}>
+              Revisa y completa lo que falte (los campos vacíos salen en blanco en el documento); luego pulsa <b style={{ color: '#fb923c' }}>Generar PDF</b>. Se descargará la confirmación con el logo.
+            </p>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#fb923c', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>DATOS GENERALES</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                <div><label style={rLabelStyle}>COORDINADOR</label><input type="text" value={confirmacionPreview.coordinador} onChange={e => setCT('coordinador', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>No. REFERENCIA</label><input type="text" value={confirmacionPreview.referencia} onChange={e => setCT('referencia', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>FECHA DEL SERVICIO</label><input type="text" value={confirmacionPreview.fechaServicio} onChange={e => setCT('fechaServicio', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>PROVEEDOR</label><input type="text" value={confirmacionPreview.proveedor} onChange={e => setCT('proveedor', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>TIPO DE OPER. (TARIFARIO)</label><input type="text" value={confirmacionPreview.tipoOperacion} onChange={e => setCT('tipoOperacion', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>IMPO / EXPO / MOV</label><input type="text" value={confirmacionPreview.impoExpoMov} onChange={e => setCT('impoExpoMov', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>TIPO DE CAMBIO DOF $</label><input type="text" value={confirmacionPreview.tipoCambio} onChange={e => setCTMonto('tipoCambio', e.target.value)} style={rInputStyle} /></div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#58a6ff', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>UNIDAD / EQUIPO</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                <div><label style={rLabelStyle}>REMOLQUE</label><input type="text" value={confirmacionPreview.remolque} onChange={e => setCT('remolque', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>TIPO DE UNIDAD</label><input type="text" value={confirmacionPreview.tipoUnidad} onChange={e => setCT('tipoUnidad', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>PLACAS REMOLQUE</label><input type="text" value={confirmacionPreview.placasRemolque} onChange={e => setCT('placasRemolque', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>UNIDAD</label><input type="text" value={confirmacionPreview.unidad} onChange={e => setCT('unidad', e.target.value)} style={rInputStyle} /></div>
+                <div style={{ gridColumn: 'span 2' }}><label style={rLabelStyle}>OPERADOR</label><input type="text" value={confirmacionPreview.operador} onChange={e => setCT('operador', e.target.value)} style={rInputStyle} /></div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#3fb950', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>RUTA</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+                <div><label style={rLabelStyle}>CLIENTE ORIGEN</label><input type="text" value={confirmacionPreview.clienteOrigen} onChange={e => setCT('clienteOrigen', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>CIUDAD ORIGEN (DIRECCIÓN)</label><input type="text" value={confirmacionPreview.ciudadOrigen} onChange={e => setCT('ciudadOrigen', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>CLIENTE DESTINO</label><input type="text" value={confirmacionPreview.clienteDestino} onChange={e => setCT('clienteDestino', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>CIUDAD DESTINO (DIRECCIÓN)</label><input type="text" value={confirmacionPreview.ciudadDestino} onChange={e => setCT('ciudadDestino', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>#REF CLIENTE</label><input type="text" value={confirmacionPreview.refCliente} onChange={e => setCT('refCliente', e.target.value)} style={rInputStyle} /></div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#f85149', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>MONTOS</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                <div><label style={rLabelStyle}>FACTURADO EN</label><input type="text" value={confirmacionPreview.facturadoEn} onChange={e => setCTMonto('facturadoEn', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>MONEDA DEL CONVENIO</label><input type="text" value={confirmacionPreview.monedaConvenio} onChange={e => setCTMonto('monedaConvenio', e.target.value)} style={rInputStyle} /></div>
+                {/* ✅ MONEDA DE PAGO: define en qué moneda se pagan los montos */}
+                <div>
+                  <label style={{ ...rLabelStyle, color: '#fb923c' }}>MONEDA DE PAGO</label>
+                  <select value={confirmacionPreview.monedaPago || ''} onChange={e => setCTMonto('monedaPago', e.target.value)} style={{ ...rInputStyle, cursor: 'pointer' }}>
+                    <option value="Pesos">Pesos</option>
+                    <option value="Dólares">Dólares</option>
+                  </select>
+                </div>
+                <div><label style={rLabelStyle}>CONVENIO PROV. $</label><input type="text" value={confirmacionPreview.convenioProv} onChange={e => setCTMonto('convenioProv', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>COSTOS ADIC. $</label><input type="text" value={confirmacionPreview.costosAdic} onChange={e => setCTMonto('costosAdic', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>SUBTOTAL PROV. $ {claveMoneda(confirmacionPreview.monedaConvenio) ? `(${claveMoneda(confirmacionPreview.monedaConvenio)})` : ''}</label><input type="text" value={confirmacionPreview.subtotalProv} onChange={e => setCT('subtotalProv', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={{ ...rLabelStyle, color: '#f85149' }}>TOTAL A PAGAR $ {claveMoneda(confirmacionPreview.monedaPago) ? `(${claveMoneda(confirmacionPreview.monedaPago)})` : ''}</label><input type="text" value={confirmacionPreview.totalAFacturar} onChange={e => setCT('totalAFacturar', e.target.value)} style={{ ...rInputStyle, color: '#f85149', fontWeight: 'bold' }} /></div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '18px' }}>
+              <button onClick={() => setConfirmacionPreview(null)} style={{ padding: '8px 24px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer' }}>Cerrar</button>
+              <button onClick={generarPDFDeConfirmacion} style={{ padding: '8px 24px', backgroundColor: '#fb923c', color: '#0d1117', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>📋 Generar PDF</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ (RATE DE PROVEEDOR) Vista previa editable → PDF */}
+      {ratePreview && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 2600, display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '20px', backdropFilter: 'blur(4px)' }} onClick={() => setRatePreview(null)}>
+          <div style={{ width: '1080px', maxWidth: '100%', maxHeight: '92vh', overflowY: 'auto', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #30363d', paddingBottom: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                <h2 style={{ color: '#f0f6fc', margin: 0, fontSize: '1.2rem' }}>📄 Rate de Proveedor</h2>
+                <span style={{ color: '#10b981', fontSize: '0.82rem', fontWeight: 'bold', fontFamily: 'monospace' }}>Factura {ratePreview.facturaProveedor}</span>
+              </div>
+              <button onClick={() => setRatePreview(null)} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <p style={{ color: '#8b949e', fontSize: '0.8rem', margin: '10px 0 18px' }}>
+              Relación de referencias amparadas con la factura del proveedor. La <b style={{ color: '#c9d1d9' }}>utilidad</b> se calcula sola (cobrado − proveedor). Pulsa <b style={{ color: '#10b981' }}>Generar PDF</b> para descargar en horizontal con el logo.
+            </p>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>DATOS DEL PROVEEDOR Y DE LA FACTURA</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+                <div><label style={rLabelStyle}>FACTURA DEL PROVEEDOR</label><input type="text" value={ratePreview.facturaProveedor} onChange={e => setRT('facturaProveedor', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>FECHA</label><input type="text" value={ratePreview.fecha} onChange={e => setRT('fecha', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>DÍAS DE CRÉDITO</label><input type="text" value={ratePreview.diasCredito} onChange={e => setRT('diasCredito', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>VENCIMIENTO</label><input type="text" value={ratePreview.vencimiento} onChange={e => setRT('vencimiento', e.target.value)} style={rInputStyle} /></div>
+                <div style={{ gridColumn: 'span 2' }}><label style={rLabelStyle}>PROVEEDOR</label><input type="text" value={ratePreview.proveedorNombre} onChange={e => setRT('proveedorNombre', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>MONEDA</label><input type="text" value={ratePreview.moneda} onChange={e => setRT('moneda', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>CIUDAD</label><input type="text" value={ratePreview.ciudad} onChange={e => setRT('ciudad', e.target.value)} style={rInputStyle} /></div>
+                <div style={{ gridColumn: 'span 3' }}><label style={rLabelStyle}>DIRECCIÓN</label><input type="text" value={ratePreview.direccion} onChange={e => setRT('direccion', e.target.value)} style={rInputStyle} /></div>
+                <div><label style={rLabelStyle}>COLONIA</label><input type="text" value={ratePreview.colonia} onChange={e => setRT('colonia', e.target.value)} style={rInputStyle} /></div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ color: '#58a6ff', fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '8px' }}>REFERENCIAS ({(ratePreview.filas || []).length})</div>
+              <div style={{ overflowX: 'auto', border: '1px solid #30363d', borderRadius: '8px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '960px' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#161b22', color: '#8b949e', fontSize: '0.72rem' }}>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>REF#</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>EQ.</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>ORIGEN</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>DESTINO</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>DESCRIPCIÓN</th>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>FACTURA ROELCA</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>COBRADO</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>PROVEEDOR</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>UTILIDAD</th>
+                      <th style={{ padding: '8px' }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(ratePreview.filas || []).map((r: any, idx: number) => {
+                      const utilidad = (Number(r.cobrado) || 0) - (Number(r.proveedor) || 0);
+                      return (
+                        <tr key={idx} style={{ borderTop: '1px solid #21262d' }}>
+                          <td style={{ padding: '4px' }}><input value={r.ref} onChange={e => setRTFila(idx, 'ref', e.target.value)} style={{ ...rCellStyle, minWidth: '110px' }} /></td>
+                          <td style={{ padding: '4px' }}><input value={r.equipo} onChange={e => setRTFila(idx, 'equipo', e.target.value)} style={{ ...rCellStyle, minWidth: '80px' }} /></td>
+                          <td style={{ padding: '4px' }}><input value={r.origen} onChange={e => setRTFila(idx, 'origen', e.target.value)} style={{ ...rCellStyle, minWidth: '110px' }} /></td>
+                          <td style={{ padding: '4px' }}><input value={r.destino} onChange={e => setRTFila(idx, 'destino', e.target.value)} style={{ ...rCellStyle, minWidth: '110px' }} /></td>
+                          <td style={{ padding: '4px' }}><input value={r.descripcion} onChange={e => setRTFila(idx, 'descripcion', e.target.value)} style={{ ...rCellStyle, minWidth: '140px' }} /></td>
+                          <td style={{ padding: '4px' }}><input value={r.facturaRoelca} onChange={e => setRTFila(idx, 'facturaRoelca', e.target.value)} style={{ ...rCellStyle, minWidth: '90px' }} /></td>
+                          <td style={{ padding: '4px' }}><input type="number" step="any" value={r.cobrado} onChange={e => setRTFila(idx, 'cobrado', e.target.value)} style={{ ...rCellStyle, minWidth: '90px', textAlign: 'right', color: '#3fb950' }} /></td>
+                          <td style={{ padding: '4px' }}><input type="number" step="any" value={r.proveedor} onChange={e => setRTFila(idx, 'proveedor', e.target.value)} style={{ ...rCellStyle, minWidth: '90px', textAlign: 'right', color: '#3b82f6' }} /></td>
+                          <td style={{ padding: '4px 10px', textAlign: 'right', color: utilidad < 0 ? '#f85149' : '#c9d1d9', fontSize: '0.82rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}>{formatoMoneda(utilidad)}</td>
+                          <td style={{ padding: '4px', textAlign: 'center' }}>
+                            <button onClick={() => quitarFilaRate(idx)} title="Quitar renglón" style={{ background: 'transparent', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '4px', cursor: 'pointer', padding: '4px 8px', fontSize: '0.75rem' }}>✕</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {(ratePreview.filas || []).length === 0 && (
+                      <tr><td colSpan={10} style={{ padding: '16px', textAlign: 'center', color: '#8b949e', fontSize: '0.82rem' }}>Sin renglones.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '24px', padding: '10px 12px', color: '#8b949e', fontSize: '0.82rem' }}>
+                <span>Cobrado: <b style={{ color: '#3fb950' }}>{formatoMoneda((ratePreview.filas || []).reduce((s: number, r: any) => s + (Number(r.cobrado) || 0), 0))}</b></span>
+                <span>Proveedor: <b style={{ color: '#3b82f6' }}>{formatoMoneda((ratePreview.filas || []).reduce((s: number, r: any) => s + (Number(r.proveedor) || 0), 0))}</b></span>
+                <span>Utilidad: <b style={{ color: '#f0f6fc' }}>{formatoMoneda((ratePreview.filas || []).reduce((s: number, r: any) => s + ((Number(r.cobrado) || 0) - (Number(r.proveedor) || 0)), 0))}</b></span>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={rLabelStyle}>OBSERVACIONES</label>
+              <input type="text" value={ratePreview.observaciones} onChange={e => setRT('observaciones', e.target.value)} style={rInputStyle} />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #30363d', paddingTop: '18px' }}>
+              <button onClick={() => setRatePreview(null)} style={{ padding: '8px 24px', background: 'none', color: '#8b949e', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer' }}>Cerrar</button>
+              <button onClick={generarPDFDeRate} style={{ padding: '8px 24px', backgroundColor: '#10b981', color: '#0d1117', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>📄 Generar PDF</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

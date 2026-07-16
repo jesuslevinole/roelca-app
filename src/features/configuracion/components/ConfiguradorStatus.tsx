@@ -52,6 +52,11 @@ const TABS_FORMULARIO: { id: TabType; label: string }[] = [
   { id: 'cobrar',     label: 'Por Cobrar' },
 ];
 
+// ✅ Opciones del selector "Carga" (Reglas de Status). DEBEN coincidir con el
+//    campo `estado_carga` del catálogo de Tarifas de Referencia.
+//    "Trompo" va como una opción MÁS dentro de esta misma lista.
+const OPCIONES_CARGA = ['Cargada', 'Vacía', 'N/A', 'Trompo'];
+
 /* ============================================================
    CATÁLOGO COMPLETO DE CAMPOS DE OPERACIÓN
    Todos los campos del FormularioOperacion, agrupados por sección.
@@ -1432,7 +1437,7 @@ const EditorFlujoAppSheet = ({
             label="Carga"
             value={carga}
             onChange={setCarga}
-            options={['Cargada', 'Vacía', 'N/A']}
+            options={OPCIONES_CARGA}
             placeholder="Selecciona…"
           />
         </div>

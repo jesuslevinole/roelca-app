@@ -1,55 +1,104 @@
 // src/features/operaciones/components/OperacionesDashboard.tsx
-//
-// ═══════════════════════════════════════════════════════════════════════
-// CAMBIOS APLICADOS EN ESTA VERSIÓN
-// ═══════════════════════════════════════════════════════════════════════
-//
-// A) STATUS COMO ID HEX:
-//    El campo `status` de horarios y operaciones ahora guarda el ID hex del
-//    documento de `catalogo_status_servicio` (no el texto). Para mostrar el
-//    nombre legible se usa el campo desnormalizado `statusNombre` o se
-//    resuelve contra el catálogo en tiempo de render.
-//    - mapaStatus + resolverStatus: helper bidireccional ID ↔ Nombre.
-//    - guardarHorario: convierte el nombre seleccionado a ID antes de persistir.
-//    - registrarStatusRapido: convierte cada paso de la cascada a ID.
-//    - useEffect cargarBotones: resuelve statusNombre si solo viene el ID
-//      (caso de horarios importados desde SQL externo).
-//
-// B) OPTIMIZACIONES DE LECTURAS:
-//    1. limit(150) → limit(50) con botón "Cargar más" (paginación real con startAfter).
-//    2. TTL de catálogos estables aumentado a 7 días (status, tipos, monedas,
-//       empresas, etc.). Cambian rara vez en producción, no tiene sentido
-//       re-leerlos cada 24h.
-//    3. Catálogos pesados (convenios_*, empleados) mantienen TTL de 24h.
-//    4. guardarHorario NO recarga todas las operaciones (actualiza estado local).
-//    5. Botón "Forzar recarga" pide confirmación para evitar uso accidental.
-//
-// C) VISIBILIDAD DE DOCUMENTOS POR TIPO DE OPERACIÓN:
-//    Cuando tipoOperacionId coincide con una clave de DOCS_POR_TIPO, en la
-//    sección "GENERAR DOCUMENTOS" se muestran SOLO los documentos de esa lista.
-//    Para cualquier otro tipo se conserva la lógica original (evalIsFletes, etc.).
-//
-// D) ✅ NUEVO: CONFIRMACIÓN AL CANCELAR (status de tipo "Cancelado"):
-//    Al presionar una píldora de "SIGUIENTE PASO" cuyo nombre contiene "cancel"
-//    (p.ej. "19. Cancelado"), se pide confirmación con window.confirm antes de
-//    aplicar el cambio. Evita cancelar una referencia por error. Las demás
-//    transiciones avanzan directo, sin preguntar. (Ver registrarStatusRapido.)
-// ═══════════════════════════════════════════════════════════════════════
-
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FormularioOperacion } from './FormularioOperacion';
-import { collection, doc, writeBatch, query, getDocs, onSnapshot, orderBy, limit, where, startAfter } from 'firebase/firestore';
+// ✅ NUEVO: Resúmenes Diarios (Transfer / Logística / Fletes) en PDF.
+import { ResumenDiarioOperaciones } from '../../reportes/components/ResumenDiarioOperaciones';
+import { collection, doc, writeBatch, query, getDocs, limit, where, startAfter } from 'firebase/firestore';
 import { db, eliminarRegistro } from '../../../config/firebase'; 
 import { obtenerBotonesHorarioDinamicos, resolverCascadaStatus } from '../config/statusRules';
-import { generarSolicitudRetiroPDF, generarInstruccionesServicioPDF, generarCheckListPDF, generarPruebaEntregaPDF, generarCartaInstruccionesPDF } from '../../../utils/pdfGenerator'; 
+import { generarSolicitudRetiroPDF, generarInstruccionesServicioPDF, generarCheckListPDF, generarPruebaEntregaPDF, generarCartaInstruccionesPDF, setLogoPdf } from '../../../utils/pdfGenerator'; 
 import * as XLSX from 'xlsx';
+import { useEmpresaConfig } from '../../configuracion/useEmpresaConfig';
 
 const ID_USD = '7dca62b3';
 const ID_MXN = 'f95d8894';
 
-// ✅ TAMAÑO DE PÁGINA: 50 operaciones por descarga (antes 150). El usuario puede
-// pulsar "Cargar más" si necesita ver operaciones más antiguas.
 const TAMANO_PAGINA = 50;
+
+const DIA_MS = 24 * 60 * 60 * 1000;
+const CATALOGOS_TTL_MS: Record<string, number> = {
+  statusServicio: 7 * DIA_MS, tiposOperacion: 7 * DIA_MS, embalajes: 7 * DIA_MS,
+  catalogoMoneda: 7 * DIA_MS, tarifas: 7 * DIA_MS,
+  empresas: DIA_MS, remolques: DIA_MS, unidades: DIA_MS, empleados: DIA_MS,
+  unidades_proveedor: DIA_MS, proveedores_unidad: DIA_MS,
+  conveniosProv: DIA_MS, catalogoConvProvDetalles: DIA_MS,
+  catalogoConvClientes: DIA_MS, catalogoConvDetalles: DIA_MS, catalogoTC: DIA_MS,
+};
+const TTL_DEFAULT = DIA_MS;
+// ✅ v2: se sube la versión de la clave para INVALIDAR cualquier caché vieja
+// (incluidas las que quedaron VACÍAS cuando un bloqueador cortó la llamada a
+// Firestore). Con v2, las cachés v1 dañadas se ignoran y todo se baja de nuevo.
+const claveCacheCatalogo = (alias: string) => `cat_v2__${alias}`;
+const leerCacheCatalogo = (alias: string): { ts: number; data: any[] } | null => {
+  try {
+    const raw = localStorage.getItem(claveCacheCatalogo(alias));
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    return obj && Array.isArray(obj.data) ? obj : null;
+  } catch { return null; }
+};
+// ✅ NO guardar un catálogo VACÍO. Si una descarga vuelve con 0 documentos
+// (p. ej. la bloqueó una extensión), NO se cachea, para que se reintente en la
+// siguiente carga en lugar de quedarse pegado mostrando IDs para siempre.
+const escribirCacheCatalogo = (alias: string, data: any[]) => {
+  try {
+    if (!Array.isArray(data) || data.length === 0) return;
+    localStorage.setItem(claveCacheCatalogo(alias), JSON.stringify({ ts: Date.now(), data }));
+  } catch {}
+};
+// ✅ Una caché VACÍA NO se considera vigente → fuerza re-descarga.
+const cacheVigente = (alias: string): boolean => {
+  const obj = leerCacheCatalogo(alias);
+  if (!obj || !Array.isArray(obj.data) || obj.data.length === 0) return false;
+  const ttl = CATALOGOS_TTL_MS[alias] ?? TTL_DEFAULT;
+  return (Date.now() - (obj.ts || 0)) < ttl;
+};
+
+// ✅ NUEVO: ordena nombres de status por su número inicial (1, 3, 4.1, 5, 6,
+//    8.1, 8.2, 9, 10.1, 10.3, 10.5, 11, 11.2, 12.1, 13.1, 16, 18, 19) y, dentro
+//    del mismo número, alfabéticamente. Los que no inician con número van al
+//    final, ordenados alfabéticamente. Todo en orden ascendente.
+const compararStatusPorNumero = (a: string, b: string): number => {
+  const parse = (s: string): number[] | null => {
+    const m = String(s ?? '').trim().match(/^(\d+(?:\.\d+)*)/);
+    return m ? m[1].split('.').map((n) => parseInt(n, 10)) : null;
+  };
+  const na = parse(a);
+  const nb = parse(b);
+  if (na && nb) {
+    const len = Math.max(na.length, nb.length);
+    for (let i = 0; i < len; i++) {
+      const da = na[i] ?? 0;
+      const db = nb[i] ?? 0;
+      if (da !== db) return da - db;
+    }
+    return String(a).localeCompare(String(b), 'es', { numeric: true, sensitivity: 'base' });
+  }
+  if (na && !nb) return -1;
+  if (!na && nb) return 1;
+  return String(a).localeCompare(String(b), 'es', { numeric: true, sensitivity: 'base' });
+};
+
+// ✅ NUEVO: quita las claves cuyo valor sea `undefined` de un objeto antes de
+//    escribirlo en Firestore. Firestore RECHAZA cualquier campo `undefined`
+//    (lanza "Unsupported field value: undefined") y eso aborta el batch.commit
+//    completo → es una de las causas típicas de "Se revirtió el cambio".
+const limpiarUndefined = (obj: Record<string, any>): Record<string, any> => {
+  const out: Record<string, any> = {};
+  Object.keys(obj).forEach((k) => { if (obj[k] !== undefined) out[k] = obj[k]; });
+  return out;
+};
+
+
+// ✅ Color por TIPO DE OPERACIÓN: Transfer → naranja, Logística → azul,
+//   Fletes → verde. Cualquier otro tipo conserva el color neutro.
+const colorTipoOperacion = (nombre: any): string => {
+  const n = String(nombre || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (n.includes('transfer')) return '#fb923c';
+  if (n.includes('logist')) return '#58a6ff';
+  if (n.includes('flete')) return '#3fb950';
+  return '#c9d1d9';
+};
 
 const COLUMNAS_BASE = [
   { id: 'ref', label: '# Referencia', visible: true },
@@ -57,9 +106,14 @@ const COLUMNAS_BASE = [
   { id: 'fechaCita', label: 'Fecha Cita', visible: false },
   { id: 'tipoOperacion', label: 'Tipo de Operación', visible: true },
   { id: 'status', label: 'Status', visible: true },
-  { id: 'trafico', label: 'Tráfico', visible: false },
-  { id: 'cliente', label: 'Cliente (Paga)', visible: true },
+  // ✅ # Remolque y Unidad al lado de Status (reubicadas a petición).
+  { id: 'remolque', label: '# Remolque', visible: true },
+  { id: 'unidad', label: 'Unidad Roelca', visible: true },
+  // ✅ Tráfico después de la Unidad (visible, a petición).
+  { id: 'trafico', label: 'Tráfico', visible: true },
+  // ✅ Convenio después de la Unidad (reubicado a petición).
   { id: 'convenioTarifa', label: 'Convenio Cliente (Tarifa)', visible: true },
+  { id: 'cliente', label: 'Cliente (Paga)', visible: true },
   { id: 'refCliente', label: 'Ref. Cliente', visible: false },
   { id: 'facturadoEnCobrar', label: 'Moneda Cobro', visible: false },
   { id: 'montoConvenioCliente', label: 'Monto Convenio (Cliente)', visible: false },
@@ -71,7 +125,6 @@ const COLUMNAS_BASE = [
   { id: 'conversionCliente', label: 'Conversión Ingreso', visible: false },
   { id: 'origen', label: 'Origen', visible: false },
   { id: 'destino', label: 'Destino', visible: false },
-  { id: 'remolque', label: '# Remolque', visible: true },
   { id: 'proveedor', label: 'Proveedor de Unidad', visible: true },
   { id: 'unidadProveedor', label: 'Unidad Externa', visible: false },
   { id: 'operadorProveedor', label: 'Operador Externo', visible: false },
@@ -84,7 +137,6 @@ const COLUMNAS_BASE = [
   { id: 'dolaresProv', label: 'Dólares Prov.', visible: false },
   { id: 'pesosProv', label: 'Pesos Prov.', visible: false },
   { id: 'conversionProv', label: 'Conversión Gasto', visible: false },
-  { id: 'unidad', label: 'Unidad Roelca', visible: true },
   { id: 'operador', label: 'Operador Roelca', visible: false },
   { id: 'sueldoOperador', label: 'Sueldo Operador', visible: false },
   { id: 'sueldoExtra', label: 'Sueldo Extra', visible: false },
@@ -112,6 +164,8 @@ const COLUMNAS_BASE = [
 ];
 
 const OperacionesDashboard = () => {
+  const { config: empresaConfig } = useEmpresaConfig();
+
   const [estadoFormulario, setEstadoFormulario] = useState<'cerrado' | 'abierto' | 'minimizado'>('cerrado');
   const [operacionEditando, setOperacionEditando] = useState<any | null>(null);
   
@@ -119,7 +173,6 @@ const OperacionesDashboard = () => {
   const [cargandoOperaciones, setCargandoOperaciones] = useState(true);
   const [operacionViendo, setOperacionViendo] = useState<any | null>(null);
   
-  // ✅ NUEVO: paginación real con cursor (startAfter) para evitar leer 150 ops siempre
   const [hayMasOperaciones, setHayMasOperaciones] = useState(true);
   const [cargandoMas, setCargandoMas] = useState(false);
 
@@ -137,6 +190,12 @@ const OperacionesDashboard = () => {
 
   const [busqueda, setBusqueda] = useState('');
 
+  // ✅ NUEVO (Fix 1): filtros por columna (Tipo Operación, Status, Unidad Roelca, Remolque).
+  const [filtroTipoOperacion, setFiltroTipoOperacion] = useState('');
+  const [filtroStatus, setFiltroStatus] = useState('');
+  const [filtroUnidad, setFiltroUnidad] = useState('');
+  const [filtroRemolque, setFiltroRemolque] = useState('');
+
   const [paginaActual, setPaginaActual] = useState(1);
   const [pestañaDetalleActiva, setPestañaDetalleActiva] = useState<string>('general');
   const registrosPorPagina = 50;
@@ -144,14 +203,11 @@ const OperacionesDashboard = () => {
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
 
   const [modalColumnas, setModalColumnas] = useState(false);
+  // ✅ NUEVO: controla el modal de Resúmenes Diarios (Transfer/Logística/Fletes).
+  const [mostrarResumenDiario, setMostrarResumenDiario] = useState(false);
   const [columnasTabla, setColumnasTabla] = useState(COLUMNAS_BASE.map(c => ({ ...c })));
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
 
-  // =====================================================================
-  // ✅ Resolución bidireccional ID ↔ Nombre para `catalogo_status_servicio`.
-  // El campo `status` de operaciones/horarios ahora guarda ID hex; este helper
-  // se usa al persistir (nombre → id) y al renderizar (id → nombre).
-  // =====================================================================
   const mapaStatus = useMemo(() => {
     const lista = (catalogosGlobales.statusServicio || []) as any[];
     const porId: Record<string, { id: string; nombre: string }> = {};
@@ -164,6 +220,15 @@ const OperacionesDashboard = () => {
     return { porId, porNombre };
   }, [catalogosGlobales.statusServicio]);
 
+  // ✅ NUEVO: lista de status ORDENADA (numérico → alfabético, ascendente) para
+  //    el desplegable del modal "Registrar Movimiento".
+  const statusServicioOrdenado = useMemo(() => {
+    const lista = (catalogosGlobales.statusServicio || []) as any[];
+    return [...lista]
+      .filter((s: any) => s && s.nombre)
+      .sort((a: any, b: any) => compararStatusPorNumero(String(a.nombre), String(b.nombre)));
+  }, [catalogosGlobales.statusServicio]);
+
   const resolverStatus = (valor: string | null | undefined): { id: string; nombre: string } => {
     if (!valor) return { id: '', nombre: '' };
     const v = String(valor).trim();
@@ -173,15 +238,6 @@ const OperacionesDashboard = () => {
     return { id: v, nombre: v };
   };
 
-  // =====================================================================
-  // ✅ Catálogos en tiempo real: en lugar de leerlos una vez y cachearlos
-  // (con TTLs que hacían que cambios en otra pantalla tardaran horas/días en
-  // reflejarse aquí), nos suscribimos con onSnapshot. Cualquier alta/edición
-  // en estas colecciones —p.ej. tipo_cambio, convenios, empresas— se ve de
-  // inmediato en este formulario sin recargar la página.
-  // La suscripción se arma una sola vez (ver useEffect de montaje) y cada
-  // colección actualiza solo su alias dentro de `catalogosGlobales`.
-  // =====================================================================
   const COLECCIONES_CATALOGOS: Record<string, string> = {
     statusServicio:            'catalogo_status_servicio',
     tiposOperacion:            'catalogo_tipo_operacion',
@@ -199,86 +255,148 @@ const OperacionesDashboard = () => {
     catalogoConvClientes:      'convenios_clientes',
     catalogoConvDetalles:      'convenios_clientes_detalles',
     catalogoTC:                'tipo_cambio',
+    // ✅ Las EMPRESAS guardan solo direccionId; los datos estructurados de la
+    //   dirección (calle, colonia, C.P., ciudad) viven en esta colección.
+    direcciones:               'direcciones',
   };
 
-  const suscribirCatalogosEnVivo = () => {
-    return Object.entries(COLECCIONES_CATALOGOS).map(([alias, coleccion]) =>
-      onSnapshot(
-        collection(db, coleccion),
-        (snap) => {
-          const data = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-          setCatalogosGlobales((prev: any) => ({ ...prev, [alias]: data }));
-        },
-        (error) => console.error(`Error escuchando catálogo "${coleccion}":`, error)
-      )
-    );
+  const catalogosEnVueloRef = useRef<Set<string>>(new Set());
+
+  // ✅ `soloAlias` permite cargar SOLO ciertos catálogos. Al abrir el dashboard
+  //    cargamos únicamente lo mínimo (status), y los catálogos pesados (empresas,
+  //    unidades, empleados, convenios, tarifas…) se cargan bajo demanda al abrir
+  //    el formulario o generar un PDF. Esto reduce mucho el consumo de lecturas.
+  const cargarCatalogosSiEsNecesario = async (soloAlias?: string[]) => {
+    const entradas = soloAlias
+      ? Object.entries(COLECCIONES_CATALOGOS).filter(([alias]) => soloAlias.includes(alias))
+      : Object.entries(COLECCIONES_CATALOGOS);
+    const pendientes = entradas
+      .filter(([alias]) => !cacheVigente(alias) && !catalogosEnVueloRef.current.has(alias))
+      .map(([alias, col]) => ({ alias, col }));
+    if (pendientes.length === 0) return;
+    pendientes.forEach(p => catalogosEnVueloRef.current.add(p.alias));
+    await Promise.all(pendientes.map(async ({ alias, col }) => {
+      try {
+        const snap = await getDocs(collection(db, col));
+        const data = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+        escribirCacheCatalogo(alias, data);
+        setCatalogosGlobales((prev: any) => ({ ...prev, [alias]: data }));
+      } catch (e) {
+        console.error(`Error cargando catálogo "${col}":`, e);
+      } finally {
+        catalogosEnVueloRef.current.delete(alias);
+      }
+    }));
   };
 
-  // Se mantiene como no-op para no tocar los puntos donde se invocaba antes
-  // de abrir formularios/modales: ahora los catálogos ya están suscritos
-  // desde el montaje del dashboard y se mantienen al día solos.
-  const cargarCatalogosSiEsNecesario = async () => {};
+  const hidratarCatalogosDesdeCache = () => {
+    const inicial: any = {};
+    Object.keys(COLECCIONES_CATALOGOS).forEach(alias => {
+      const c = leerCacheCatalogo(alias);
+      if (c && Array.isArray(c.data)) inicial[alias] = c.data;
+    });
+    if (Object.keys(inicial).length) {
+      setCatalogosGlobales((prev: any) => ({ ...prev, ...inicial }));
+    }
+  };
 
-  // =====================================================================
-  // ✅ DESCARGAR PÁGINA INICIAL DE OPERACIONES (limit 50 en vez de 150).
-  // Reduce 3× las lecturas de cada carga del módulo.
-  // =====================================================================
+  // ✅ Cursor robusto de paginación: guardamos el ÚLTIMO documento (snapshot),
+  //    no solo su fecha, para no depender de que exista el campo `fechaServicio`.
+  const ultimoDocRef = useRef<any>(null);
+
+  const IDS_STATUS_EXCLUIDOS = ['7607f692', 'f557b751', 'c2d57403'];
+  const esOperacionActiva = (op: any): boolean => {
+    const statusId = String(op.status || '').trim();
+    return !IDS_STATUS_EXCLUIDOS.includes(statusId);
+  };
+
   const descargarOperaciones = async () => {
     setCargandoOperaciones(true);
     try {
-      const queryOperaciones = query(
-        collection(db, 'operaciones'),
-        orderBy('fechaServicio', 'desc'),
-        limit(TAMANO_PAGINA)
+      let docs: any[] = [];
+      let metodo = 'directa (not-in)';
+      let exito = false;
+
+      try {
+        const q1 = query(
+          collection(db, 'operaciones'),
+          where('status', 'not-in', IDS_STATUS_EXCLUIDOS),
+          limit(TAMANO_PAGINA)
+        );
+        const snap1 = await getDocs(q1);
+        docs = snap1.docs;
+        exito = true;
+      } catch (errNotIn) {
+        console.warn('[Operaciones] La consulta not-in falló; uso respaldo sin filtro:', errNotIn);
+      }
+
+      if (!exito) {
+        metodo = 'respaldo (sin filtro, filtra en memoria)';
+        const q2 = query(collection(db, 'operaciones'), limit(2000));
+        const snap2 = await getDocs(q2);
+        docs = snap2.docs;
+      }
+
+      ultimoDocRef.current = docs.length ? docs[docs.length - 1] : null;
+
+      // ✅ _docId = ID REAL del documento en Firestore. Se conserva aparte porque
+      //    algunos registros (legacy/migrados) traen un campo `id` interno que
+      //    sobrescribe a d.id en el spread; ese campo NO sirve para update/delete.
+      const opDataRaw = docs.map((d: any) => ({ id: d.id, ...d.data(), _docId: d.id }));
+      const operacionesActivas = opDataRaw.filter(esOperacionActiva);
+
+      console.log(
+        `[Operaciones v3] método: ${metodo} | crudas: ${opDataRaw.length} | activas: ${operacionesActivas.length}`
       );
-      const operacionesSnap = await getDocs(queryOperaciones);
-      
-      const opDataRaw = operacionesSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-      const idsExcluidos = ['f557b751', 'c2d57403', '7607f692'];
-      
-      const operacionesActivas = opDataRaw.filter((op: any) => {
-        const statusId = String(op.status || '').trim();
-        const statusTexto = String(op.statusNombre || op.status || '').toLowerCase();
-        return !idsExcluidos.includes(statusId) && !statusTexto.includes('completado');
-      });
 
       setOperacionesGlobales(operacionesActivas);
-      setHayMasOperaciones(operacionesSnap.docs.length === TAMANO_PAGINA);
-    } catch (e) {
+      setHayMasOperaciones(exito && docs.length === TAMANO_PAGINA);
+    } catch (e: any) {
       console.error("Error al cargar operaciones:", e);
-      alert("Hubo un problema al cargar las operaciones. Verifica tu conexión.");
+      const msg = String(e?.message || e?.code || e || '').toLowerCase();
+      if (msg.includes('resource-exhausted') || msg.includes('quota') || msg.includes('429')) {
+        alert("⚠️ Cuota de lecturas de Firestore agotada.\n\nEl plan gratuito permite 50,000 lecturas/día y entre varias personas se agota. Se reinicia a las 2 AM (hora México).\n\nRecomendación: activa el plan Blaze en Firebase Console.");
+      } else if (msg.includes('index')) {
+        alert("Falta un índice en Firestore para esta consulta. Abre la consola del navegador (F12); el error de Firebase trae un enlace para crear el índice con un clic.");
+      } else {
+        alert("Hubo un problema al cargar las operaciones. Verifica tu conexión.");
+      }
     }
     setCargandoOperaciones(false);
   };
 
-  // =====================================================================
-  // ✅ CARGAR MÁS OPERACIONES (paginación real con startAfter).
-  // Solo descarga 50 más cuando el usuario lo solicita explícitamente.
-  // =====================================================================
+  const actualizarOperaciones = async () => {
+    if (cargandoOperaciones || cargandoMas) return;
+    ultimoDocRef.current = null;
+    setHayMasOperaciones(true);
+    setPaginaActual(1);
+    await descargarOperaciones();
+  };
+
   const cargarMasOperaciones = async () => {
     if (!hayMasOperaciones || cargandoMas || operacionesGlobales.length === 0) return;
     setCargandoMas(true);
     try {
-      const ultimo = operacionesGlobales[operacionesGlobales.length - 1];
-      const cursorFecha = ultimo.fechaServicio || '';
+      const cursor = ultimoDocRef.current;
 
-      const q = query(
-        collection(db, 'operaciones'),
-        orderBy('fechaServicio', 'desc'),
-        startAfter(cursorFecha),
-        limit(TAMANO_PAGINA)
-      );
-      const snap = await getDocs(q);
-      const nuevasRaw = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-      const idsExcluidos = ['f557b751', 'c2d57403', '7607f692'];
-      const nuevasFiltradas = nuevasRaw.filter((op: any) => {
-        const statusId = String(op.status || '').trim();
-        const statusTexto = String(op.statusNombre || op.status || '').toLowerCase();
-        return !idsExcluidos.includes(statusId) && !statusTexto.includes('completado');
+      const constraints: any[] = [where('status', 'not-in', IDS_STATUS_EXCLUIDOS)];
+      if (cursor) constraints.push(startAfter(cursor));
+      constraints.push(limit(TAMANO_PAGINA));
+
+      const snap = await getDocs(query(collection(db, 'operaciones'), ...constraints));
+      const docs = snap.docs;
+
+      if (docs.length) ultimoDocRef.current = docs[docs.length - 1];
+
+      const nuevasRaw = docs.map((d: any) => ({ id: d.id, ...d.data(), _docId: d.id }));
+      const nuevasFiltradas = nuevasRaw.filter(esOperacionActiva);
+
+      setOperacionesGlobales(prev => {
+        const idsPrev = new Set(prev.map((o: any) => String(o.id)));
+        const sinDuplicar = nuevasFiltradas.filter((o: any) => !idsPrev.has(String(o.id)));
+        return [...prev, ...sinDuplicar];
       });
-
-      setOperacionesGlobales(prev => [...prev, ...nuevasFiltradas]);
-      setHayMasOperaciones(snap.docs.length === TAMANO_PAGINA);
+      setHayMasOperaciones(docs.length === TAMANO_PAGINA);
     } catch (e) {
       console.error("Error al cargar más operaciones:", e);
       alert("No se pudieron cargar más operaciones.");
@@ -287,19 +405,39 @@ const OperacionesDashboard = () => {
   };
 
   useEffect(() => {
-    const unsubscribers = suscribirCatalogosEnVivo();
-    return () => unsubscribers.forEach((unsub) => unsub());
+    try {
+      Object.keys(localStorage).forEach(k => {
+        if (k.startsWith('cat_v1__')) { localStorage.removeItem(k); return; }
+        if (k.startsWith('cat_v2__')) {
+          try {
+            const obj = JSON.parse(localStorage.getItem(k) || '{}');
+            if (!obj || !Array.isArray(obj.data) || obj.data.length === 0) localStorage.removeItem(k);
+          } catch { localStorage.removeItem(k); }
+        }
+      });
+    } catch {}
+
+    // Hidrata TODO lo que ya esté en caché local (localStorage) sin costo de
+    // lecturas, y desde Firestore SOLO baja el catálogo de status (necesario
+    // para los botones de "siguiente paso" y el modal de registrar movimiento).
+    // La tabla se pinta con los nombres ya guardados en cada operación.
+    hidratarCatalogosDesdeCache();
+    cargarCatalogosSiEsNecesario(['statusServicio']);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     descargarOperaciones();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { setPaginaActual(1); }, [busqueda]);
+  useEffect(() => {
+    const b64 = empresaConfig?.logoBase64;
+    setLogoPdf(b64 && b64.startsWith('data:') ? b64 : '');
+  }, [empresaConfig?.logoBase64]);
 
-  // ✅ MODIFICADO: Antes de pedir botones a statusRules, garantizamos que la operación
-  // tenga `statusNombre` poblado. Si solo trae `status` con ID hex (caso del horario
-  // importado de SQL externo), lo resolvemos a nombre usando el catálogo.
+  useEffect(() => { setPaginaActual(1); }, [busqueda, filtroTipoOperacion, filtroStatus, filtroUnidad, filtroRemolque]);
+
   useEffect(() => {
     const cargarBotones = async () => {
       if (operacionViendo) {
@@ -311,11 +449,6 @@ const OperacionesDashboard = () => {
           }
         }
         const botones = await obtenerBotonesHorarioDinamicos(op);
-        console.log('[DEBUG StatusButtons] Operación:', {
-          id: op.id, status: op.status, statusNombre: op.statusNombre,
-          tipoOperacion: op.tipoOperacionNombre, trafico: op.trafico
-        });
-        console.log('[DEBUG StatusButtons] Botones devueltos por la regla:', botones);
         setBotonesDisponibles(botones || []);
       } else {
         setBotonesDisponibles([]);
@@ -338,16 +471,19 @@ const OperacionesDashboard = () => {
     setEstadoFormulario('abierto'); 
   };
   
-  const eliminarOperacion = async (id: string) => {
-    if (!id) return;
+  const eliminarOperacion = async (op: any) => {
+    if (!op) return;
+    // ✅ Borra por el ID REAL de Firestore (_docId); si no existe, cae al id.
+    const docId = op._docId || op.id;
+    if (!docId) return;
     if (window.confirm('¿Estás seguro de eliminar este registro permanentemente?')) {
       try {
-        await eliminarRegistro('operaciones', id); 
-        setOperacionesGlobales(prev => prev.filter((op: any) => String(op.id) !== String(id)));
+        await eliminarRegistro('operaciones', docId); 
+        setOperacionesGlobales(prev => prev.filter((o: any) => String(o.id) !== String(op.id)));
         setOperacionViendo(null);
-      } catch (error) {
+      } catch (error: any) {
         console.error("Error al eliminar:", error);
-        alert("Hubo un error al intentar eliminar el registro.");
+        alert("Hubo un error al intentar eliminar el registro.\n\nDetalle técnico: " + (error?.message || error?.code || 'desconocido'));
       }
     }
   };
@@ -365,72 +501,119 @@ const OperacionesDashboard = () => {
     return val || '-';
   };
 
-  const mostrarDatoMapeado = (id: string | null | undefined, catalogo: keyof typeof catalogosGlobales, campoRetorno: string = 'nombre', valorDesnormalizado?: string) => {
-    if (valorDesnormalizado && valorDesnormalizado.trim() !== '' && valorDesnormalizado !== '-') {
-      if (catalogo === 'statusServicio' && valorDesnormalizado.length > 30) {
-        // Fallback
-      } else {
-        return valorDesnormalizado; 
-      }
+  // ✅ Muestra ÚNICAMENTE el nombre desnormalizado ya guardado en la operación.
+  //    NO consulta otras colecciones (reduce lecturas de Firestore) y NUNCA
+  //    muestra un ID: si no hay nombre guardado, devuelve '-'. Para monedas cae
+  //    a la conversión ID→USD/MXN, que es local (sin catálogo).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const mostrarDatoMapeado = (id: string | null | undefined, catalogo: keyof typeof catalogosGlobales, _campoRetorno: string = 'nombre', valorDesnormalizado?: string) => {
+    const v = valorDesnormalizado != null ? String(valorDesnormalizado).trim() : '';
+    if (v && v !== '-' && v !== String(id ?? '').trim()) return String(valorDesnormalizado);
+    if ((catalogo === 'catalogoMoneda' || catalogo === 'catalogo_moneda') && id) {
+      const m = mostrarMoneda(id);
+      if (m && m !== '-') return m;
     }
-
-    if (!id) return '-';
-    if (!catalogosGlobales[catalogo] || !Array.isArray(catalogosGlobales[catalogo])) return id;
-    
-    const elementoEncontrado = catalogosGlobales[catalogo].find((item: any) => item.id === id || item.nombre === id);
-    if (!elementoEncontrado) return id;
-
-    if (catalogo === 'empleados') {
-      return `${elementoEncontrado.firstName || ''} ${elementoEncontrado.lastNamePaternal || ''}`.trim() || id;
-    }
-    if (catalogo === 'remolques') {
-      return `${elementoEncontrado.nombre || ''} ${elementoEncontrado.placas || elementoEncontrado.placa || ''}`.trim() || id;
-    }
-    if (catalogo === 'unidades') {
-      return elementoEncontrado.unidad || elementoEncontrado.nombre || id;
-    }
-    if (catalogo === 'catalogoMoneda' || catalogo === 'catalogo_moneda') {
-      return elementoEncontrado.moneda || id;
-    }
-    if (catalogo === 'statusServicio') {
-      return elementoEncontrado.nombre || id;
-    }
-    if (catalogo === 'tiposOperacion') {
-      return elementoEncontrado.tipo_operacion || id;
-    }
-
-    return elementoEncontrado[campoRetorno] || elementoEncontrado.nombre || id;
+    return '-';
   };
 
+  // ✅ Solo nombre desnormalizado (convenioNombre). Sin lecturas de catálogos.
   const obtenerNombreConvenioCliente = (id: string, valorDesnormalizado?: string) => {
-    if (valorDesnormalizado && valorDesnormalizado.trim() !== '' && valorDesnormalizado !== '-') return valorDesnormalizado;
-    if (!id) return '-';
-    const detalle = catalogosGlobales.catalogoConvDetalles?.find((d:any) => d.id === id);
-    if (detalle) {
-        const tarifaId = detalle.tipoConvenioId || detalle.tipo_convenio_id || detalle.tipoConvenio || detalle.tipo_convenio || detalle['TIPO DE CONVENIO'];
-        const tObj = catalogosGlobales.tarifas?.find((t:any) => String(t.id).trim() === String(tarifaId).trim());
-        return tObj?.descripcion || tObj?.nombre || id;
-    }
-    return id;
+    const v = valorDesnormalizado != null ? String(valorDesnormalizado).trim() : '';
+    if (v && v !== '-' && v !== String(id ?? '').trim()) return String(valorDesnormalizado);
+    return '-';
   };
 
+  // ✅ Solo nombre desnormalizado (convenioProveedorNombre). Sin lecturas.
   const obtenerNombreConvenioProv = (id: string, valorDesnormalizado?: string) => {
-    if (valorDesnormalizado && valorDesnormalizado.trim() !== '' && valorDesnormalizado !== '-') return valorDesnormalizado;
-    if (!id) return '-';
-    const detalle = catalogosGlobales.catalogoConvProvDetalles?.find((d:any) => d.id === id);
-    if (detalle) {
-        const tarifaId = detalle.tipoConvenioId || detalle.tipo_convenio || detalle.tarifaId || detalle['TIPO DE CONVENIO'];
-        const tObj = catalogosGlobales.tarifas?.find((t:any) => String(t.id).trim() === String(tarifaId).trim());
-        return tObj?.descripcion || tObj?.nombre || detalle.tipoConvenioNombre || id;
-    }
-    return id;
+    const v = valorDesnormalizado != null ? String(valorDesnormalizado).trim() : '';
+    if (v && v !== '-' && v !== String(id ?? '').trim()) return String(valorDesnormalizado);
+    return '-';
   };
 
   const formatoMoneda = (monto: any) => {
     if (!monto) return '$ 0.00';
     return `$ ${parseFloat(monto).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
-  
+
+  const resolverRemolqueParaPDF = (): { nombre: string; placa: string } => {
+    const lista: any[] = Array.isArray(catalogosGlobales.remolques) ? catalogosGlobales.remolques : [];
+    const ref = operacionViendo?.numeroRemolque;
+    const combinado = String(operacionViendo?.remolqueNombre || ref || '').trim();
+    const primerToken = combinado.split(/\s+/)[0] || '';
+
+    let obj = ref ? lista.find((r: any) => String(r.id).trim() === String(ref).trim()) : undefined;
+    if (!obj && ref) obj = lista.find((r: any) => String(r.nombre || '').trim() === String(ref).trim());
+    if (!obj && primerToken) obj = lista.find((r: any) => String(r.nombre || '').trim() === primerToken);
+    if (!obj && combinado) {
+      obj = lista.find((r: any) => `${r.nombre || ''} ${r.placas || r.placa || ''}`.trim() === combinado);
+    }
+
+    let nombre = obj?.nombre ? String(obj.nombre).trim() : '';
+    let placa = (obj?.placa || obj?.placas) ? String(obj?.placa || obj?.placas).trim() : '';
+
+    if (!nombre || !placa) {
+      const partes = combinado.split(/\s+/).filter(Boolean);
+      if (!nombre) nombre = partes[0] || '';
+      if (!placa && partes.length > 1) placa = partes.slice(1).join(' ');
+    }
+
+    if (!placa) placa = String(operacionViendo?.remolquePlaca || operacionViendo?.remolquePlacas || '').trim();
+
+    return { nombre: nombre || 'N/A', placa: placa || 'N/A' };
+  };
+
+  const resolverUnidadParaPDF = (): { nombre: string; placa: string } => {
+    const refUnidad = operacionViendo?.unidad;
+    const listaU: any[] = Array.isArray(catalogosGlobales.unidades) ? catalogosGlobales.unidades : [];
+    const uObj = refUnidad ? listaU.find((u: any) => String(u.id).trim() === String(refUnidad).trim()) : undefined;
+
+    let nombre = String(
+      operacionViendo?.unidadNombre ||
+      (uObj ? (uObj.unidad || uObj.numeroEconomico || uObj.numeroUnidad || uObj.nombre || uObj.economico) : '') ||
+      ''
+    ).trim();
+    let placa = String(
+      operacionViendo?.unidadPlacas ||
+      operacionViendo?.unidadPlaca ||
+      (uObj ? (uObj.placas || uObj.placa) : '') ||
+      ''
+    ).trim();
+
+    if (!nombre && operacionViendo?.unidadProveedor) {
+      const listaP: any[] = Array.isArray(catalogosGlobales.unidades_proveedor) ? catalogosGlobales.unidades_proveedor : [];
+      const pObj = listaP.find((u: any) => String(u.id).trim() === String(operacionViendo.unidadProveedor).trim());
+      if (pObj) {
+        nombre = String(pObj.numeroUnidad || pObj.numeroEconomico || pObj.unidad || pObj.nombre || '').trim();
+        if (!placa) placa = String(pObj.placas || pObj.placa || '').trim();
+      }
+    }
+
+    return { nombre: nombre || 'N/A', placa: placa || 'N/A' };
+  };
+
+  const resolverOperadorParaPDF = (): string => {
+    if (operacionViendo?.operadorNombre) return String(operacionViendo.operadorNombre).trim();
+    const mapeado = mostrarDatoMapeado(operacionViendo?.operador, 'empleados');
+    if (mapeado && mapeado !== '-' && mapeado !== operacionViendo?.operador) return String(mapeado).trim();
+    if (operacionViendo?.operadorProveedor) {
+      const listaP: any[] = Array.isArray(catalogosGlobales.proveedores_unidad) ? catalogosGlobales.proveedores_unidad : [];
+      const oObj = listaP.find((o: any) => String(o.id).trim() === String(operacionViendo.operadorProveedor).trim());
+      if (oObj) return String(oObj.nombre || oObj.firstName || '').trim() || 'N/A';
+    }
+    return 'N/A';
+  };
+
+  // ✅ Detecta si la operación es Logística o Fletes (para vaciar unidad/operador
+  //    en los documentos: en esos casos los asigna el proveedor externo).
+  const esLogisticaOFletesActual = (): boolean => {
+    const t = String(
+      operacionViendo?.tipoOperacionNombre ||
+      mostrarDatoMapeado(operacionViendo?.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', operacionViendo?.tipoOperacionNombre) ||
+      ''
+    ).toLowerCase();
+    return t.includes('logistica') || t.includes('logística') || t.includes('flete');
+  };
+
   const abrirRegistroHorario = () => {
     const now = new Date();
     const tzOffset = now.getTimezoneOffset() * 60000;
@@ -453,12 +636,6 @@ const OperacionesDashboard = () => {
     setCargandoHorarios(false);
   };
 
-  // =====================================================================
-  // ✅ guardarHorario MODIFICADO:
-  // 1. Resuelve nombre → ID hex antes de persistir (campo `status`).
-  // 2. NO llama a descargarOperaciones() al terminar; actualiza el estado local
-  //    para evitar 50 lecturas innecesarias por cada horario retroactivo guardado.
-  // =====================================================================
   const guardarHorario = async () => {
     if (!nuevoStatus || !nuevaFechaHora) return alert("Completa la fecha y el estatus.");
     setCargandoHorarios(true);
@@ -467,19 +644,18 @@ const OperacionesDashboard = () => {
 
       const batch = writeBatch(db);
       const horarioRef = doc(collection(db, 'horarios'));
-      batch.set(horarioRef, {
+      batch.set(horarioRef, limpiarUndefined({
         operacionId: operacionViendo.id,
-        status: statusId,                      // ✅ ID hex del catálogo
-        statusNombre: statusNombreResuelto,    // ✅ Desnormalizado por conveniencia
+        status: statusId,
+        statusNombre: statusNombreResuelto,
         fechaHora: nuevaFechaHora,
         registradoEn: new Date().toISOString()
-      });
-      const opRef = doc(db, 'operaciones', String(operacionViendo.id));
-      batch.update(opRef, { status: statusId, statusNombre: statusNombreResuelto });
+      }));
+      const opRef = doc(db, 'operaciones', String(operacionViendo._docId || operacionViendo.id));
+      batch.update(opRef, limpiarUndefined({ status: statusId, statusNombre: statusNombreResuelto }));
 
       await batch.commit();
 
-      // ✅ Actualizar estado local en lugar de re-descargar todas las operaciones
       const operacionActualizada = {
         ...operacionViendo,
         status: statusId,
@@ -492,32 +668,17 @@ const OperacionesDashboard = () => {
 
       alert('Horario registrado y Estatus actualizado.');
       setModalHorarios('cerrado');
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error guardarHorario:', e);
-      alert("Error al actualizar la base de datos.");
+      alert("Error al actualizar la base de datos.\n\nDetalle técnico: " + (e?.message || e?.code || 'desconocido'));
     }
     setCargandoHorarios(false);
   };
 
-  // =====================================================================
-  // ✅ registrarStatusRapido MODIFICADO:
-  // resolverCascadaStatus devuelve nombres legibles (porque el flujo se guarda
-  // con nombres). Antes de persistir, convertimos cada paso a {id, nombre} con
-  // resolverStatus. Tanto la operación como cada entrada de bitácora quedan
-  // con `status` = ID hex y `statusNombre` = nombre legible.
-  //
-  // ✅ NUEVO (confirmación al cancelar): si el status destino es de tipo
-  // "Cancelado" (su nombre contiene "cancel"), se pide confirmación con
-  // window.confirm antes de aplicar el cambio, para evitar cancelar una
-  // referencia por error. Las demás transiciones avanzan directo, sin preguntar.
-  // =====================================================================
   const registrarStatusRapido = async (statusNombre: string) => {
     if (!operacionViendo || !statusNombre) return;
     if (guardandoStatusRapido) return;
 
-    // ✅ Confirmación SOLO para status de tipo "Cancelado" (su nombre contiene "cancel").
-    // Normalizamos quitando acentos y pasando a minúsculas para que también detecte
-    // variantes como "Cancelación", "CANCELADO", etc.
     const _normalizar = (s: string) =>
       String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     if (_normalizar(statusNombre).includes('cancel')) {
@@ -536,8 +697,6 @@ const OperacionesDashboard = () => {
     const botonesPrevios = botonesDisponibles;
 
     try {
-      // Garantizar que la operación tenga statusNombre antes de invocar la cascada
-      // (la cascada compara contra nombres del flujo, no contra IDs).
       let opParaCascada = operacionViendo;
       if (!opParaCascada.statusNombre && opParaCascada.status) {
         const r = resolverStatus(opParaCascada.status);
@@ -548,7 +707,14 @@ const OperacionesDashboard = () => {
       const cadenaResuelta = cadenaStatus.map(resolverStatus);
       const statusFinal = cadenaResuelta[cadenaResuelta.length - 1];
 
-      // Optimista
+      // ✅ Validación defensiva: si por alguna razón no se resolvió un status
+      //    final válido, no intentamos el commit (evita escribir basura/undefined).
+      if (!statusFinal || !statusFinal.id) {
+        setGuardandoStatusRapido(null);
+        alert(`No se pudo resolver el status "${statusNombre}". Revisa la configuración de la cascada de estatus.`);
+        return;
+      }
+
       const operacionActualizada = {
         ...operacionViendo,
         status: statusFinal.id,
@@ -574,22 +740,24 @@ const OperacionesDashboard = () => {
 
           cadenaResuelta.forEach((statusPaso, idx) => {
             const horarioRef = doc(collection(db, 'horarios'));
-            batch.set(horarioRef, {
+            // ✅ limpiarUndefined: Firestore RECHAZA campos `undefined` y eso
+            //    aborta TODO el batch (causa típica de "Se revirtió el cambio").
+            batch.set(horarioRef, limpiarUndefined({
               operacionId: operacionViendo.id,
-              status: statusPaso.id,           // ✅ ID hex
-              statusNombre: statusPaso.nombre, // ✅ Nombre legible
+              status: statusPaso.id,
+              statusNombre: statusPaso.nombre,
               fechaHora: fechaHoraLocal,
               registradoEn: registradoEn,
               ordenCascada: idx,
               esAutomatico: idx > 0,
-            });
+            }));
           });
 
-          const opRef = doc(db, 'operaciones', String(operacionViendo.id));
-          batch.update(opRef, {
+          const opRef = doc(db, 'operaciones', String(operacionViendo._docId || operacionViendo.id));
+          batch.update(opRef, limpiarUndefined({
             status: statusFinal.id,
             statusNombre: statusFinal.nombre
-          });
+          }));
 
           await batch.commit();
 
@@ -603,22 +771,47 @@ const OperacionesDashboard = () => {
           setBotonesDisponibles(botonesPrevios);
           setGuardandoStatusRapido(null);
 
+          // ✅ MEJORADO: en lugar de un mensaje genérico, mostramos la CAUSA real
+          //    (código + mensaje de Firebase) para poder diagnosticar el problema.
+          const code = String(e?.code || '').toLowerCase();
           const msg = String(e?.message || e?.code || e || '').toLowerCase();
+          const detalle = e?.message || e?.code || 'desconocido';
+
           if (msg.includes('resource-exhausted') || msg.includes('quota') || msg.includes('429')) {
             alert(
               "⚠️ Cuota de Firestore agotada.\n\n" +
               "Tu proyecto superó el límite gratuito diario. La cuota se reinicia a las 2 AM (hora México).\n\n" +
               "Recomendación: activa el plan Blaze en Firebase Console para evitar este límite."
             );
+          } else if (code.includes('permission-denied') || msg.includes('permission') || msg.includes('insufficient') || msg.includes('missing or insufficient')) {
+            alert(
+              "🔒 Permiso denegado por Firestore.\n\n" +
+              "Tu usuario no tiene permiso para actualizar el estatus (escribir en 'operaciones' y/o 'horarios').\n\n" +
+              "Revisa las reglas de seguridad de Firestore para esas colecciones.\n\n" +
+              "Detalle técnico: " + detalle
+            );
+          } else if (code.includes('not-found') || msg.includes('no document to update') || msg.includes('not-found')) {
+            alert(
+              "La operación que intentas actualizar ya no existe en la base de datos (pudo eliminarse).\n\n" +
+              "Detalle técnico: " + detalle
+            );
+          } else if (code.includes('invalid-argument') || msg.includes('invalid') || msg.includes('undefined') || msg.includes('unsupported field value')) {
+            alert(
+              "Hubo un dato inválido al guardar el estatus (un campo vacío o con formato no permitido).\n\n" +
+              "Detalle técnico: " + detalle
+            );
           } else {
-            alert("Error al guardar el status. Se revirtió el cambio.");
+            alert(
+              "Error al guardar el status. Se revirtió el cambio.\n\n" +
+              "Detalle técnico: " + detalle
+            );
           }
         }
       })();
-    } catch (e) {
+    } catch (e: any) {
       console.error("Error resolviendo cascada:", e);
       setGuardandoStatusRapido(null);
-      alert("Error al procesar el cambio de status. Intenta de nuevo.");
+      alert("Error al procesar el cambio de status. Intenta de nuevo.\n\nDetalle técnico: " + (e?.message || e?.code || 'desconocido'));
     }
   };
 
@@ -628,42 +821,24 @@ const OperacionesDashboard = () => {
     setOperacionEditando(null);
   };
 
-  // ✅ MODIFICADO: pide confirmación antes de invalidar el caché
-  // (el botón anterior se podía pulsar accidentalmente y costaba ~1000 lecturas).
-  const forzarRecarga = () => {
-    if (!window.confirm(
-      '¿Recargar todos los catálogos desde Firestore?\n\n' +
-      'Esto consumirá un buen número de lecturas (~500-2000). ' +
-      'Hazlo solo si editaste un catálogo en otra pantalla o sospechas datos viejos.'
-    )) return;
-    try {
-      Object.keys(localStorage)
-        .filter(k => k.startsWith('cat_v1__') || k.startsWith('flujo_v1__'))
-        .forEach(k => localStorage.removeItem(k));
-    } catch {}
-    sessionStorage.removeItem('roelca_catalogos_v2');
-    window.location.reload();
-  };
-
   const handleDescargarSolicitudRetiro = async () => {
     await cargarCatalogosSiEsNecesario();
     if (!operacionViendo) return;
     const origen = mostrarDatoMapeado(operacionViendo.origen, 'empresas', 'nombre', operacionViendo.origenNombre);
     const destinoObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.destino);
-    const unidadObj = catalogosGlobales.unidades?.find((u: any) => u.id === operacionViendo.unidad);
-    const remolqueObj = catalogosGlobales.remolques?.find((r: any) => r.id === operacionViendo.numeroRemolque);
-    const unidadProvVal = operacionViendo.unidadProveedor ? (catalogosGlobales.unidades_proveedor?.find((u:any) => u.id === operacionViendo.unidadProveedor)?.numeroUnidad || operacionViendo.unidadProveedor) : 'N/A';
-    const operadorProvVal = operacionViendo.operadorProveedor ? (catalogosGlobales.proveedores_unidad?.find((o:any) => o.id === operacionViendo.operadorProveedor)?.nombre || operacionViendo.operadorProveedor) : 'N/A';
+    const remolqueRes = resolverRemolqueParaPDF();
+    const unidadRes = resolverUnidadParaPDF();
+    const operadorRes = resolverOperadorParaPDF();
 
     generarSolicitudRetiroPDF({
       bodegaNombre: origen,
       tipoMovimiento: operacionViendo.trafico || 'N/A',
-      remolqueNombre: operacionViendo.remolquePlaca || operacionViendo.remolqueNombre || (remolqueObj ? (remolqueObj.placa || remolqueObj.nombre) : 'N/A'),
-      remolquePlacas: operacionViendo.remolquePlaca || (remolqueObj ? remolqueObj.placa : 'N/A'),
+      remolqueNombre: remolqueRes.nombre,
+      remolquePlacas: remolqueRes.placa,
       clienteMercancia: operacionViendo.clienteMercanciaNombre || mostrarDatoMapeado(operacionViendo.clienteMercancia, 'empresas'),
-      unidadNombre: operacionViendo.unidadNombre || (unidadObj ? (unidadObj.numeroEconomico || unidadObj.nombre) : unidadProvVal),
-      unidadPlacas: unidadObj ? (unidadObj.placa || 'N/A') : 'N/A',
-      empleadoNombre: operacionViendo.operadorNombre || (mostrarDatoMapeado(operacionViendo.operador, 'empleados') !== '-' ? mostrarDatoMapeado(operacionViendo.operador, 'empleados') : operadorProvVal),
+      unidadNombre: unidadRes.nombre,
+      unidadPlacas: unidadRes.placa,
+      empleadoNombre: operadorRes,
       destinoNombre: operacionViendo.destinoNombre || (destinoObj ? destinoObj.nombre : 'N/A'),
       destinoDireccion: destinoObj ? destinoObj.direccion : 'N/A',
     });
@@ -674,19 +849,26 @@ const OperacionesDashboard = () => {
     if (!operacionViendo) return;
     const origenObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.origen);
     const destinoObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.destino);
-    const unidadObj = catalogosGlobales.unidades?.find((u: any) => u.id === operacionViendo.unidad);
-    const remolqueObj = catalogosGlobales.remolques?.find((r: any) => r.id === operacionViendo.numeroRemolque);
-    const unidadProvVal = operacionViendo.unidadProveedor ? (catalogosGlobales.unidades_proveedor?.find((u:any) => u.id === operacionViendo.unidadProveedor)?.numeroUnidad || operacionViendo.unidadProveedor) : 'N/A';
-    const operadorProvVal = operacionViendo.operadorProveedor ? (catalogosGlobales.proveedores_unidad?.find((o:any) => o.id === operacionViendo.operadorProveedor)?.nombre || operacionViendo.operadorProveedor) : 'N/A';
+    const remolqueRes = resolverRemolqueParaPDF();
+    const unidadRes = resolverUnidadParaPDF();
+    const operadorRes = resolverOperadorParaPDF();
+
+    // ✅ CAMBIO 1: si la operación es Logística o Fletes, la Unidad y el Operador
+    //    van VACÍOS en el documento (los asigna el proveedor externo).
+    const esLogFlete = esLogisticaOFletesActual();
+
+    // ✅ CAMBIO 2: en el campo "Tipo de Operación" del documento va el CONVENIO
+    //    (tarifa del cliente), no el tipo de operación como tal.
+    const convenioCliente = obtenerNombreConvenioCliente(operacionViendo.convenio, operacionViendo.convenioNombre);
 
     generarInstruccionesServicioPDF({
       consecutivo: operacionViendo.ref || operacionViendo.id?.substring(0,6) || 'N/A',
       fecha: operacionViendo.fechaServicio || '',
-      unidadNombre: operacionViendo.unidadNombre || (unidadObj ? (unidadObj.numeroEconomico || unidadObj.nombre) : unidadProvVal),
-      empleadoNombre: operacionViendo.operadorNombre || (mostrarDatoMapeado(operacionViendo.operador, 'empleados') !== '-' ? mostrarDatoMapeado(operacionViendo.operador, 'empleados') : operadorProvVal),
-      remolqueNombre: operacionViendo.remolqueNombre || (remolqueObj ? (remolqueObj.placa || remolqueObj.nombre) : 'N/A'),
-      remolquePlacas: operacionViendo.remolquePlaca || (remolqueObj ? remolqueObj.placa : 'N/A'),
-      tipoOperacion: operacionViendo.tipoOperacionNombre || mostrarDatoMapeado(operacionViendo.tipoOperacionId, 'tiposOperacion', 'tipo_operacion'),
+      unidadNombre: esLogFlete ? '' : unidadRes.nombre,
+      empleadoNombre: esLogFlete ? '' : operadorRes,
+      remolqueNombre: remolqueRes.nombre,
+      remolquePlacas: remolqueRes.placa,
+      tipoOperacion: (convenioCliente && convenioCliente !== '-') ? convenioCliente : '',
       origenNombre: operacionViendo.origenNombre || (origenObj ? origenObj.nombre : 'N/A'),
       origenDireccion: origenObj ? origenObj.direccion : 'N/A',
       clienteMercancia: operacionViendo.clienteMercanciaNombre || mostrarDatoMapeado(operacionViendo.clienteMercancia, 'empresas'),
@@ -700,18 +882,16 @@ const OperacionesDashboard = () => {
     if (!operacionViendo) return;
     const origenObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.origen);
     const destinoObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.destino);
-    const unidadObj = catalogosGlobales.unidades?.find((u: any) => u.id === operacionViendo.unidad);
     const remolqueObj = catalogosGlobales.remolques?.find((r: any) => r.id === operacionViendo.numeroRemolque);
-    const unidadProvVal = operacionViendo.unidadProveedor ? (catalogosGlobales.unidades_proveedor?.find((u:any) => u.id === operacionViendo.unidadProveedor)?.numeroUnidad || operacionViendo.unidadProveedor) : 'N/A';
-    const operadorProvVal = operacionViendo.operadorProveedor ? (catalogosGlobales.proveedores_unidad?.find((o:any) => o.id === operacionViendo.operadorProveedor)?.nombre || operacionViendo.operadorProveedor) : 'N/A';
-    const empNombre = operacionViendo.operadorNombre || (mostrarDatoMapeado(operacionViendo.operador, 'empleados') !== '-' ? mostrarDatoMapeado(operacionViendo.operador, 'empleados') : operadorProvVal);
-    const uniNombre = operacionViendo.unidadNombre || (unidadObj ? (unidadObj.numeroEconomico || unidadObj.nombre) : unidadProvVal);
-    const uniPlacas = unidadObj ? (unidadObj.placa || 'N/A') : 'N/A';
+    const unidadRes = resolverUnidadParaPDF();
+    const empNombre = resolverOperadorParaPDF();
+    const uniNombre = unidadRes.nombre;
+    const uniPlacas = unidadRes.placa;
 
     generarCheckListPDF({
       consecutivo: operacionViendo.ref || operacionViendo.id?.substring(0,6) || 'S/R',
       fecha: operacionViendo.fechaServicio || '',
-      cliente: operacionViendo.clienteNombre || mostrarDatoMapeado(operacionViendo.clientePaga, 'empresas'),
+      cliente: operacionViendo.clienteMercanciaNombre || mostrarDatoMapeado(operacionViendo.clienteMercancia, 'empresas'),
       remolque: operacionViendo.remolqueNombre || (remolqueObj ? (remolqueObj.placa || remolqueObj.nombre) : 'N/A'),
       proveedor: operacionViendo.proveedorUnidadNombre || mostrarDatoMapeado(operacionViendo.proveedorUnidad, 'empresas'),
       tractorInfo: `${uniNombre} / ${uniPlacas} / ${empNombre}`,
@@ -734,21 +914,20 @@ const OperacionesDashboard = () => {
     const origenObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.origen);
     const destinoObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.destino);
     const remolqueObj = catalogosGlobales.remolques?.find((r: any) => r.id === operacionViendo.numeroRemolque);
-    const operadorProvVal = operacionViendo.operadorProveedor ? (catalogosGlobales.proveedores_unidad?.find((o:any) => o.id === operacionViendo.operadorProveedor)?.nombre || operacionViendo.operadorProveedor) : 'N/A';
-    const empNombre = operacionViendo.operadorNombre || (mostrarDatoMapeado(operacionViendo.operador, 'empleados') !== '-' ? mostrarDatoMapeado(operacionViendo.operador, 'empleados') : operadorProvVal);
+    const empNombre = resolverOperadorParaPDF();
 
     generarPruebaEntregaPDF({
       referencia: operacionViendo.ref || operacionViendo.id?.substring(0,6) || 'S/R',
       fechaServicio: operacionViendo.fechaServicio || 'N/A',
       fechaCita: operacionViendo.fechaCita ? new Date(operacionViendo.fechaCita).toLocaleString('es-MX') : 'N/A',
       origenNombre: operacionViendo.origenNombre || (origenObj ? origenObj.nombre : 'N/A'),
-      origenDireccion: origenObj ? origenObj.direccion : 'N/A',
-      origenCP: origenObj ? (origenObj.cp || origenObj.codigoPostal || 'N/A') : 'N/A',
-      origenCiudad: origenObj ? (origenObj.ciudad || origenObj.estado || 'N/A') : 'N/A',
+      origenDireccion: datosDireccionEmpresa(origenObj).direccion,
+      origenCP: datosDireccionEmpresa(origenObj).cp,
+      origenCiudad: datosDireccionEmpresa(origenObj).ciudad,
       destinoNombre: operacionViendo.destinoNombre || (destinoObj ? destinoObj.nombre : 'N/A'),
-      destinoDireccion: destinoObj ? destinoObj.direccion : 'N/A',
-      destinoCP: destinoObj ? (destinoObj.cp || destinoObj.codigoPostal || 'N/A') : 'N/A',
-      destinoCiudad: destinoObj ? (destinoObj.ciudad || destinoObj.estado || 'N/A') : 'N/A',
+      destinoDireccion: datosDireccionEmpresa(destinoObj).direccion,
+      destinoCP: datosDireccionEmpresa(destinoObj).cp,
+      destinoCiudad: datosDireccionEmpresa(destinoObj).ciudad,
       tipoServicio: `${operacionViendo.tipoOperacionNombre || mostrarDatoMapeado(operacionViendo.tipoOperacionId, 'tiposOperacion', 'tipo_operacion')} ${operacionViendo.trafico || ''}`,
       tipoUnidad: remolqueObj ? (remolqueObj.tipo || remolqueObj.descripcion || 'Remolque') : 'N/A',
       numeroEconomico: operacionViendo.remolqueNombre || (remolqueObj ? remolqueObj.nombre : 'N/A'),
@@ -758,14 +937,107 @@ const OperacionesDashboard = () => {
     });
   };
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ✅ (Direcciones para PDFs) Las empresas guardan `direccionId` que apunta a
+  //   la colección `direcciones`. Este helper arma { direccion, colonia, cp,
+  //   ciudad } desde el registro estructurado y, si no existe, PARSEA el texto
+  //   libre de emp.direccion ("Calle #x, Col. Y, C.P. Z, Ciudad, ...").
+  // ═══════════════════════════════════════════════════════════════════════
+  // ✅ Parser de una dirección en TEXTO libre ("Calle #x, Col. Y, C.P. Z,
+  //   Municipio, Estado, País") → partes separadas. Se usa como respaldo.
+  const parsearDireccionTexto = (texto: string) => {
+    const partes = String(texto || '').split(',').map(x => x.trim()).filter(Boolean);
+    const mCol = String(texto || '').match(/col(?:onia)?\.?\s*([^,]+)/i);
+    const mCP = String(texto || '').match(/c\.?\s*p\.?\s*:?\s*(\d{4,6})/i) || String(texto || '').match(/(?:^|[\s,])(\d{5})(?![\d-])/);
+    const esPais = (t: string) => /^(m[e\u00e9]xico|estados unidos|usa|eua|united states)$/i.test(t.trim());
+    const esCPtxt = (t: string) => /c\.?\s*p\.?/i.test(t) || /^\d{5}$/.test(t.trim());
+    const esColTxt = (t: string) => /^col(?:onia)?\.?\s/i.test(t.trim());
+    const candidatas = partes.slice(1).filter(t => !esPais(t) && !esCPtxt(t) && !esColTxt(t));
+    return {
+      direccion: partes[0] || String(texto || '').trim(),
+      colonia: mCol ? mCol[1].trim() : '',
+      cp: mCP ? mCP[1] : '',
+      municipio: candidatas.length >= 2 ? candidatas[candidatas.length - 2] : '',
+      estado: candidatas.length >= 1 ? candidatas[candidatas.length - 1] : '',
+      pais: partes.find(t => esPais(t)) || '',
+    };
+  };
+
+  // ✅ Desglose de la dirección de una empresa para los PDFs.
+  //   Orden de resolución:
+  //   1. Registro del catálogo `direcciones` por direccionId (o por coincidencia
+  //      de texto con direccionCompleta, por si el id quedó desactualizado).
+  //   2. Campos estructurados del registro (calleNombre, coloniaNombre, ...);
+  //      lo que falte se completa parseando su direccionCompleta.
+  //   3. Sin registro: se parsea el texto guardado en la empresa.
+  //   `completa` SIEMPRE trae la dirección de facturación en una línea.
+  const datosDireccionEmpresa = (emp: any, listaDirecciones?: any[]) => {
+    const vacio = { direccion: 'N/A', colonia: 'N/A', cp: 'N/A', ciudad: 'N/A', municipio: 'N/A', estado: 'N/A', pais: 'N/A', completa: 'N/A' };
+    if (!emp) return vacio;
+    const v = (x: any) => String(x ?? '').trim();
+    const lista = (Array.isArray(listaDirecciones) && listaDirecciones.length > 0) ? listaDirecciones : (catalogosGlobales.direcciones || []);
+    const textoEmp = v(emp.direccion) || v(emp.direccionLabel);
+    let dir = lista.find((d: any) => String(d.id) === String(emp.direccionId)) || null;
+    if (!dir && textoEmp) {
+      dir = lista.find((d: any) => v(d.direccionCompleta) && v(d.direccionCompleta).toLowerCase() === textoEmp.toLowerCase()) || null;
+    }
+    const completa = v(dir?.direccionCompleta) || textoEmp;
+    if (dir) {
+      const respaldo = parsearDireccionTexto(completa);
+      const calleLinea = [v(dir.calleNombre), v(dir.numExterior) ? `#${v(dir.numExterior)}` : '', v(dir.numInterior) ? `Int. ${v(dir.numInterior)}` : ''].filter(Boolean).join(' ');
+      const municipio = v(dir.municipioNombre) || respaldo.municipio;
+      const estadoDir = v(dir.estadoNombre) || respaldo.estado;
+      return {
+        direccion: calleLinea || respaldo.direccion || 'N/A',
+        colonia: v(dir.coloniaNombre) || respaldo.colonia || 'N/A',
+        cp: v(dir.cpNombre) || respaldo.cp || 'N/A',
+        municipio: municipio || 'N/A',
+        estado: estadoDir || 'N/A',
+        pais: v(dir.paisNombre) || respaldo.pais || 'N/A',
+        ciudad: [municipio, estadoDir].filter(Boolean).join(', ') || 'N/A',
+        completa: completa || 'N/A',
+      };
+    }
+    if (!textoEmp) return vacio;
+    const r = parsearDireccionTexto(textoEmp);
+    return {
+      direccion: r.direccion || 'N/A',
+      colonia: r.colonia || 'N/A',
+      cp: r.cp || 'N/A',
+      municipio: r.municipio || 'N/A',
+      estado: r.estado || 'N/A',
+      pais: r.pais || 'N/A',
+      ciudad: [r.municipio, r.estado].filter(Boolean).join(', ') || 'N/A',
+      completa: textoEmp,
+    };
+  };
+
+  // ✅ Garantiza el catálogo de direcciones FRESCO dentro del mismo clic
+  //   (setCatalogosGlobales es asíncrono y el closure no ve el estado nuevo).
+  const obtenerDireccionesFrescas = async (): Promise<any[]> => {
+    const actual = catalogosGlobales.direcciones;
+    if (Array.isArray(actual) && actual.length > 0) return actual;
+    try {
+      const snap = await getDocs(collection(db, 'direcciones'));
+      const data = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+      setCatalogosGlobales((prev: any) => ({ ...prev, direcciones: data }));
+      return data;
+    } catch (e) {
+      console.error('[PDF] No se pudo leer el catálogo de direcciones:', e);
+      return [];
+    }
+  };
+
   const handleDescargarCartaInstrucciones = async () => {
     await cargarCatalogosSiEsNecesario();
     if (!operacionViendo) return;
     const origenObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.origen);
     const destinoObj = catalogosGlobales.empresas?.find((e: any) => e.id === operacionViendo.destino);
     const remolqueObj = catalogosGlobales.remolques?.find((r: any) => r.id === operacionViendo.numeroRemolque);
-    const operadorProvVal = operacionViendo.operadorProveedor ? (catalogosGlobales.proveedores_unidad?.find((o:any) => o.id === operacionViendo.operadorProveedor)?.nombre || operacionViendo.operadorProveedor) : 'N/A';
-    const empNombre = operacionViendo.operadorNombre || (mostrarDatoMapeado(operacionViendo.operador, 'empleados') !== '-' ? mostrarDatoMapeado(operacionViendo.operador, 'empleados') : operadorProvVal);
+    const empNombre = resolverOperadorParaPDF();
+    const listaDirs = await obtenerDireccionesFrescas();
+    const dirOrigen = datosDireccionEmpresa(origenObj, listaDirs);
+    const dirDestino = datosDireccionEmpresa(destinoObj, listaDirs);
 
     generarCartaInstruccionesPDF({
       referencia: operacionViendo.ref || operacionViendo.id?.substring(0,6) || 'S/R',
@@ -779,28 +1051,151 @@ const OperacionesDashboard = () => {
       placas: operacionViendo.remolquePlaca || (remolqueObj ? remolqueObj.placa : 'N/A'),
       operador: empNombre,
       descripcionMercancia: operacionViendo.descripcionMercancia || 'N/A',
-      origenCiudad: origenObj ? (origenObj.ciudad || origenObj.estado || 'N/A') : 'N/A', 
+      // ✅ Direcciones REALES desde la colección `empresas`/`direcciones`.
+      // ✅ La línea roja bajo ORIGEN muestra la dirección de facturación COMPLETA.
+      origenCiudad: dirOrigen.completa,
       origenNombre: operacionViendo.origenNombre || (origenObj ? origenObj.nombre : 'N/A'),
-      origenDireccion: 'N/A', origenColonia: 'N/A', origenCP: 'N/A',
-      destinoCiudad: destinoObj ? (destinoObj.ciudad || destinoObj.estado || 'N/A') : 'N/A', 
+      origenDireccion: dirOrigen.direccion, origenColonia: dirOrigen.colonia, origenCP: dirOrigen.cp,
+      origenMunicipio: dirOrigen.municipio, origenEstado: dirOrigen.estado, origenPais: dirOrigen.pais,
+      destinoCiudad: dirDestino.completa,
       destinoNombre: operacionViendo.destinoNombre || (destinoObj ? destinoObj.nombre : 'N/A'),
-      destinoDireccion: 'N/A', destinoColonia: 'N/A', destinoCP: 'N/A',
+      destinoDireccion: dirDestino.direccion, destinoColonia: dirDestino.colonia, destinoCP: dirDestino.cp,
+      destinoMunicipio: dirDestino.municipio, destinoEstado: dirDestino.estado, destinoPais: dirDestino.pais,
     });
   };
 
-  const operacionesFiltradas = useMemo(() => {
-    const b = busqueda.toLowerCase();
-    return operacionesGlobales.filter(op => {
-      return (
-        String(op.ref || op.id || '').toLowerCase().includes(b) ||
-        String(op.fechaServicio || '').toLowerCase().includes(b) ||
-        String(op.clienteNombre || op.nombreCliente || '').toLowerCase().includes(b) ||
-        String(op.tipoOperacionNombre || op.tipoServicio || '').toLowerCase().includes(b) ||
-        String(op.trafico || '').toLowerCase().includes(b) ||
-        String(op.statusNombre || op.status || '').toLowerCase().includes(b) 
-      );
+  const obtenerConsecutivoRef = (op: any): number => {
+    const ref = String(op?.ref || '');
+    const m = ref.match(/(\d+)\s*$/);
+    return m ? parseInt(m[1], 10) : 0;
+  };
+
+  const fechaOrdenOp = (valor: any): number => {
+    if (valor == null || valor === '') return 0;
+    if (typeof valor === 'object') {
+      if (typeof valor.toDate === 'function') { const d = valor.toDate(); return isNaN(d.getTime()) ? 0 : d.getTime(); }
+      if (typeof valor.seconds === 'number') return valor.seconds * 1000;
+      if (valor instanceof Date) return isNaN(valor.getTime()) ? 0 : valor.getTime();
+      return 0;
+    }
+    if (typeof valor === 'number') return valor;
+    const s = String(valor).trim();
+    if (!s) return 0;
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) { const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])); return isNaN(d.getTime()) ? 0 : d.getTime(); }
+    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) { let y = Number(m[3]); if (y < 100) y += 2000; const d = new Date(y, Number(m[2]) - 1, Number(m[1])); return isNaN(d.getTime()) ? 0 : d.getTime(); }
+    const d = new Date(s); return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
+
+  const valorTextoColumna = (op: any, colId: string): string => {
+    switch (colId) {
+      case 'ref': return String(op.ref || op.id?.substring(0, 6) || '');
+      case 'fechaServicio': return String(op.fechaServicio || '');
+      case 'fechaCita': return formatearFechaHora(op.fechaCita);
+      case 'tipoOperacion': return String(mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre));
+      case 'status': {
+        const nombreStatus = mostrarDatoMapeado(op.status, 'statusServicio', 'nombre', op.statusNombre);
+        return String((nombreStatus && nombreStatus !== '-') ? nombreStatus : (resolverStatus(op.status || op.statusNombre).nombre || '-'));
+      }
+      case 'trafico': return String(op.trafico || '');
+      case 'cliente': return String(mostrarDatoMapeado(op.clientePaga || op.clienteId, 'empresas', 'nombre', op.clienteNombre || op.nombreCliente));
+      case 'convenioTarifa': return String(obtenerNombreConvenioCliente(op.convenio, op.convenioNombre));
+      case 'refCliente': return String(op.refCliente || '');
+      case 'facturadoEnCobrar': return String(mostrarDatoMapeado(op.facturadoEnCobrar, 'catalogoMoneda', 'moneda', op.monedaCobroNombre));
+      case 'montoConvenioCliente': return String(op.montoConvenioCliente ?? '');
+      case 'cargosAdicionales': return String(op.cargosAdicionales ?? '');
+      case 'subtotal': return String(op.subtotalCliente ?? '');
+      case 'tipoCambioAprobado': return String(op.tipoCambioAprobado ?? '');
+      case 'dolaresCliente': return String(op.dolaresCliente ?? '');
+      case 'pesosCliente': return String(op.pesosCliente ?? '');
+      case 'conversionCliente': return String(op.conversionCliente ?? '');
+      case 'origen': return String(mostrarDatoMapeado(op.origen, 'empresas', 'nombre', op.origenNombre));
+      case 'destino': return String(mostrarDatoMapeado(op.destino, 'empresas', 'nombre', op.destinoNombre));
+      case 'remolque': return String(mostrarDatoMapeado(op.numeroRemolque, 'remolques', 'nombre', op.remolqueNombre));
+      case 'proveedor': return String(mostrarDatoMapeado(op.proveedorUnidad, 'empresas', 'nombre', op.proveedorUnidadNombre));
+      case 'unidadProveedor': return String(op.unidadProveedor || '');
+      case 'operadorProveedor': return String(op.operadorProveedor || '');
+      case 'convenioProv': return String(obtenerNombreConvenioProv(op.convenioProveedor, op.convenioProveedorNombre));
+      case 'facturadoEnUnidad': return String(mostrarDatoMapeado(op.facturadoEnUnidad, 'catalogoMoneda', 'moneda', op.monedaUnidadNombre));
+      case 'monedaConvenioProv': return String(mostrarDatoMapeado(op.monedaConvenioProv, 'catalogoMoneda', 'moneda', op.monedaConvProvNombre));
+      case 'totalAPagarProv': return String(op.totalAPagarProv ?? '');
+      case 'cargosAdicionalesProv': return String(op.cargosAdicionalesProv ?? '');
+      case 'subtotalProv': return String(op.subtotalProv ?? '');
+      case 'dolaresProv': return String(op.dolaresProv ?? '');
+      case 'pesosProv': return String(op.pesosProv ?? '');
+      case 'conversionProv': return String(op.conversionProv ?? '');
+      case 'unidad': return String(mostrarDatoMapeado(op.unidad, 'unidades', 'unidad', op.unidadNombre));
+      case 'operador': return String(mostrarDatoMapeado(op.operador, 'empleados', 'nombre', op.operadorNombre));
+      case 'sueldoOperador': return String(op.sueldoOperador ?? '');
+      case 'sueldoExtra': return String(op.sueldoExtra ?? '');
+      case 'sueldoTotal': return String(op.sueldoTotal ?? '');
+      case 'combustible': return String(op.combustible ?? '');
+      case 'combustibleExtra': return String(op.combustibleExtra ?? '');
+      case 'combustibleTotal': return String(op.combustibleTotal ?? '');
+      case 'clienteMercancia': return String(mostrarDatoMapeado(op.clienteMercancia, 'empresas', 'nombre', op.clienteMercanciaNombre));
+      case 'descripcionMercancia': return String(op.descripcionMercancia || '');
+      case 'cantidad': return String(op.cantidad ?? '');
+      case 'embalaje': return String(mostrarDatoMapeado(op.embalaje, 'embalajes', 'nombre', op.embalajeNombre));
+      case 'pesoKg': return String(op.pesoKg ?? '');
+      case 'numDoda': return String(op.numDoda || '');
+      case 'fechaEmisionDoda': return String(op.fechaEmisionDoda || '');
+      case 'numeroEntrys': return String(op.numeroEntrys || '');
+      case 'cantEntrys': return String(op.cantEntrys ?? '');
+      case 'numManifiesto': return String(op.numManifiesto || '');
+      case 'provServicios': return String(mostrarDatoMapeado(op.provServicios, 'empresas', 'nombre', op.provServiciosNombre));
+      case 'montoManifiesto': return String(op.montoManifiesto ?? '');
+      case 'totalGastos': return String(op.totalGastos ?? '');
+      case 'utilidadEstimada': return String(op.utilidadEstimada ?? '');
+      case 'observacionesEjecutivo': return String(op.observacionesEjecutivo || '');
+      case 'observacionesUnidad': return String(op.observacionesUnidad || '');
+      case 'observacionesCobrar': return String(op.observacionesCobrar || '');
+      default: return '';
+    }
+  };
+
+  const construirOpcionesFiltro = (colId: string): string[] => {
+    const set = new Set<string>();
+    operacionesGlobales.forEach(op => {
+      const v = valorTextoColumna(op, colId);
+      if (v && v !== '-' && v.trim() !== '') set.add(v);
     });
-  }, [busqueda, operacionesGlobales]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }));
+  };
+  const opcionesTipoOperacion = useMemo(() => construirOpcionesFiltro('tipoOperacion'), [operacionesGlobales, catalogosGlobales]);
+  const opcionesStatus = useMemo(() => construirOpcionesFiltro('status'), [operacionesGlobales, catalogosGlobales]);
+  const opcionesUnidad = useMemo(() => construirOpcionesFiltro('unidad'), [operacionesGlobales, catalogosGlobales]);
+  const opcionesRemolque = useMemo(() => construirOpcionesFiltro('remolque'), [operacionesGlobales, catalogosGlobales]);
+  const hayFiltrosActivos = !!(filtroTipoOperacion || filtroStatus || filtroUnidad || filtroRemolque);
+  const limpiarFiltros = () => { setFiltroTipoOperacion(''); setFiltroStatus(''); setFiltroUnidad(''); setFiltroRemolque(''); };
+
+  const operacionesFiltradas = useMemo(() => {
+    const b = busqueda.trim().toLowerCase();
+    const tokens = b.split(/\s+/).filter(Boolean);
+
+    let base = operacionesGlobales;
+    if (filtroTipoOperacion) base = base.filter(op => valorTextoColumna(op, 'tipoOperacion') === filtroTipoOperacion);
+    if (filtroStatus)   base = base.filter(op => valorTextoColumna(op, 'status')   === filtroStatus);
+    if (filtroUnidad)   base = base.filter(op => valorTextoColumna(op, 'unidad')   === filtroUnidad);
+    if (filtroRemolque) base = base.filter(op => valorTextoColumna(op, 'remolque') === filtroRemolque);
+
+    const filtradas = tokens.length === 0
+      ? [...base]
+      : base.filter(op => {
+          const textoFila = columnasTabla
+            .map(col => valorTextoColumna(op, col.id))
+            .join(' ')
+            .toLowerCase();
+          return tokens.every(t => textoFila.includes(t));
+        });
+
+    return filtradas.sort((a: any, b2: any) => {
+      const ta = fechaOrdenOp(a.fechaServicio);
+      const tb = fechaOrdenOp(b2.fechaServicio);
+      if (ta !== tb) return tb - ta;
+      return obtenerConsecutivoRef(b2) - obtenerConsecutivoRef(a);
+    });
+  }, [busqueda, operacionesGlobales, catalogosGlobales, columnasTabla, filtroTipoOperacion, filtroStatus, filtroUnidad, filtroRemolque]);
 
   const totalPaginas = Math.ceil(operacionesFiltradas.length / registrosPorPagina);
   const indiceUltimoRegistro = paginaActual * registrosPorPagina;
@@ -832,11 +1227,24 @@ const OperacionesDashboard = () => {
 
   const renderCellContent = (op: any, colId: string) => {
     switch (colId) {
-      case 'ref': return <span className="font-mono" style={{ color: '#58a6ff', fontWeight: 'bold' }}>{op.ref || op.id?.substring(0,6)}</span>;
+      // ✅ Referencia coloreada por tipo de operación (Fletes verde / Logística azul / Transfer naranja)
+      case 'ref': return <span className="font-mono" style={{ color: colorTipoOperacion(mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre)), fontWeight: 'bold' }}>{op.ref || op.id?.substring(0,6)}</span>;
       case 'fechaServicio': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.fechaServicio)}</span>;
       case 'fechaCita': return <span style={{ color: '#c9d1d9' }}>{formatearFechaHora(op.fechaCita)}</span>;
-      case 'tipoOperacion': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre)}</span>;
-      case 'status': return <span style={{ color: '#10b981', fontWeight: 'bold' }}>{mostrarDatoMapeado(op.status, 'statusServicio', 'nombre', op.statusNombre)}</span>;
+      case 'tipoOperacion': {
+        const nombreTipoOp = mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre);
+        return <span style={{ color: colorTipoOperacion(nombreTipoOp), fontWeight: 'bold' }}>{nombreTipoOp}</span>;
+      }
+      case 'status': {
+        // ✅ Respaldo doble: primero el catálogo (por id, con statusNombre como
+        //   alterno) y, si no resuelve, resolverStatus acepta id O nombre
+        //   (operaciones migradas o guardadas con el nombre en el campo status).
+        let nombreStatus = mostrarDatoMapeado(op.status, 'statusServicio', 'nombre', op.statusNombre);
+        if (!nombreStatus || nombreStatus === '-') {
+          nombreStatus = resolverStatus(op.status || op.statusNombre).nombre || '-';
+        }
+        return <span style={{ color: nombreStatus === '-' ? '#8b949e' : '#10b981', fontWeight: 'bold' }}>{nombreStatus}</span>;
+      }
       case 'trafico': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.trafico)}</span>;
       case 'cliente': return <span style={{ color: '#f0f6fc', fontWeight: '500' }}>{mostrarDatoMapeado(op.clientePaga || op.clienteId, 'empresas', 'nombre', op.clienteNombre || op.nombreCliente)}</span>;
       case 'convenioTarifa': return <span style={{ color: '#c9d1d9', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }} title={obtenerNombreConvenioCliente(op.convenio, op.convenioNombre)}>{obtenerNombreConvenioCliente(op.convenio, op.convenioNombre)}</span>;
@@ -875,7 +1283,7 @@ const OperacionesDashboard = () => {
       case 'clienteMercancia': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.clienteMercancia, 'empresas', 'nombre', op.clienteMercanciaNombre)}</span>;
       case 'descripcionMercancia': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.descripcionMercancia)}</span>;
       case 'cantidad': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.cantidad)}</span>;
-      case 'embalaje': return <span style={{ color: '#c9d1d9' }}>{op.embalajeNombre || op.embalaje || '-'}</span>;
+      case 'embalaje': return <span style={{ color: '#c9d1d9' }}>{mostrarDatoMapeado(op.embalaje, 'embalajes', 'nombre', op.embalajeNombre)}</span>;
       case 'pesoKg': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.pesoKg)}</span>;
       case 'numDoda': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.numDoda)}</span>;
       case 'fechaEmisionDoda': return <span style={{ color: '#c9d1d9' }}>{mostrarDato(op.fechaEmisionDoda)}</span>;
@@ -896,7 +1304,7 @@ const OperacionesDashboard = () => {
   const exportarExcel = async () => {
     if (operacionesFiltradas.length === 0) return alert("No hay datos para exportar.");
     const columnasVisibles = columnasTabla.filter(c => c.visible);
-    await cargarCatalogosSiEsNecesario();
+    // La exportación usa los nombres ya guardados en cada operación (sin lecturas).
 
     const datosExcel = operacionesFiltradas.map(op => {
       const fila: any = {};
@@ -907,7 +1315,7 @@ const OperacionesDashboard = () => {
           case 'fechaServicio': val = op.fechaServicio || ''; break;
           case 'fechaCita': val = formatearFechaHora(op.fechaCita); break;
           case 'tipoOperacion': val = mostrarDatoMapeado(op.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', op.tipoOperacionNombre); break;
-          case 'status': val = mostrarDatoMapeado(op.status, 'statusServicio', 'nombre', op.statusNombre); break; 
+          case 'status': { const nSt = mostrarDatoMapeado(op.status, 'statusServicio', 'nombre', op.statusNombre); val = (nSt && nSt !== '-') ? nSt : (resolverStatus(op.status || op.statusNombre).nombre || '-'); break; } 
           case 'trafico': val = op.trafico || ''; break;
           case 'cliente': val = mostrarDatoMapeado(op.clientePaga || op.clienteId, 'empresas', 'nombre', op.clienteNombre || op.nombreCliente); break;
           case 'convenioTarifa': val = obtenerNombreConvenioCliente(op.convenio, op.convenioNombre); break;
@@ -946,7 +1354,7 @@ const OperacionesDashboard = () => {
           case 'clienteMercancia': val = mostrarDatoMapeado(op.clienteMercancia, 'empresas', 'nombre', op.clienteMercanciaNombre); break;
           case 'descripcionMercancia': val = op.descripcionMercancia || ''; break;
           case 'cantidad': val = op.cantidad || ''; break;
-          case 'embalaje': val = op.embalajeNombre || op.embalaje || ''; break;
+          case 'embalaje': val = mostrarDatoMapeado(op.embalaje, 'embalajes', 'nombre', op.embalajeNombre); break;
           case 'pesoKg': val = op.pesoKg || ''; break;
           case 'numDoda': val = op.numDoda || ''; break;
           case 'fechaEmisionDoda': val = op.fechaEmisionDoda || ''; break;
@@ -974,7 +1382,7 @@ const OperacionesDashboard = () => {
 
   const tabsDetalle = [{ id: 'general', label: 'Información General' }, { id: 'pedimento', label: 'Pedimento y CT' }, { id: 'manifiestos', label: "Entry's y Manifiestos" }, { id: 'unidad', label: 'Unidad y Operador' }, { id: 'cobrar', label: 'Por Cobrar' }];
 
-  const evalTipoOpText = String(operacionViendo?.tipoOperacionNombre || operacionViendo?.tipoOperacionId || '').toLowerCase();
+  const evalTipoOpText = String(operacionViendo?.tipoOperacionNombre || mostrarDatoMapeado(operacionViendo?.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', operacionViendo?.tipoOperacionNombre) || '').toLowerCase();
   const evalIsTransfer = evalTipoOpText.includes('transfer');
   const evalIsFletes = evalTipoOpText.includes('fletes') || evalTipoOpText.includes('flete');
   const evalIsLogistica = evalTipoOpText.includes('logistica') || evalTipoOpText.includes('logística');
@@ -983,18 +1391,24 @@ const OperacionesDashboard = () => {
   const showDetailInternalFleet = evalIsTransfer || ((evalIsLogistica || evalIsFletes) && evalIsRoelca);
   const showDetailExternalFleet = (evalIsLogistica || evalIsFletes) && !evalIsRoelca;
 
-  // ── Visibilidad de documentos según tipo de operación ──
-  // Claves válidas: 'carta' | 'prueba' | 'checklist' | 'solicitud' | 'instrucciones'
-  // Si el tipo NO está en este mapa, se usa la lógica normal (evalIsFletes, etc.).
   const evalTipoOpId = String(operacionViendo?.tipoOperacionId || '').trim();
+  // ✅ Fletes (ID 3e5b0035): además de Check List y Solicitud de Retiro, ahora
+  //    también se muestran "Carta de Instrucciones" (carta) y "Prueba de
+  //    Entrega" (prueba). Ambos se generan con el logo mediante los generadores
+  //    ya existentes (generarCartaInstruccionesPDF / generarPruebaEntregaPDF).
   const DOCS_POR_TIPO: Record<string, string[]> = {
-    '3e5b0035': ['checklist', 'solicitud'], // ← AJUSTA con los docs que quieras mostrar para este tipo
+    '3e5b0035': ['checklist', 'solicitud', 'carta', 'prueba', 'instrucciones'],
   };
-  const docsPermitidos = DOCS_POR_TIPO[evalTipoOpId] || null; // null = comportamiento normal
+  const docsPermitidos = DOCS_POR_TIPO[evalTipoOpId] || null;
   const puedeMostrarDoc = (doc: string) => !docsPermitidos || docsPermitidos.includes(doc);
+
+  const refOperacionViendo = operacionViendo ? (operacionViendo.ref || operacionViendo.id?.substring(0, 6) || 'Operacion') : '';
 
   const btnSecondaryActionStyle = { background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '8px 16px', borderRadius: '6px', gap: '8px', fontWeight: 'bold', transition: 'background 0.2s', fontSize: '0.85rem' };
   const btnDocStyle = { background: 'transparent', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '6px 12px', borderRadius: '6px', gap: '6px', fontSize: '0.85rem', transition: 'all 0.2s' };
+
+  const filtroLabelStyle: React.CSSProperties = { color: '#8b949e', fontSize: '0.7rem', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' };
+  const filtroSelectStyle: React.CSSProperties = { padding: '9px 10px', backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9', borderRadius: '6px', fontSize: '0.9rem', minWidth: '180px' };
 
   return (
     <div className="module-container" style={{ padding: '24px', animation: 'fadeIn 0.3s ease', width: '100%', boxSizing: 'border-box' }}>
@@ -1010,36 +1424,78 @@ const OperacionesDashboard = () => {
       )}
 
      <div style={{ width: '100%', margin: '0 auto' }}>
-        <h1 className="module-title" style={{ fontSize: '1.5rem', color: '#f0f6fc', margin: '0 0 24px 0', fontWeight: 'bold' }}>
-          Operaciones Activas
-        </h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', margin: '0 0 24px 0' }}>
+          <h1 className="module-title" style={{ fontSize: '1.5rem', color: '#f0f6fc', margin: 0, fontWeight: 'bold' }}>
+            Operaciones Activas
+          </h1>
+        </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px', width: '100%' }}>
-          <div style={{ flex: '1 1 auto', maxWidth: '200px', minWidth: '120px' }}>
-            <select className="form-control" style={{ width: '100%', backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9' }}>
-              <option>Filtro: Todo</option>
-            </select>
-          </div>
-          <div style={{ flex: '2 1 250px', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '16px', width: '100%' }}>
+          <div style={{ flex: '2 1 250px', display: 'flex', justifyContent: 'flex-start' }}>
             <div style={{ position: 'relative', width: '100%', maxWidth: '500px' }}>
               <svg style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#8b949e' }} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-              <input type="text" placeholder="Buscar por Ref, Cliente, Status..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} style={{ width: '100%', padding: '10px 10px 10px 40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.95rem', boxSizing: 'border-box' }} />
+              <input type="text" placeholder="Buscar en todas las columnas..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} style={{ width: '100%', padding: '10px 10px 10px 40px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.95rem', boxSizing: 'border-box' }} />
             </div>
           </div>
           <div style={{ flex: '1 1 auto', display: 'flex', gap: '12px', justifyContent: 'flex-end', minWidth: '280px' }}>
+            <button className="btn btn-outline" onClick={actualizarOperaciones} disabled={cargandoOperaciones || cargandoMas} style={{ fontSize: '0.9rem', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '6px', cursor: (cargandoOperaciones || cargandoMas) ? 'wait' : 'pointer' }} title="Actualizar operaciones (vuelve a leer la colección desde Firestore)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: cargandoOperaciones ? 'spin 1s linear infinite' : 'none' }}><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+              <span>{cargandoOperaciones ? 'Actualizando...' : 'Actualizar'}</span>
+            </button>
             <button className="btn btn-outline" onClick={() => setModalColumnas(true)} style={{ fontSize: '0.9rem', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '6px' }} title="Configurar Columnas">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
-            </button>
-            <button className="btn btn-outline" onClick={forzarRecarga} style={{ fontSize: '0.9rem', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '6px' }} title="Recargar Catálogos (pide confirmación)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 0 20.49 15"></path></svg>
-            </button>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg></button>
             <button className="btn btn-outline" onClick={exportarExcel} style={{ display: 'flex', alignItems: 'center', padding: '8px 12px' }} title="Exportar a Excel">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            </button>
+            <button className="btn btn-outline" onClick={() => setMostrarResumenDiario(true)} style={{ fontSize: '0.9rem', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: '6px' }} title="Resúmenes diarios (Transfer / Logística / Fletes) en PDF">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="9" y1="13" x2="15" y2="13"></line><line x1="9" y1="17" x2="13" y2="17"></line></svg>
+              <span>Resúmenes</span>
             </button>
             <button className="btn btn-primary" onClick={handleNuevo} style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', gap: '6px' }}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             </button>
           </div>
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end', marginBottom: '20px', width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <label style={filtroLabelStyle}>Tipo de Operación</label>
+            <select value={filtroTipoOperacion} onChange={(e) => setFiltroTipoOperacion(e.target.value)} style={filtroSelectStyle}>
+              <option value="">Todos</option>
+              {opcionesTipoOperacion.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <label style={filtroLabelStyle}>Status</label>
+            <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} style={filtroSelectStyle}>
+              <option value="">Todos</option>
+              {opcionesStatus.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <label style={filtroLabelStyle}>Unidad Roelca</label>
+            <select value={filtroUnidad} onChange={(e) => setFiltroUnidad(e.target.value)} style={filtroSelectStyle}>
+              <option value="">Todas</option>
+              {opcionesUnidad.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <label style={filtroLabelStyle}>Remolque</label>
+            <select value={filtroRemolque} onChange={(e) => setFiltroRemolque(e.target.value)} style={filtroSelectStyle}>
+              <option value="">Todos</option>
+              {opcionesRemolque.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          {hayFiltrosActivos && (
+            <button onClick={limpiarFiltros} style={{ padding: '9px 14px', borderRadius: '6px', border: '1px solid #30363d', background: 'transparent', color: '#8b949e', cursor: 'pointer', fontSize: '0.85rem', height: 'fit-content' }} title="Quitar todos los filtros">
+              ✕ Limpiar filtros
+            </button>
+          )}
+          {hayFiltrosActivos && (
+            <span style={{ color: '#8b949e', fontSize: '0.82rem', marginLeft: 'auto', alignSelf: 'center' }}>
+              {operacionesFiltradas.length} {operacionesFiltradas.length === 1 ? 'resultado' : 'resultados'}
+            </span>
+          )}
         </div>
 
         <div className="content-body" style={{ display: 'block', width: '100%' }}>
@@ -1076,7 +1532,7 @@ const OperacionesDashboard = () => {
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
                             </button>
                             <button type="button" title="Eliminar Operación"
-                              onClick={(e) => { e.stopPropagation(); eliminarOperacion(op.id); }} 
+                              onClick={(e) => { e.stopPropagation(); eliminarOperacion(op); }} 
                               style={{ background: 'transparent', border: '1px solid #ef4444', borderRadius: '4px', color: '#ef4444', cursor: 'pointer', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s' }} 
                               onMouseEnter={(e: any) => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)'} 
                               onMouseLeave={(e: any) => e.currentTarget.style.backgroundColor = 'transparent'}>
@@ -1104,7 +1560,6 @@ const OperacionesDashboard = () => {
                 {hayMasOperaciones && <span style={{ color: '#8b949e', marginLeft: 8, fontStyle: 'italic' }}>(hay más en el servidor)</span>}
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {/* ✅ NUEVO: Botón "Cargar más" para paginación real (50 ops por descarga) */}
                 {hayMasOperaciones && (
                   <button
                     onClick={cargarMasOperaciones}
@@ -1148,6 +1603,23 @@ const OperacionesDashboard = () => {
             </ul>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px', borderTop: '1px solid #30363d', paddingTop: '16px' }}>
               <button onClick={() => setModalColumnas(false)} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 32px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>Aplicar Cambios</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ NUEVO: Modal de Resúmenes Diarios (Transfer / Logística / Fletes) */}
+      {mostrarResumenDiario && (
+        <div className="modal-overlay" style={{ zIndex: 1700, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)', backgroundColor: 'rgba(1, 4, 9, 0.7)', padding: '16px' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '1180px', maxWidth: '97%', maxHeight: '94vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #30363d', flexShrink: 0 }}>
+              <h3 style={{ margin: 0, color: '#f0f6fc', fontSize: '1.05rem' }}>Resúmenes Diarios de Operaciones</h3>
+              <button onClick={() => setMostrarResumenDiario(false)} title="Cerrar" style={{ background: 'transparent', border: '1px solid #30363d', color: '#8b949e', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              </button>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              <ResumenDiarioOperaciones />
             </div>
           </div>
         </div>
@@ -1299,7 +1771,7 @@ const OperacionesDashboard = () => {
                 <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Tipo de Operación</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.tipoOperacionNombre || operacionViendo.tipoOperacionId || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.tipoOperacionId, 'tiposOperacion', 'tipo_operacion', operacionViendo.tipoOperacionNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#D84315', fontWeight: 'bold', marginBottom: '4px' }}>Fecha de Servicio / Status</span>
@@ -1314,15 +1786,15 @@ const OperacionesDashboard = () => {
                   <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '8px 0' }} /></div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Paga)</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDato(operacionViendo.clienteNombre || operacionViendo.nombreCliente || operacionViendo.clientePaga)}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.clientePaga || operacionViendo.clienteId, 'empresas', 'nombre', operacionViendo.clienteNombre || operacionViendo.nombreCliente)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio (Tarifa)</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.convenioNombre || operacionViendo.convenio || '-'}</span> 
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{obtenerNombreConvenioCliente(operacionViendo.convenio, operacionViendo.convenioNombre)}</span> 
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}># de Remolque</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.remolquePlaca || operacionViendo.numeroRemolque || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.numeroRemolque, 'remolques', 'nombre', operacionViendo.remolqueNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Ref Cliente</span>
@@ -1330,12 +1802,11 @@ const OperacionesDashboard = () => {
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Origen</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.origenNombre || operacionViendo.origen || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.origen, 'empresas', 'nombre', operacionViendo.origenNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#58a6ff', fontWeight: 'bold', marginBottom: '4px' }}>Destino</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.destinoNombre || operacionViendo.destino || '-'}</span>
-                  </div>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.destino, 'empresas', 'nombre', operacionViendo.destinoNombre)}</span></div>
                   <div style={{ gridColumn: '1 / -1', marginTop: '8px' }}>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Observaciones Ejecutivo</span>
                     <div style={{ color: '#c9d1d9', fontWeight: '500', backgroundColor: '#161b22', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', minHeight: '60px' }}>
@@ -1349,7 +1820,7 @@ const OperacionesDashboard = () => {
                 <div style={{ animation: 'fadeIn 0.2s ease', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                   <div style={{ gridColumn: 'span 2' }}>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Cliente (Mercancía)</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.clienteMercanciaNombre || operacionViendo.clienteMercancia || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.clienteMercancia, 'empresas', 'nombre', operacionViendo.clienteMercanciaNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Descripción de la Mercancía</span>
@@ -1362,7 +1833,7 @@ const OperacionesDashboard = () => {
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Embalaje</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.embalajeNombre || operacionViendo.embalaje || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.embalaje, 'embalajes', 'nombre', operacionViendo.embalajeNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Peso (Kg) Decimales</span>
@@ -1397,7 +1868,7 @@ const OperacionesDashboard = () => {
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Servicios</span>
-                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.provServiciosNombre || operacionViendo.provServicios || '-'}</span>
+                    <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.provServicios, 'empresas', 'nombre', operacionViendo.provServiciosNombre)}</span>
                   </div>
                   <div>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Costo Manifiesto ($)</span>
@@ -1411,7 +1882,7 @@ const OperacionesDashboard = () => {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
                     <div style={{ gridColumn: 'span 3' }}>
                       <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Proveedor de Transporte</span>
-                      <span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '1.1rem' }}>{operacionViendo.proveedorUnidadNombre || operacionViendo.proveedorUnidad || '-'}</span>
+                      <span style={{ color: '#58a6ff', fontWeight: 'bold', fontSize: '1.1rem' }}>{mostrarDatoMapeado(operacionViendo.proveedorUnidad, 'empresas', 'nombre', operacionViendo.proveedorUnidadNombre)}</span>
                     </div>
                   </div>
 
@@ -1423,7 +1894,7 @@ const OperacionesDashboard = () => {
                       </div>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Convenio Proveedor</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.convenioProveedorNombre || operacionViendo.convenioProveedor || '-'}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{obtenerNombreConvenioProv(operacionViendo.convenioProveedor, operacionViendo.convenioProveedorNombre)}</span>
                       </div>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Moneda del Convenio (Base)</span>
@@ -1465,11 +1936,11 @@ const OperacionesDashboard = () => {
                       <div style={{ gridColumn: 'span 3' }}><h4 style={{ color: '#f0f6fc', margin: '0 0 8px 0' }}>Flota Operativa (Roelca)</h4></div>
                       <div>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Unidad Asignada</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.unidadNombre || operacionViendo.unidad || '-'}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.unidad, 'unidades', 'unidad', operacionViendo.unidadNombre)}</span>
                       </div>
                       <div style={{ gridColumn: 'span 2' }}>
                         <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '4px' }}>Operador Asignado</span>
-                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{operacionViendo.operadorNombre || operacionViendo.operador || '-'}</span>
+                        <span style={{ color: '#c9d1d9', fontWeight: '500', fontSize: '1.05rem' }}>{mostrarDatoMapeado(operacionViendo.operador, 'empleados', 'nombre', operacionViendo.operadorNombre)}</span>
                       </div>
                       <div style={{ gridColumn: 'span 3' }}><hr style={{ borderColor: '#30363d', margin: '0' }} /></div>
                       <div>
@@ -1514,17 +1985,18 @@ const OperacionesDashboard = () => {
                     </div>
                   )}
 
-                  <div style={{ gridColumn: 'span 3', marginTop: '20px' }}>
-                    <div style={{ backgroundColor: '#0d1117', border: '1px solid #f85149', padding: '20px', borderRadius: '8px', textAlign: 'center' }}>
-                      <div style={{ color: '#8b949e', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>Total Gastos [Sueldos + Manifiesto]</div>
-                      <div style={{ color: '#f85149', fontSize: '2rem', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.totalGastos)}</div>
-                    </div>
-                  </div>
-
+                  {/* ✅ Observaciones ARRIBA del bloque de gastos (a petición) */}
                   <div style={{ marginTop: '24px' }}>
                     <span style={{ display: 'block', fontSize: '0.8rem', color: '#8b949e', fontWeight: 'bold', marginBottom: '8px' }}>Observaciones (Unidad / Proveedor)</span>
                     <div style={{ color: '#c9d1d9', fontWeight: '500', backgroundColor: '#010409', padding: '16px', borderRadius: '8px', border: '1px solid #30363d', minHeight: '60px' }}>
                       {mostrarDato(operacionViendo.observacionesUnidad)}
+                    </div>
+                  </div>
+
+                  <div style={{ gridColumn: 'span 3', marginTop: '20px' }}>
+                    <div style={{ backgroundColor: '#0d1117', border: '1px solid #f85149', padding: '20px', borderRadius: '8px', textAlign: 'center' }}>
+                      <div style={{ color: '#8b949e', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>Total Gastos [Sueldos + Manifiesto]</div>
+                      <div style={{ color: '#f85149', fontSize: '2rem', fontWeight: 'bold' }}>{formatoMoneda(operacionViendo.totalGastos)}</div>
                     </div>
                   </div>
                 </div>
@@ -1596,83 +2068,75 @@ const OperacionesDashboard = () => {
         </div>
       )}
 
-      {/* Modal de registro retroactivo */}
-      {modalHorarios === 'registrar' && (
-        <div className="modal-overlay" style={{ zIndex: 2000 }}>
-          <div className="form-card" style={{ maxWidth: '450px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px' }}>
-            <div className="form-header" style={{ borderBottom: '1px solid #30363d', padding: '20px 24px' }}>
-              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#f0f6fc' }}>Registrar Movimiento (Fecha Personalizada)</h2>
-              <button onClick={() => setModalHorarios('cerrado')} className="btn-window close">✕</button>
+      {modalHorarios === 'registrar' && operacionViendo && (
+        <div className="modal-overlay" style={{ zIndex: 1600, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)', backgroundColor: 'rgba(1, 4, 9, 0.7)' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '480px', maxWidth: '95%', padding: '24px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', borderBottom: '1px solid #30363d', paddingBottom: '14px' }}>
+              <h3 style={{ margin: 0, color: '#f0f6fc' }}>Registrar Movimiento</h3>
+              <button onClick={() => setModalHorarios('cerrado')} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
-            <div style={{ padding: '24px' }}>
-              <p style={{ color: '#8b949e', fontSize: '0.85rem', marginBottom: '16px' }}>
-                Usa este formulario solo si necesitas registrar un movimiento con una fecha y hora distinta a la actual.
-              </p>
-              <div className="form-group">
-                <label className="form-label" style={{ color: '#8b949e' }}>Fecha y Hora</label>
-                <input type="datetime-local" className="form-control" value={nuevaFechaHora} onChange={e => setNuevaFechaHora(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label" style={{ color: '#8b949e' }}>Estatus / Hito</label>
-                <select className="form-control" value={nuevoStatus} onChange={e => setNuevoStatus(e.target.value)}>
-                  <option value="">-- Selecciona un status --</option>
-                  {botonesDisponibles.length > 0 ? (
-                    botonesDisponibles.map((botonStr: string) => (
-                      <option key={botonStr} value={botonStr}>{botonStr}</option>
-                    ))
-                  ) : (
-                    (catalogosGlobales.statusServicio || [])
-                      .filter((s: any) => s.nombre) 
-                      .map((s: any) => (
-                        <option key={s.id} value={s.nombre}>{s.nombre}</option>
-                      ))
-                  )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <label style={{ display: 'block', color: '#8b949e', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>Estatus</label>
+                <select value={nuevoStatus} onChange={(e) => setNuevoStatus(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#010409', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.95rem', boxSizing: 'border-box' }}>
+                  <option value="">Selecciona un estatus...</option>
+                  {(statusServicioOrdenado.length > 0
+                    ? statusServicioOrdenado.map((s: any) => String(s.nombre))
+                    : botonesDisponibles
+                  ).map((nombre: string) => (
+                    <option key={nombre} value={nombre}>{nombre}</option>
+                  ))}
                 </select>
               </div>
-              <button onClick={guardarHorario} disabled={cargandoHorarios} className="btn btn-primary" style={{ width: '100%', marginTop: '24px', padding: '12px', borderRadius: '6px', fontWeight: 'bold' }}>
-                {cargandoHorarios ? 'Actualizando...' : 'Guardar y Actualizar Operación'}
+              <div>
+                <label style={{ display: 'block', color: '#8b949e', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>Fecha y Hora</label>
+                <input type="datetime-local" value={nuevaFechaHora} onChange={(e) => setNuevaFechaHora(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#010409', border: '1px solid #30363d', borderRadius: '6px', color: '#c9d1d9', fontSize: '0.95rem', boxSizing: 'border-box', colorScheme: 'dark' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px', borderTop: '1px solid #30363d', paddingTop: '16px' }}>
+              <button onClick={() => setModalHorarios('cerrado')} className="btn btn-outline" style={{ padding: '10px 20px', borderRadius: '6px' }}>Cancelar</button>
+              <button onClick={guardarHorario} disabled={cargandoHorarios} style={{ backgroundColor: '#D84315', color: '#fff', border: 'none', padding: '10px 24px', borderRadius: '6px', cursor: cargandoHorarios ? 'wait' : 'pointer', fontWeight: 'bold' }}>
+                {cargandoHorarios ? 'Guardando...' : 'Guardar'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {modalHorarios === 'historial' && (
-        <div className="modal-overlay" style={{ zIndex: 2000 }}>
-          <div className="form-card" style={{ maxWidth: '650px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px' }}>
-            <div className="form-header" style={{ borderBottom: '1px solid #30363d', padding: '20px 24px' }}>
-              <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#f0f6fc' }}>Bitácora de Movimientos</h2>
-              <button onClick={() => setModalHorarios('cerrado')} className="btn-window close">✕</button>
+      {modalHorarios === 'historial' && operacionViendo && (
+        <div className="modal-overlay" style={{ zIndex: 1600, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', backdropFilter: 'blur(4px)', backgroundColor: 'rgba(1, 4, 9, 0.7)' }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '12px', width: '560px', maxWidth: '95%', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: '1px solid #30363d' }}>
+              <div>
+                <h3 style={{ margin: 0, color: '#f0f6fc' }}>Bitácora de la Operación</h3>
+                <span style={{ color: '#D84315', fontWeight: 'bold', fontSize: '0.9rem' }}>{refOperacionViendo}</span>
+              </div>
+              <button onClick={() => setModalHorarios('cerrado')} style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
-            <div style={{ padding: '24px', maxHeight: '60vh', overflowY: 'auto' }}>
+            <div style={{ padding: '24px', overflowY: 'auto', flex: 1 }}>
               {cargandoHorarios ? (
-                <div style={{ textAlign: 'center', color: '#8b949e', padding: '20px' }}>Descargando historial...</div>
+                <div style={{ textAlign: 'center', color: '#8b949e', padding: '40px' }}>Cargando bitácora...</div>
+              ) : historialList.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#8b949e', padding: '40px' }}>No hay movimientos registrados.</div>
               ) : (
-                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead style={{ backgroundColor: '#161b22', color: '#8b949e' }}>
-                    <tr>
-                      <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #30363d' }}>Fecha y Hora</th>
-                      <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #30363d' }}>Estatus Marcado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {historialList.length === 0 ? (
-                      <tr><td colSpan={2} style={{ textAlign: 'center', padding: '20px', color: '#8b949e' }}>Sin movimientos registrados.</td></tr>
-                    ) : (
-                      historialList.map((h: any) => (
-                        <tr key={h.id} style={{ borderBottom: '1px solid #21262d' }}>
-                          <td style={{ padding: '16px 12px', color: '#c9d1d9' }}>{new Date(h.fechaHora).toLocaleString('es-MX')}</td>
-                          {/* ✅ Muestra el nombre legible aunque el status guardado sea un ID hex */}
-                          <td style={{ padding: '16px 12px', color: '#10b981', fontWeight: 'bold' }}>{mostrarDatoMapeado(h.status, 'statusServicio', 'nombre', h.statusNombre)}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {historialList.map((h: any) => (
+                    <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 16px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '8px' }}>
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: h.esAutomatico ? '#8b949e' : '#10b981', flexShrink: 0 }}></div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ color: '#f0f6fc', fontWeight: 'bold', fontSize: '0.95rem' }}>
+                          {h.statusNombre || resolverStatus(h.status).nombre || h.status}
+                          {h.esAutomatico && <span style={{ marginLeft: 8, color: '#8b949e', fontSize: '0.75rem', fontWeight: 'normal', fontStyle: 'italic' }}>(automático)</span>}
+                        </div>
+                        <div style={{ color: '#8b949e', fontSize: '0.82rem', marginTop: '2px' }}>{formatearFechaHora(h.fechaHora)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-            <div style={{ padding: '16px 24px', borderTop: '1px solid #30363d', textAlign: 'right', backgroundColor: '#161b22', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
-              <button onClick={() => setModalHorarios('cerrado')} className="btn btn-outline" style={{ padding: '10px 24px', borderRadius: '6px' }}>Cerrar Historial</button>
+            <div style={{ padding: '12px 24px', display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #30363d', backgroundColor: '#161b22', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
+              <button onClick={() => setModalHorarios('cerrado')} className="btn btn-outline" style={{ padding: '10px 24px', borderRadius: '6px' }}>Cerrar</button>
             </div>
           </div>
         </div>
@@ -1680,24 +2144,11 @@ const OperacionesDashboard = () => {
 
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes pop {
-          0%   { transform: scale(0); opacity: 0; }
-          60%  { transform: scale(1.3); opacity: 1; }
-          100% { transform: scale(1); opacity: 1; }
-        }
-        .status-pill { transform: translateY(0); }
-        .status-pill:not(:disabled):hover {
-          transform: translateY(-2px);
-          filter: brightness(1.08);
-          box-shadow: 0 8px 20px rgba(234, 88, 12, 0.5) !important;
-        }
-        .status-pill:not(:disabled):active { transform: translateY(0); filter: brightness(0.95); }
-        .status-circle-btn:hover {
-          background: #30363d !important;
-          color: #ea580c !important;
-          border-color: #ea580c !important;
-          transform: scale(1.08);
-        }
+        @keyframes pop { 0% { transform: scale(0); } 70% { transform: scale(1.2); } 100% { transform: scale(1); } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .status-pill:hover { transform: translateY(-1px); filter: brightness(1.08); }
+        .status-pill:active { transform: translateY(0); }
+        .status-circle-btn:hover { background: #30363d !important; color: #f0f6fc !important; border-color: #484f58 !important; }
       `}</style>
     </div>
   );

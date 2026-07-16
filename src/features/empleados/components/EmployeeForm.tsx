@@ -2,12 +2,37 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../../config/firebase';
+import { DocumentoUploadModal } from '../../documentos/DocumentoUploadModal';
 import { guardarEmpleadoConTransaccion } from '../../../services/employeeService';
 import { FormularioDireccion } from '../../direcciones/components/FormularioDireccion';
 import type { Employee } from '../../../types/empleado';
 
 // Roles disponibles en la empresa
 const ROLES_DISPONIBLES = ['Administrador', 'Recursos Humanos', 'Operaciones', 'Contabilidad', 'Gerencia'];
+
+// Tipos de documento que se manejan para EMPLEADOS (edítalos a tu gusto)
+export const TIPOS_DOCUMENTO_EMPLEADO = [
+  '1. Acta de Nacimiento',
+  '2. CURP',
+  '3. RFC (Constancia de Situación Fiscal)',
+  '4. Identificación Oficial (INE)',
+  '5. Comprobante de Domicilio',
+  '6. Comprobante de Estudios',
+  '7. Número de Seguro Social (NSS)',
+  '8. Estado de Cuenta Bancario',
+  '9. Licencia de Conducir',
+  '10. Examen Médico',
+  '11. Carta de Recomendación',
+  '12. Carta de No Antecedentes Penales',
+  '13. Currículum Vitae',
+  '14. Solicitud de Empleo',
+  '15. Aviso de Retención INFONAVIT',
+  '16. Contrato Laboral',
+  '17. Convenio de Confidencialidad',
+  '18. Reglamento Interno (Firmado)',
+  '19. Constancia de Capacitación',
+  '20. Otro',
+];
 
 // =========================================
 // SUB-COMPONENTE: SELECTOR CON BUSCADOR
@@ -147,6 +172,7 @@ export const EmployeeForm: React.FC<Props> = ({ estado, initialData, onClose, on
   const [formData, setFormData] = useState<any>(estadoInicial);
   const [cargando, setCargando] = useState(false);
   const [modalDireccionAbierto, setModalDireccionAbierto] = useState(false);
+  const [mostrarSubirDoc, setMostrarSubirDoc] = useState(false);
   
   const [pestañaActiva, setPestañaActiva] = useState<TabKey>('personales');
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -387,7 +413,16 @@ export const EmployeeForm: React.FC<Props> = ({ estado, initialData, onClose, on
                 {formData.activo ? '🟢 Activo' : '🔴 Baja'}
               </span>
             </h2>
-            <div style={{ display: 'flex', gap: '12px' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => { if (!initialData) { alert('Guarda el empleado primero para poder subir documentos.'); return; } setMostrarSubirDoc(true); }}
+                title={initialData ? 'Subir documentos del empleado' : 'Guarda el empleado primero para subir documentos'}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: '6px', border: 'none', backgroundColor: initialData ? '#D84315' : '#21262d', color: initialData ? '#fff' : '#6e7681', cursor: initialData ? 'pointer' : 'not-allowed', fontWeight: 600, fontSize: '0.82rem' }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                Subir Documentos
+              </button>
               <button type="button" onClick={() => setIsConfigOpen(true)} className="btn-window" style={{ background: 'none', fontSize: '1.2rem', cursor: 'pointer' }} title="Configurar campos y accesos">⚙️</button>
               {estado === 'abierto' ? <button type="button" onClick={onMinimize} className="btn-window">🗕</button> : <button type="button" onClick={onRestore} className="btn-window restore">🗖</button>}
               <button type="button" onClick={onClose} className="btn-window close" style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
@@ -581,6 +616,15 @@ export const EmployeeForm: React.FC<Props> = ({ estado, initialData, onClose, on
           <FormularioDireccion estado="abierto" onClose={() => setModalDireccionAbierto(false)} />
         </div>
       )}
+
+      <DocumentoUploadModal
+        isOpen={mostrarSubirDoc}
+        onClose={() => setMostrarSubirDoc(false)}
+        coleccionOrigen="empleados"
+        registroId={(initialData as any)?.id || formData.employeeId || ''}
+        registroNombre={`${formData.firstName || ''} ${formData.lastNamePaternal || ''} ${formData.lastNameMaternal || ''}`.replace(/\s+/g, ' ').trim()}
+        tiposDocumento={TIPOS_DOCUMENTO_EMPLEADO}
+      />
     </>
   );
 };
